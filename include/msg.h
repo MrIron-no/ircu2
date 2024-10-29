@@ -376,6 +376,10 @@ struct Client;
 #define TOK_CHGHOST		"CHGHOST"
 #define CMD_CHGHOST		MSG_CHGHOST, TOK_CHGHOST
 
+#define MSG_STARTTLS  "STARTTLS"
+#define TOK_STARTTLS  "STARTTLS"
+#define CMD_STARTTLS  MSG_STARTTLS, TOK_STARTTLS
+
 /*
  * Constants
  */
