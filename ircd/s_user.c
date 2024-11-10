@@ -905,7 +905,7 @@ hide_hostmask(struct Client *cptr, unsigned int flag)
 
   sendcmdto_capflag_common_channels_butone(cptr, CMD_QUIT, cptr, _CAP_LAST_CAP, CAP_CHGHOST, ":Registered");
   sendcmdto_capflag_common_channels_butone(cptr, CMD_CHGHOST, cptr, CAP_CHGHOST, _CAP_LAST_CAP, "%s %s.%s",
-    cli_username(cptr), cli_account(cptr), feature_str(FEAT_HIDDEN_HOST));
+    cli_user(cptr)->username, cli_user(cptr)->account, feature_str(FEAT_HIDDEN_HOST));
   ircd_snprintf(0, cli_user(cptr)->host, HOSTLEN, "%s.%s",
                 cli_user(cptr)->account, feature_str(FEAT_HIDDEN_HOST));
 
