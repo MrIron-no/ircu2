@@ -3561,6 +3561,9 @@ joinbuf_join(struct JoinBuf *jbuf, struct Channel *chan, unsigned int flags)
         CAP_EXTJOIN, _CAP_LAST_CAP, "%H %s :%s", chan,
         IsAccount(jbuf->jb_source) ? cli_account(jbuf->jb_source) : "*",
         cli_info(jbuf->jb_source));
+      if (cli_user(jbuf->jb_source)->away)
+        sendcmdto_capflag_common_channels_butone(jbuf->jb_source, CMD_AWAY, jbuf->jb_connect,
+          CAP_AWAYNOTIFY, _CAP_LAST_CAP, ":%s", cli_user(jbuf->jb_source)->away);
 
       /* send an op, too, if needed */
       if (flags & CHFL_CHANOP && (oplevel < MAXOPLEVEL || !MyUser(jbuf->jb_source)))
