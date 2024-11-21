@@ -372,7 +372,7 @@ static void iauth_notify(struct AuthRequest *auth, enum AuthRequestFlag flag)
   {
   case AR_AUTH_PENDING:
     if (IAuthHas(iauth, IAUTH_UNDERNET))
-      sendto_iauth(sptr, "u %s", cli_username(sptr));
+      sendto_iauth(sptr, "u %s", cli_user(sptr)->username);
     break;
 
   case AR_DNS_PENDING:
