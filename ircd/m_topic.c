@@ -47,9 +47,10 @@
  * @param[in] chptr Channel to set topic on.
  * @param[in] topic New topic.
  * @param[in] ts Timestamp that topic was set (0 for current time).
+ * @param[in] who Nickname of the client who set the topic (only used during burst, otherwise 0).
  */
 static void do_settopic(struct Client *sptr, struct Client *cptr,
-		        struct Channel *chptr, char *topic, time_t ts)
+		        struct Channel *chptr, char *topic, time_t ts, char *who)
 {
    struct Client *from;
    int newtopic;
@@ -65,7 +66,7 @@ static void do_settopic(struct Client *sptr, struct Client *cptr,
    newtopic=ircd_strncmp(chptr->topic,topic,TOPICLEN)!=0;
    /* setting a topic */
    ircd_strncpy(chptr->topic, topic, TOPICLEN);
-   ircd_strncpy(chptr->topic_nick, cli_name(from), NICKLEN);
+   ircd_strncpy(chptr->topic_nick, who ? who : cli_name(from), NICKLEN);
    if (ts == 0) {
      ts = TStime();
      if (ts <= chptr->topic_time)
@@ -74,8 +75,8 @@ static void do_settopic(struct Client *sptr, struct Client *cptr,
    chptr->topic_time = ts;
    /* Fixed in 2.10.11: Don't propagate local topics */
    if (!IsLocalChannel(chptr->chname))
-     sendcmdto_serv_butone(sptr, CMD_TOPIC, cptr, "%H %Tu %Tu :%s", chptr,
-		           chptr->creationtime, chptr->topic_time, chptr->topic);
+     sendcmdto_serv_butone(sptr, CMD_TOPIC, cptr, "%H %Tu %Tu %s :%s", chptr,
+		           chptr->creationtime, chptr->topic_time, chptr->topic_nick, chptr->topic);
    if (newtopic)
    {
      struct Membership *member;
@@ -152,7 +153,7 @@ int m_topic(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     else if (!client_can_send_to_channel(sptr, chptr, 1))
       send_reply(sptr, ERR_CANNOTSENDTOCHAN, chptr->chname);
     else
-      do_settopic(sptr,cptr,chptr,topic,0);
+      do_settopic(sptr,cptr,chptr,topic,0,0);
   }
   return 0;
 }
@@ -173,7 +174,7 @@ int m_topic(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 int ms_topic(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
   struct Channel *chptr;
-  char *topic = 0, *name, *p = 0;
+  char *topic = 0, *name, *p = 0, *who = 0;
   time_t ts = 0;
 
   if (parc < 3)
@@ -206,7 +207,11 @@ int ms_topic(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     if (parc > 4 && (ts = atoi(parv[3])) && chptr->topic_time > ts)
       continue;
 
-    do_settopic(sptr,cptr,chptr,topic, ts);
+    /* Information about who set the topic */
+    if (parc > 5)
+      who = parv[4];
+
+    do_settopic(sptr,cptr,chptr,topic,ts,who);
   }
   return 0;
 }
