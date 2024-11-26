@@ -119,8 +119,8 @@ int m_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
   struct Client *acptr;
   struct Channel *chptr;
-  
-  if (parc < 2 ) { 
+
+  if (parc < 2 ) {
     /*
      * list the channels you have an invite to.
      */
@@ -130,7 +130,7 @@ int m_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     send_reply(cptr, RPL_ENDOFINVITELIST);
     return 0;
   }
-  
+
   if (parc < 3 || EmptyString(parv[2]))
     return need_more_params(sptr, "INVITE");
 
@@ -183,12 +183,22 @@ int m_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   }
 
   if (!IsLocalChannel(chptr->chname) || MyConnect(acptr)) {
+    /*
+     * Announce to channel operators with CAP_INVITENOTIFY enabled.
+     * We do this irrespective of whether FEAT_ANNOUNCE_INVITES is enabled.
+     */
+    sendcmdto_capflag_channel_butserv_butone(sptr, CMD_INVITE,
+                                             chptr, sptr, SKIP_NONOPS,
+                                             CAP_INVITENOTIFY, _CAP_LAST_CAP,
+                                             "%C %H", acptr, chptr);
+
     if (feature_bool(FEAT_ANNOUNCE_INVITES)) {
-      /* Announce to channel operators. */
-      sendcmdto_channel_butserv_butone(&his, get_error_numeric(RPL_ISSUEDINVITE)->str,
-                                       NULL, chptr, sptr, SKIP_NONOPS,
-                                       "%H %C %C :%C has been invited by %C",
-                                       chptr, acptr, sptr, acptr, sptr);
+      /* Announce to channel operators without CAP_INVITENOTIFY enabled. */
+      sendcmdto_capflag_channel_butserv_butone(&his, get_error_numeric(RPL_ISSUEDINVITE)->str,
+                                               NULL, chptr, sptr, SKIP_NONOPS,
+                                               _CAP_LAST_CAP, CAP_INVITENOTIFY,
+                                               "%H %C %C :%C has been invited by %C",
+                                               chptr, acptr, sptr, acptr, sptr);
       /* Announce to servers with channel operators. */
       sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr, SKIP_NONOPS,
                                        "%s %H %Tu", cli_name(acptr),
@@ -224,11 +234,11 @@ int ms_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   struct Client *acptr;
   struct Channel *chptr;
   time_t invite_ts;
-  
+
   if (IsServer(sptr)) {
     /*
      * this will blow up if we get an invite from a server
-     * we look for channel membership in sptr below. 
+     * we look for channel membership in sptr below.
      */
     return protocol_violation(sptr,"Server attempting to invite");
   }
@@ -287,12 +297,19 @@ int ms_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                   chptr->creationtime);
   }
 
+  /* Announce to channel operators with CAP_NOTIFY enabled. */
+  sendcmdto_capflag_channel_butserv_butone(sptr, CMD_INVITE,
+                                           chptr, sptr, SKIP_NONOPS,
+                                           CAP_INVITENOTIFY, _CAP_LAST_CAP,
+                                           "%C %H", acptr, chptr);
+
   if (feature_bool(FEAT_ANNOUNCE_INVITES)) {
-    /* Announce to channel operators. */
-    sendcmdto_channel_butserv_butone(&his, get_error_numeric(RPL_ISSUEDINVITE)->str,
-                                     NULL, chptr, sptr, SKIP_NONOPS,
-                                     "%H %C %C :%C has been invited by %C",
-                                     chptr, acptr, sptr, acptr, sptr);
+    /* Announce to channel operators without CAP_NOTIFY enabled. */
+    sendcmdto_capflag_channel_butserv_butone(&his, get_error_numeric(RPL_ISSUEDINVITE)->str,
+                                             NULL, chptr, sptr, SKIP_NONOPS,
+                                             _CAP_LAST_CAP, CAP_INVITENOTIFY,
+                                             "%H %C %C :%C has been invited by %C",
+                                             chptr, acptr, sptr, acptr, sptr);
     /* Announce to servers with channel operators. */
     sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr, SKIP_NONOPS,
                                      "%s %H %Tu", cli_name(acptr), chptr,

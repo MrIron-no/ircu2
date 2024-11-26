@@ -41,7 +41,8 @@
 	_CAP(AWAYNOTIFY, FEAT_CAP_AWAYNOTIFY, 0 , "away-notify"), \
 	_CAP(CHGHOST, FEAT_CAP_CHGHOST, 0, "chghost"), \
 	_CAP(ECHOMESSAGE, FEAT_CAP_ECHOMESSAGE, 0, "echo-message"), \
-	_CAP(EXTJOIN, FEAT_CAP_EXTJOIN, 0, "extended-join")
+	_CAP(EXTJOIN, FEAT_CAP_EXTJOIN, 0, "extended-join"), \
+	_CAP(INVITENOTIFY, FEAT_CAP_INVITENOTIFY, 0, "invite-notify")
 
 /** Client capabilities */
 enum Capab {
