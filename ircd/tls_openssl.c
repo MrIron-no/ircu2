@@ -238,7 +238,9 @@ done:
 void ircd_tls_close(void *ctx, const char *message)
 {
   /* TODO: handle blocked I/O for shutdown */
-  SSL_shutdown(ctx);
+  SSL_set_shutdown(ctx, SSL_RECEIVED_SHUTDOWN);
+  if (SSL_shutdown(ctx) == 0)
+    SSL_shutdown(ctx);
   SSL_free(ctx);
 }
 
@@ -381,22 +383,41 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
   tls = s_tls(&con_socket(con));
   if (!tls)
     return IO_FAILURE;
+
   *count_out = 0;
+
+  // Handling retransmission if needed
   if (con->con_rexmit)
   {
     res = SSL_write(tls, con->con_rexmit, con->con_rexmit_len);
     if (res <= 0)
     {
       orig_errno = errno;
-      return (ssl_handle_error(cptr, tls, res, orig_errno) < 0)
-        ? IO_FAILURE : IO_BLOCKED;
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+      {
+        Debug((DEBUG_TLS, "ircd_tls_sendv: SSL write blocked, retrying send for retransmission."));
+        cli_connect(cptr)->con_rexmit = con->con_rexmit;  // Keep the pointer for retry
+        cli_connect(cptr)->con_rexmit_len = con->con_rexmit_len;
+        return IO_BLOCKED;  // Mark this operation as blocked and return
+      }
+
+      // If the error is fatal (e.g., connection reset or closed), handle accordingly
+      Debug((DEBUG_TLS, "ircd_tls_sendv: SSL write failed (res=-1, errno=%d).", errno));
+      if (ssl_handle_error(cptr, tls, res, orig_errno) < 0)
+        return IO_FAILURE;
     }
+
+    // Message has been sent successfully, so excise it
     msgq_excise(buf, con->con_rexmit, con->con_rexmit_len);
     con->con_rexmit_len = 0;
     con->con_rexmit = NULL;
     result = IO_SUCCESS;
+
+    // Debug message to confirm retransmission completion
+    Debug((DEBUG_TLS, "ircd_tls_sendv: Successfully sent retransmission of %d bytes.", con->con_rexmit_len));
   }
 
+  // Process remaining messages in the queue
   count = msgq_mapiov(buf, iov, sizeof(iov) / sizeof(iov[0]), count_in);
   for (ii = 0; ii < count; ++ii)
   {
@@ -405,16 +426,41 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
     {
       *count_out += res;
       result = IO_SUCCESS;
+
+      // Debug message to confirm that the message was successfully sent
+      Debug((DEBUG_TLS, "ircd_tls_sendv: Successfully sent %d bytes from message %d.", res, ii));
+
       continue;
     }
 
+    // If the write was blocked, handle the blocking situation
+    if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+    {
+      Debug((DEBUG_TLS, "ircd_tls_sendv: SSL write blocked, retrying send for message %d.", ii));
+      cli_connect(cptr)->con_rexmit = iov[ii].iov_base;  // Store the pointer for retransmission
+      cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len;
+      return IO_BLOCKED;  // Mark this operation as blocked and return
+    }
+
+    // Handle SSL errors
     orig_errno = errno;
     if (ssl_handle_error(cptr, tls, res, orig_errno) < 0)
       return IO_FAILURE;
 
+    // If the operation failed, set the retransmit pointer
     cli_connect(cptr)->con_rexmit = iov[ii].iov_base;
     cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len;
     break;
+  }
+
+  // Debug message to confirm the overall operation completion
+  if (*count_out == *count_in)
+  {
+    Debug((DEBUG_TLS, "ircd_tls_sendv: All messages sent successfully. Total bytes sent: %d.", *count_out));
+  }
+  else
+  {
+    Debug((DEBUG_ERROR, "ircd_tls_sendv: Not all messages were sent. Total bytes sent: %d, expected: %d.", *count_out, *count_in));
   }
 
   return result;
