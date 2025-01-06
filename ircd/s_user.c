@@ -904,13 +904,13 @@ hide_hostmask(struct Client *cptr, unsigned int flag)
     return 0;
 
   sendcmdto_capflag_common_channels_butone(cptr, CMD_QUIT, cptr, _CAP_LAST_CAP, CAP_CHGHOST, ":Registered");
-  sendcmdto_capflag_common_channels_butone(cptr, CMD_CHGHOST, cptr, CAP_CHGHOST, _CAP_LAST_CAP, "%s %s.%s",
+  sendcmdto_capflag_common_channels_butone(cptr, CMD_CHGHOST, NULL, CAP_CHGHOST, _CAP_LAST_CAP, "%s %s.%s",
     cli_user(cptr)->username, cli_user(cptr)->account, feature_str(FEAT_HIDDEN_HOST));
   ircd_snprintf(0, cli_user(cptr)->host, HOSTLEN, "%s.%s",
                 cli_user(cptr)->account, feature_str(FEAT_HIDDEN_HOST));
 
   /* ok, the client is now fully hidden, so let them know -- hikari */
-  if (MyConnect(cptr))
+  if (MyConnect(cptr) && !CapHas(cli_active(cptr), CAP_CHGHOST))
    send_reply(cptr, RPL_HOSTHIDDEN, cli_user(cptr)->host);
 
   /*
