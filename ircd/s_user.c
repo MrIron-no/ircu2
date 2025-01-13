@@ -1151,7 +1151,7 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
         len = (id++) - account;
 	      cli_user(sptr)->acc_id = atoi(id);
 	      Debug((DEBUG_DEBUG, "Received account id in user mode; "
-	        "account \"%s\", id %u", account,
+	        "account \"%s\", id %qu", account,
 	        cli_user(sptr)->acc_id));
 
         /* Check for account flags */
@@ -1160,7 +1160,7 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
             cli_user(sptr)->acc_flags = atoi(flags + 1);
             // Null-terminate the account string before flags.
             *flags = '\0';
-            Debug((DEBUG_DEBUG, "Received account flags; account \"%s\", flags %u",
+            Debug((DEBUG_DEBUG, "Received account flags; account \"%s\", flags %qu",
                     account, cli_user(sptr)->acc_flags));
         }
       }
@@ -1235,18 +1235,18 @@ char *umode_str(struct Client *cptr)
     if (cli_user(cptr)->acc_id) {
       char nbuf[30];
       Debug((DEBUG_DEBUG, "Sending account id in user mode for "
-	     "account \"%s\"; id %u", cli_user(cptr)->account,
+	     "account \"%s\"; id %qu", cli_user(cptr)->account,
 	     cli_user(cptr)->acc_id));
 
       if (cli_user(cptr)->acc_flags) {
       Debug((DEBUG_DEBUG, "Sending account flags in user mode for "
-	     "account \"%s\"; flags %u", cli_user(cptr)->account,
+	     "account \"%s\"; flags %qu", cli_user(cptr)->account,
 	     cli_user(cptr)->acc_flags));
 
-        ircd_snprintf(0, t = nbuf, sizeof(nbuf), ":%u:%u",
+        ircd_snprintf(0, t = nbuf, sizeof(nbuf), ":%qu:%qu",
                       cli_user(cptr)->acc_id, cli_user(cptr)->acc_flags);
       } else {
-        ircd_snprintf(0, t = nbuf, sizeof(nbuf), ":%u",
+        ircd_snprintf(0, t = nbuf, sizeof(nbuf), ":%qu",
                       cli_user(cptr)->acc_id);
       }
       m--; /* back up over previous nul-termination */

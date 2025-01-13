@@ -108,8 +108,7 @@ int ms_account(struct Client* cptr, struct Client* sptr, int parc,
 	       char* parv[])
 {
   struct Client *acptr;
-  unsigned int acc_id = 0;
-  unsigned short int acc_flags = 0;
+  uint64_t acc_id = 0, acc_flags = 0;
 
   if (parc < 3)
     return need_more_params(sptr, "ACCOUNT");
@@ -137,7 +136,7 @@ int ms_account(struct Client* cptr, struct Client* sptr, int parc,
         cli_user(acptr)->acc_id != 0 &&
         cli_user(acptr)->acc_id != acc_id)
        return protocol_violation(cptr, "ACCOUNT ID for already registered user %s "
-              "(%d -> %d)", cli_name(acptr),
+              "(%qu -> %qu)", cli_name(acptr),
               cli_user(acptr)->acc_id, acc_id);
   } else {
     /* Client did not already have an account. */
@@ -150,7 +149,7 @@ int ms_account(struct Client* cptr, struct Client* sptr, int parc,
     if (acc_id) {
       cli_user(acptr)->acc_id = acc_id;
       Debug((DEBUG_DEBUG, "Received account id: account \"%s\", "
-            "id %u", parv[2], cli_user(acptr)->acc_id));
+            "id %qu", parv[2], cli_user(acptr)->acc_id));
     }
 
     ircd_strncpy(cli_user(acptr)->account, parv[2], ACCOUNTLEN);
@@ -163,12 +162,12 @@ int ms_account(struct Client* cptr, struct Client* sptr, int parc,
   if (parc > 4) {
     cli_user(acptr)->acc_flags = acc_flags;
     Debug((DEBUG_DEBUG, "Received account flags: account \"%s\", "
-           "flags %u", parv[2], cli_user(acptr)->acc_flags));
+           "flags %qu", parv[2], cli_user(acptr)->acc_flags));
   }
 
   /* To propagate a 0 flag, we check the param number rather than whether acc_flags is true. */
   sendcmdto_serv_butone(sptr, CMD_ACCOUNT, cptr,
-                        cli_user(acptr)->acc_id ? (parc > 4 ? "%C %s %u %u" : "%C %s %u") : "%C %s",
+                        cli_user(acptr)->acc_id ? (parc > 4 ? "%C %s %qu %qu" : "%C %s %qu") : "%C %s",
                         acptr, cli_user(acptr)->account,
                         cli_user(acptr)->acc_id,
                         cli_user(acptr)->acc_flags);
