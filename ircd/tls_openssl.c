@@ -43,7 +43,8 @@
 
 const char *ircd_tls_version = OPENSSL_VERSION_TEXT;
 
-static SSL_CTX *base_ctx;
+static SSL_CTX *base_server_ctx;
+static SSL_CTX *base_client_ctx;
 static const EVP_MD *fp_digest;
 
 static void ssl_log_error(const char *msg)
@@ -165,7 +166,7 @@ int ircd_verify_peer(int preverify_ok, X509_STORE_CTX *ctx) {
 int ircd_tls_init(void)
 {
   static int openssl_init;
-  SSL_CTX *new_ctx = NULL;
+  SSL_CTX *server_ctx = NULL, *client_ctx = NULL;
   const char *str, *s_2;
   int res;
 
@@ -188,63 +189,115 @@ int ircd_tls_init(void)
     fp_digest = EVP_sha256();
   }
 
-  new_ctx = SSL_CTX_new(TLS_server_method());
-  if (!new_ctx)
+  server_ctx = SSL_CTX_new(TLS_server_method());
+  if (!server_ctx)
   {
-    ssl_log_error("SSL_CTX_new failed");
+    ssl_log_error("SSL_CTX_new (server) failed");
     return 2;
   }
 
-  if (!feature_bool(FEAT_TLS_SSLV2))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_SSLv2);
-  if (!feature_bool(FEAT_TLS_SSLV3))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_SSLv3);
-  if (!feature_bool(FEAT_TLS_V1P0))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1);
-  if (!feature_bool(FEAT_TLS_V1P1))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_1);
-  if (!feature_bool(FEAT_TLS_V1P2))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_2);
+  client_ctx = SSL_CTX_new(TLS_client_method());
+  if (!client_ctx)
+  {
+    ssl_log_error("SSL_CTX_new (client) failed");
+    return 2;
+  }
 
-  SSL_CTX_set_verify(new_ctx, SSL_VERIFY_PEER, ircd_verify_peer);
+  if (!feature_bool(FEAT_TLS_SSLV2)) {
+    SSL_CTX_set_options(server_ctx, SSL_OP_NO_SSLv2);
+    SSL_CTX_set_options(client_ctx, SSL_OP_NO_SSLv2);
+  }
+  if (!feature_bool(FEAT_TLS_SSLV3)) {
+    SSL_CTX_set_options(server_ctx, SSL_OP_NO_SSLv3);
+    SSL_CTX_set_options(client_ctx, SSL_OP_NO_SSLv3);
+  }
+  if (!feature_bool(FEAT_TLS_V1P0)) {
+    SSL_CTX_set_options(server_ctx, SSL_OP_NO_TLSv1);
+    SSL_CTX_set_options(client_ctx, SSL_OP_NO_TLSv1);
+  }
+  if (!feature_bool(FEAT_TLS_V1P1)) {
+    SSL_CTX_set_options(server_ctx, SSL_OP_NO_TLSv1_1);
+    SSL_CTX_set_options(client_ctx, SSL_OP_NO_TLSv1_1);
+  }
+  if (!feature_bool(FEAT_TLS_V1P2)) {
+    SSL_CTX_set_options(server_ctx, SSL_OP_NO_TLSv1_2);
+    SSL_CTX_set_options(client_ctx, SSL_OP_NO_TLSv1_2);
+  }
+
+  SSL_CTX_set_verify(server_ctx, SSL_VERIFY_PEER, ircd_verify_peer);
+  SSL_CTX_set_verify(client_ctx, SSL_VERIFY_PEER, ircd_verify_peer);
 
   /* OpenSSL only defines this macro if it supports TLS 1.3. */
 #if defined(SSL_OP_NO_TLSv1_3)
-  if (!feature_bool(FEAT_TLS_V1P3))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_3);
+  if (!feature_bool(FEAT_TLS_V1P3)) {
+    SSL_CTX_set_options(server_ctx, SSL_OP_NO_TLSv1_3);
+    SSL_CTX_set_options(client_ctx, SSL_OP_NO_TLSv1_3);
+  }
 #endif
 
-  res = SSL_CTX_use_certificate_chain_file(new_ctx, ircd_tls_certfile);
+  res = SSL_CTX_use_certificate_chain_file(server_ctx, ircd_tls_certfile);
   if (res != 1)
   {
     ssl_log_error("unable to load certificate file");
-    SSL_CTX_free(new_ctx);
+    SSL_CTX_free(server_ctx);
     return 3;
   }
 
-  res = SSL_CTX_use_PrivateKey_file(new_ctx, ircd_tls_keyfile, SSL_FILETYPE_PEM);
+  res = SSL_CTX_use_certificate_chain_file(client_ctx, ircd_tls_certfile);
+  if (res != 1)
+  {
+    ssl_log_error("unable to load certificate file");
+    SSL_CTX_free(client_ctx);
+    return 3;
+  }
+
+  res = SSL_CTX_use_PrivateKey_file(server_ctx, ircd_tls_keyfile, SSL_FILETYPE_PEM);
   if (res != 1)
   {
     ssl_log_error("unable to load private key");
-    SSL_CTX_free(new_ctx);
+    SSL_CTX_free(server_ctx);
     return 4;
   }
 
-  res = SSL_CTX_check_private_key(new_ctx);
+  res = SSL_CTX_use_PrivateKey_file(client_ctx, ircd_tls_keyfile, SSL_FILETYPE_PEM);
+  if (res != 1)
+  {
+    ssl_log_error("unable to load private key");
+    SSL_CTX_free(client_ctx);
+    return 4;
+  }
+
+  res = SSL_CTX_check_private_key(server_ctx);
   if (res != 1)
   {
     ssl_log_error("private key did not check out");
-    SSL_CTX_free(new_ctx);
+    SSL_CTX_free(server_ctx);
     return 5;
   }
 
-  ssl_set_ciphers(new_ctx, NULL, feature_str(FEAT_TLS_CIPHERS));
+  res = SSL_CTX_check_private_key(client_ctx);
+  if (res != 1)
+  {
+    ssl_log_error("private key did not check out");
+    SSL_CTX_free(client_ctx);
+    return 5;
+  }
+
+  ssl_set_ciphers(server_ctx, NULL, feature_str(FEAT_TLS_CIPHERS));
+  ssl_set_ciphers(client_ctx, NULL, feature_str(FEAT_TLS_CIPHERS));
 
   str = feature_str(FEAT_TLS_CACERTFILE);
   s_2 = feature_str(FEAT_TLS_CACERTDIR);
   if (!EmptyString(str) || !EmptyString(s_2))
   {
-    res = SSL_CTX_load_verify_locations(new_ctx, str, s_2);
+    res = SSL_CTX_load_verify_locations(server_ctx, str, s_2);
+    if (res != 1)
+    {
+      ssl_log_error("using TLS_CACERTFILE/TLS_CACERTDIR failed");
+      /* but keep going */
+    }
+
+    res = SSL_CTX_load_verify_locations(client_ctx, str, s_2);
     if (res != 1)
     {
       ssl_log_error("using TLS_CACERTFILE/TLS_CACERTDIR failed");
@@ -253,9 +306,12 @@ int ircd_tls_init(void)
   }
 
 done:
-  if (base_ctx)
-    SSL_CTX_free(base_ctx);
-  base_ctx = new_ctx;
+  if (base_server_ctx)
+    SSL_CTX_free(base_server_ctx);
+  if (base_client_ctx)
+    SSL_CTX_free(base_client_ctx);
+  base_server_ctx = server_ctx;
+  base_client_ctx = client_ctx;
   return 0;
 }
 
@@ -281,7 +337,7 @@ void *ircd_tls_accept(struct Listener *listener, int fd)
 {
   SSL *tls;
 
-  tls = SSL_new(base_ctx);
+  tls = SSL_new(base_server_ctx);
   if (!tls)
   {
     ssl_log_error("unable to create SSL session");
@@ -302,7 +358,7 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd)
 {
   SSL *tls;
 
-  tls = SSL_new(base_ctx);
+  tls = SSL_new(base_client_ctx);
   if (!tls)
   {
     ssl_log_error("unable to create SSL session");
@@ -315,6 +371,15 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd)
   ssl_set_fd(tls, fd);
 
   SSL_set_connect_state(tls);
+
+  int cnt_retry = 0;
+  while (SSL_connect(tls) != 1)  // Perform the handshake
+  {
+    Debug((DEBUG_DEBUG, "TLS handshake failed: %s", ERR_error_string(ERR_get_error(), NULL)));
+    ssl_log_error("SSL_connect() failed");
+ //   SSL_free(tls);
+ //   return NULL;
+  }
 
   return tls;
 }
