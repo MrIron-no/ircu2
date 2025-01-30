@@ -372,15 +372,19 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd)
 
   SSL_set_connect_state(tls);
 
+  /* TODO: This is a gross fix, but the handshake has to be retried. */
   int cnt_retry = 0;
   while (SSL_connect(tls) != 1)  // Perform the handshake
   {
-    Debug((DEBUG_DEBUG, "TLS handshake failed: %s", ERR_error_string(ERR_get_error(), NULL)));
+    cnt_retry++;
     ssl_log_error("SSL_connect() failed");
- //   SSL_free(tls);
- //   return NULL;
+    if (cnt_retry > 1000) {
+      SSL_free(tls);
+      return NULL;
+    }
   }
 
+  /* TODO: Should we call ircd_tls_fingerprint() here? And should we be checking the fingerpint of our peer? */
   return tls;
 }
 
