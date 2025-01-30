@@ -1241,6 +1241,21 @@ char *umode_str(struct Client *cptr)
     }
   }
 
+  /** If the client is using TLS (umode +z) we return the fingerprint.
+   * If the fingerprint is empty (client has not provided a certificate),
+   * we return _ in the place of the fingerprint.
+   */
+  if (IsTLS(cptr))
+  {
+    char* t = cli_tls_fingerprint(cptr);
+
+    *m++ = ' ';
+    if (t && *t) {
+        while ((*m++ = *t++));
+    } else {
+        *m++ = '_';
+    }
+  }
   *m = '\0';
 
   return umodeBuf;                /* Note: static buffer, gets

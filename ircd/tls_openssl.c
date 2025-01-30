@@ -34,6 +34,7 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
+
 #include <sys/uio.h> /* IOV_MAX */
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
@@ -77,19 +78,30 @@ void ircd_tls_fingerprint(void *ctx, char *fingerprint)
   if (!ctx)
   {
   no_fingerprint:
-    memset(fingerprint, 0, 32);
+    Debug((DEBUG_DEBUG, "No fingerprint provided by client"));
+    memset(fingerprint, 0, 65);
     return;
   }
 
+  unsigned int fp_len = 0;
+  unsigned char raw_fp[EVP_MAX_MD_SIZE];
   tls = ctx;
   cert = SSL_get_peer_certificate(tls);
   if (!cert)
     goto no_fingerprint;
 
-  res = X509_digest(cert, fp_digest, (unsigned char *)fingerprint, NULL);
+  res = X509_digest(cert, fp_digest, raw_fp, &fp_len);
+
   X509_free(cert);
-  if (res)
+  if (!res)
     Debug((DEBUG_NOTICE, "X509_digest failed to make fingerprint"));
+
+  for (unsigned int i = 0; i < fp_len; i++) {
+      sprintf(&fingerprint[i * 2], "%02x", raw_fp[i]);
+  }
+  fingerprint[64] = '\0';
+
+Debug((DEBUG_DEBUG, "Generated Fingerprint inside ircd_tls_fingerprint(): %s", fingerprint));
 }
 
 static void ssl_set_ciphers(SSL_CTX *ctx, SSL *tls, const char *text)
@@ -140,6 +152,16 @@ static void ssl_set_ciphers(SSL_CTX *ctx, SSL *tls, const char *text)
   }
 }
 
+int ircd_verify_peer(int preverify_ok, X509_STORE_CTX *ctx) {
+    int err = X509_STORE_CTX_get_error(ctx);
+
+    if (err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT) {
+        return 1; // Accept self-signed client certificates TODO: Consider making this configurable?
+    }
+
+    return preverify_ok; // Default verification for other errors
+}
+
 int ircd_tls_init(void)
 {
   static int openssl_init;
@@ -166,7 +188,7 @@ int ircd_tls_init(void)
     fp_digest = EVP_sha256();
   }
 
-  new_ctx = SSL_CTX_new(SSLv23_method());
+  new_ctx = SSL_CTX_new(TLS_server_method());
   if (!new_ctx)
   {
     ssl_log_error("SSL_CTX_new failed");
@@ -183,6 +205,8 @@ int ircd_tls_init(void)
     SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_1);
   if (!feature_bool(FEAT_TLS_V1P2))
     SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_2);
+
+  SSL_CTX_set_verify(new_ctx, SSL_VERIFY_PEER, ircd_verify_peer);
 
   /* OpenSSL only defines this macro if it supports TLS 1.3. */
 #if defined(SSL_OP_NO_TLSv1_3)
@@ -335,6 +359,9 @@ int ircd_tls_negotiate(struct Client *cptr)
   if (res == 1)
   {
     ClearNegotiatingTLS(cptr);
+    char tls_fp[65];
+    ircd_tls_fingerprint(tls, tls_fp);
+    strcpy(cli_tls_fingerprint(cptr), tls_fp);
   }
   else
   {
