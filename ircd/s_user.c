@@ -1255,6 +1255,8 @@ char *umode_str(struct Client *cptr)
     while ((*m++ = *t++))
       ; /* Empty loop */
 
+    m--; /* back up over previous nul-termination */
+
     if (cli_user(cptr)->acc_id) {
       char nbuf[30];
       Debug((DEBUG_DEBUG, "Sending account id in user mode for "
@@ -1272,9 +1274,10 @@ char *umode_str(struct Client *cptr)
         ircd_snprintf(0, t = nbuf, sizeof(nbuf), ":%qu",
                       cli_user(cptr)->acc_id);
       }
-      m--; /* back up over previous nul-termination */
       while ((*m++ = *t++))
 	; /* Empty loop */
+      m--; /* back up over previous nul-termination */
+
     }
   }
 
