@@ -319,9 +319,6 @@ static int auth_set_username(struct AuthRequest *auth)
         if (!IsDigit(last))
         {
           digitgroups++;
-          /* If more than two groups of digits, reject. */
-          if (digitgroups > 2)
-            goto badid;
         }
       }
       else if (ch == '-' || ch == '_' || ch == '.')
@@ -335,6 +332,16 @@ static int auth_set_username(struct AuthRequest *auth)
         goto badid;
     }
 
+    /* Must have at least one letter. */
+    if (!lower && !upper)
+      goto badid;
+    /* Simplified username test? Then we're done here. */
+    if (!feature_bool(FEAT_STRICT_USERNAME))
+      return 0;
+
+    /* If more than two groups of digits, reject. */
+    if (digitgroups > 2)
+      goto badid;
     /* If mixed case, first must be capital, but no more than three;
      * but if three capitals, they must all be leading. */
     if (lower && upper && (!leadcaps || leadcaps > 3 ||
@@ -343,9 +350,6 @@ static int auth_set_username(struct AuthRequest *auth)
     /* If two different groups of digits, one must be either at the
      * start or end. */
     if (digitgroups == 2 && !(IsDigit(s[0]) || IsDigit(ch)))
-      goto badid;
-    /* Must have at least one letter. */
-    if (!lower && !upper)
       goto badid;
     /* Final character must not be punctuation. */
     if (!IsAlnum(last))
@@ -384,7 +388,7 @@ static void iauth_notify(struct AuthRequest *auth, enum AuthRequestFlag flag)
   {
   case AR_AUTH_PENDING:
     if (IAuthHas(iauth, IAUTH_UNDERNET))
-      sendto_iauth(sptr, "u %s", cli_username(sptr));
+      sendto_iauth(sptr, "u %s", cli_user(sptr)->username);
     break;
 
   case AR_DNS_PENDING:
@@ -2150,11 +2154,18 @@ static int iauth_cmd_done_account(struct IAuth *iauth, struct Client *cli,
     sendto_iauth(cli, "E Invalid :Account parameter too long");
     return 0;
   }
-  /* If account has a creation timestamp, use it. */
+  /* If account has an id, use it. */
   assert(cli_user(cli) != NULL);
   if (params[0][len] == ':') {
-    cli_user(cli)->acc_create = strtoul(params[0] + len + 1, NULL, 10);
+    cli_user(cli)->acc_id = strtoul(params[0] + len + 1, NULL, 10);
     params[0][len] = '\0';
+
+    /* If account has flags, use it. */
+    char *flags_start = strchr(params[0] + len + 1, ':');
+    if (flags_start != NULL) {
+        cli_user(cli)->acc_flags = strtoul(flags_start + 1, NULL, 10);
+        *flags_start = '\0';
+    }
   }
 
   /* Copy account name to User structure. */

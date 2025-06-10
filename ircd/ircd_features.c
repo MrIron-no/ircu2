@@ -323,7 +323,8 @@ static struct FeatureDesc {
   F_B(OPLEVELS, 0, 0, 0),
   F_B(ZANNELS, 0, 0, 0),
   F_B(LOCAL_CHANNELS, 0, 1, 0),
-  F_B(TOPIC_BURST, 0, 0, 0),
+  F_B(TOPIC_BURST, 0, 1, 0),
+  F_B(AWAY_BURST, 0, 1, 0),
   F_B(DISABLE_GLINES, 0, 0, 0),
   F_B(JOIN_TARGET, 0, 0, 0),
 
@@ -349,6 +350,7 @@ static struct FeatureDesc {
   F_I(IPCHECK_48_CLONE_PERIOD, 0, 10, 0),
   F_I(IPCHECK_CLONE_DELAY, 0, 600, 0),
   F_I(CHANNELLEN, 0, 200, 0),
+  F_B(STRICT_USERNAME, 0, 0, 0),
 
   /* Some misc. default paths */
   F_S(MPATH, FEAT_CASE | FEAT_MYOPER, "ircd.motd", motd_init),
@@ -377,6 +379,7 @@ static struct FeatureDesc {
   F_B(CAP_CHGHOST, 0, 1, 0),
   F_B(CAP_ECHOMESSAGE, 0, 1, 0),
   F_B(CAP_EXTJOIN, 0, 1, 0),
+  F_B(CAP_INVITENOTIFY, 0, 1, 0),
 
   /* HEAD_IN_SAND Features */
   F_B(HIS_SNOTICES, 0, 1, 0),
