@@ -27,22 +27,23 @@
 #include "ircd_log.h"
 #include "ircd_string.h"
 #include "ircd_tls.h"
+#include "ircd.h"
 #include "listener.h"
 #include "s_conf.h"
 #include "s_debug.h"
+#include "s_auth.h"
+#include "send.h"
+#include "s_bsd.h"
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <sys/uio.h> /* IOV_MAX */
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-# error ircu2 requires OpenSSL >= 1.1.0
-#endif
-
 const char *ircd_tls_version = OPENSSL_VERSION_TEXT;
 
-static SSL_CTX *base_ctx;
+static SSL_CTX *server_ctx; /* For incoming connections */
+static SSL_CTX *client_ctx; /* For outgoing connections */
 static const EVP_MD *fp_digest;
 
 static void ssl_log_error(const char *msg)
@@ -116,10 +117,23 @@ static void ssl_set_ciphers(SSL_CTX *ctx, SSL *tls, const char *text)
   }
 }
 
+static int verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
+{
+  if (!preverify_ok && feature_bool(FEAT_TLS_ALLOW_SELFSIGNED))
+  {
+    int err = X509_STORE_CTX_get_error(ctx);
+    if (err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT ||
+        err == X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN)
+      return 1;
+  }
+  return preverify_ok;
+}
+
 int ircd_tls_init(void)
 {
   static int openssl_init;
-  SSL_CTX *new_ctx = NULL;
+  SSL_CTX *new_server_ctx = NULL;
+  SSL_CTX *new_client_ctx = NULL;
   const char *str, *s_2;
   int res;
 
@@ -142,79 +156,117 @@ int ircd_tls_init(void)
     fp_digest = EVP_sha256();
   }
 
-  new_ctx = SSL_CTX_new(SSLv23_method());
-  if (!new_ctx)
+  /* Create server context */
+  new_server_ctx = SSL_CTX_new(TLS_server_method());
+  if (!new_server_ctx)
   {
-    ssl_log_error("SSL_CTX_new failed");
+    ssl_log_error("SSL_CTX_new failed for server");
     return 2;
   }
 
-  if (!feature_bool(FEAT_TLS_SSLV2))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_SSLv2);
-  if (!feature_bool(FEAT_TLS_SSLV3))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_SSLv3);
-  if (!feature_bool(FEAT_TLS_V1P0))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1);
-  if (!feature_bool(FEAT_TLS_V1P1))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_1);
-  if (!feature_bool(FEAT_TLS_V1P2))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_2);
+  /* Create client context */
+  new_client_ctx = SSL_CTX_new(TLS_client_method());
+  if (!new_client_ctx)
+  {
+    ssl_log_error("SSL_CTX_new failed for client");
+    SSL_CTX_free(new_server_ctx);
+    return 2;
+  }
 
-  /* OpenSSL only defines this macro if it supports TLS 1.3. */
-#if defined(SSL_OP_NO_TLSv1_3)
-  if (!feature_bool(FEAT_TLS_V1P3))
-    SSL_CTX_set_options(new_ctx, SSL_OP_NO_TLSv1_3);
-#endif
-
-  res = SSL_CTX_use_certificate_chain_file(new_ctx, ircd_tls_certfile);
-  if (res != 1)
+  /* Configure certificates and keys for both contexts */
+  if (!(SSL_CTX_use_certificate_chain_file(new_server_ctx, ircd_tls_certfile) == 1 &&
+        SSL_CTX_use_certificate_chain_file(new_client_ctx, ircd_tls_certfile) == 1))
   {
     ssl_log_error("unable to load certificate file");
-    SSL_CTX_free(new_ctx);
-    return 3;
+    goto fail;
   }
 
-  res = SSL_CTX_use_PrivateKey_file(new_ctx, ircd_tls_keyfile, SSL_FILETYPE_PEM);
-  if (res != 1)
+  if (!(SSL_CTX_use_PrivateKey_file(new_server_ctx, ircd_tls_keyfile, SSL_FILETYPE_PEM) == 1 &&
+        SSL_CTX_use_PrivateKey_file(new_client_ctx, ircd_tls_keyfile, SSL_FILETYPE_PEM) == 1))
   {
     ssl_log_error("unable to load private key");
-    SSL_CTX_free(new_ctx);
-    return 4;
+    goto fail;
   }
 
-  res = SSL_CTX_check_private_key(new_ctx);
-  if (res != 1)
+  if (!(SSL_CTX_check_private_key(new_server_ctx) == 1 &&
+        SSL_CTX_check_private_key(new_client_ctx) == 1))
   {
-    ssl_log_error("private key did not check out");
-    SSL_CTX_free(new_ctx);
-    return 5;
+    ssl_log_error("certificate and private key do not match");
+    goto fail;
   }
 
-  ssl_set_ciphers(new_ctx, NULL, feature_str(FEAT_TLS_CIPHERS));
-
+  /* Configure CA certificates */
   str = feature_str(FEAT_TLS_CACERTFILE);
   s_2 = feature_str(FEAT_TLS_CACERTDIR);
   if (!EmptyString(str) || !EmptyString(s_2))
   {
-    res = SSL_CTX_load_verify_locations(new_ctx, str, s_2);
-    if (res != 1)
+    if (!EmptyString(s_2))
     {
-      ssl_log_error("using TLS_CACERTFILE/TLS_CACERTDIR failed");
-      /* but keep going */
+      if (!(SSL_CTX_load_verify_locations(new_server_ctx, NULL, s_2) == 1 &&
+            SSL_CTX_load_verify_locations(new_client_ctx, NULL, s_2) == 1))
+      {
+        ssl_log_error("unable to load CA certificates from directory");
+        goto fail;
+      }
+    }
+
+    if (!EmptyString(str))
+    {
+      if (!(SSL_CTX_load_verify_locations(new_server_ctx, str, NULL) == 1 &&
+            SSL_CTX_load_verify_locations(new_client_ctx, str, NULL) == 1))
+      {
+        ssl_log_error("unable to load CA certificates from file");
+        goto fail;
+      }
+    }
+  }
+  else
+  {
+    if (!(SSL_CTX_set_default_verify_paths(new_server_ctx) == 1 &&
+          SSL_CTX_set_default_verify_paths(new_client_ctx) == 1))
+    {
+      ssl_log_error("unable to load default CA certificates");
+      goto fail;
     }
   }
 
+  /* Set protocol versions. */
+  SSL_CTX_set_min_proto_version(new_server_ctx, TLS1_2_VERSION);
+  SSL_CTX_set_min_proto_version(new_client_ctx, TLS1_2_VERSION);
+
+  /* Configure verification */
+  SSL_CTX_set_verify(new_server_ctx, SSL_VERIFY_PEER|SSL_VERIFY_CLIENT_ONCE, verify_callback);
+  SSL_CTX_set_verify(new_client_ctx, SSL_VERIFY_PEER|SSL_VERIFY_CLIENT_ONCE, verify_callback);
+
+  /* Configure ciphers */
+  str = feature_str(FEAT_TLS_CIPHERS);
+  ssl_set_ciphers(new_server_ctx, NULL, str);
+  ssl_set_ciphers(new_client_ctx, NULL, str);
+
 done:
-  if (base_ctx)
-    SSL_CTX_free(base_ctx);
-  base_ctx = new_ctx;
+  if (server_ctx)
+    SSL_CTX_free(server_ctx);
+  if (client_ctx)
+    SSL_CTX_free(client_ctx);
+  server_ctx = new_server_ctx;
+  client_ctx = new_client_ctx;
   return 0;
+
+fail:
+  if (new_server_ctx)
+    SSL_CTX_free(new_server_ctx);
+  if (new_client_ctx)
+    SSL_CTX_free(new_client_ctx);
+  return 6;
 }
 
 void ircd_tls_close(void *ctx, const char *message)
 {
-  /* TODO: handle blocked I/O for shutdown */
-  SSL_shutdown(ctx);
+  SSL *ssl = ctx;
+  SSL_set_shutdown(ssl, SSL_RECEIVED_SHUTDOWN);
+
+  if (SSL_shutdown(ssl) == 0)
+    SSL_shutdown(ssl);
   SSL_free(ctx);
 }
 
@@ -231,7 +283,7 @@ void *ircd_tls_accept(struct Listener *listener, int fd)
 {
   SSL *tls;
 
-  tls = SSL_new(base_ctx);
+  tls = SSL_new(server_ctx);
   if (!tls)
   {
     ssl_log_error("unable to create SSL session");
@@ -252,7 +304,7 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd)
 {
   SSL *tls;
 
-  tls = SSL_new(base_ctx);
+  tls = SSL_new(client_ctx);
   if (!tls)
   {
     ssl_log_error("unable to create SSL session");
@@ -284,7 +336,8 @@ static int ssl_handle_error(struct Client *cptr, SSL *tls, int res, int orig_err
     socket_events(&cli_socket(cptr), SOCK_EVENT_READABLE);
     return 0;
   case SSL_ERROR_WANT_WRITE:
-    socket_events(&cli_socket(cptr), SOCK_EVENT_WRITABLE);
+    /* Don't set writable event - the socket is already writable */
+    /* Just return 0 to indicate we should try again */
     return 0;
   case SSL_ERROR_SYSCALL:
     if (orig_errno == EINTR || orig_errno == EAGAIN || orig_errno == EWOULDBLOCK)
@@ -314,12 +367,26 @@ int ircd_tls_negotiate(struct Client *cptr)
   if (!tls)
     return 1;
 
-  res = SSL_accept(tls);
+  /* Check for handshake timeout */
+  if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
+    Debug((DEBUG_DEBUG, "SSL handshake timeout for %s", cli_name(cptr)));
+    return -1;
+  }
+
+  /* For client connections, use SSL_connect */
+  if (SSL_get_SSL_CTX(tls) == client_ctx)
+    res = SSL_connect(tls);
+  /* For server connections, use SSL_accept */
+  else
+    res = SSL_accept(tls);
+
   if (res == 1)
   {
+    Debug((DEBUG_DEBUG, "SSL handshake success for %s", cli_name(cptr)));
     cert = SSL_get_peer_certificate(tls);
     if (cert)
     {
+      Debug((DEBUG_DEBUG, "SSL_get_peer_certificate success for %s", cli_name(cptr)));
       len = sizeof(buf);
       res = X509_digest(cert, fp_digest, buf, &len);
       X509_free(cert);
@@ -328,22 +395,33 @@ int ircd_tls_negotiate(struct Client *cptr)
         log_write(LS_SYSTEM, L_ERROR, 0, "X509_digest failed for %s: %d",
           cli_name(cptr), res);
       }
-      if (len == 32)
-      {
-        /* TODO: convert fingerprint to hex (into cli_tls_fingerprint(cptr)) */
+      if (len == 32) {
+        /* Convert fingerprint to lowercase hex */
+        char *p = cli_tls_fingerprint(cptr);
+        for (unsigned int i = 0; i < len; i++) {
+          sprintf(p + (i * 2), "%02x", buf[i]);
+        }
+        p[len * 2] = '\0';
+        Debug((DEBUG_DEBUG, "Fingerprint for %s: %s", cli_name(cptr), cli_tls_fingerprint(cptr)));
       }
-      else
-      {
+      else {
         memset(cli_tls_fingerprint(cptr), 0, 65);
+        Debug((DEBUG_DEBUG, "Invalid length"));
       }
     }
     ClearNegotiatingTLS(cptr);
+
+    /* For incoming connections, start auth */
+    if (!IsConnecting(cptr)) {
+      start_auth(cptr);
+    }
   }
   else
   {
     int orig_errno = errno;
     /* Handshake in progress. */
     res = (ssl_handle_error(cptr, tls, res, orig_errno) < 0) ? -1 : 0;
+    Debug((DEBUG_DEBUG, "SSL handshake failed for %s", cli_name(cptr)));
   }
 
   return res;
@@ -386,22 +464,44 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
   tls = s_tls(&con_socket(con));
   if (!tls)
     return IO_FAILURE;
+
   *count_out = 0;
+
+  // Handling retransmission if needed
   if (con->con_rexmit)
   {
     res = SSL_write(tls, con->con_rexmit, con->con_rexmit_len);
     if (res <= 0)
     {
       orig_errno = errno;
-      return (ssl_handle_error(cptr, tls, res, orig_errno) < 0)
-        ? IO_FAILURE : IO_BLOCKED;
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+      {
+        Debug((DEBUG_DEBUG, "ircd_tls_sendv: SSL write blocked, retrying send for retransmission."));
+        cli_connect(cptr)->con_rexmit = con->con_rexmit;  // Keep the pointer for retry
+        cli_connect(cptr)->con_rexmit_len = con->con_rexmit_len;
+        return IO_BLOCKED;
+      }
+      // If the error is fatal (e.g., connection reset or closed), handle accordingly
+      Debug((DEBUG_DEBUG, "ircd_tls_sendv: SSL write failed (res=-1, errno=%d).", errno));
+      if (ssl_handle_error(cptr, tls, res, orig_errno) < 0)
+        return IO_FAILURE;
     }
-    msgq_excise(buf, con->con_rexmit, con->con_rexmit_len);
-    con->con_rexmit_len = 0;
-    con->con_rexmit = NULL;
-    result = IO_SUCCESS;
+
+    // Only excise the message if the full message was sent
+    if (res == (int)con->con_rexmit_len) {
+      msgq_excise(buf, con->con_rexmit, con->con_rexmit_len);
+      con->con_rexmit_len = 0;
+      con->con_rexmit = NULL;
+      result = IO_SUCCESS;
+    } else {
+      // Partial send, update pointer and length for next retry
+      con->con_rexmit = (char *)con->con_rexmit + res;
+      con->con_rexmit_len -= res;
+      return IO_BLOCKED;
+    }
   }
 
+  // Process remaining messages in the queue
   count = msgq_mapiov(buf, iov, sizeof(iov) / sizeof(iov[0]), count_in);
   for (ii = 0; ii < count; ++ii)
   {
@@ -410,9 +510,25 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
     {
       *count_out += res;
       result = IO_SUCCESS;
+      if (res < (int)iov[ii].iov_len) {
+        // Partial send, store for retransmission
+        cli_connect(cptr)->con_rexmit = (char *)iov[ii].iov_base + res;
+        cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len - res;
+        return IO_BLOCKED;
+      }
+      // else, full message sent, continue to next
       continue;
     }
 
+    // If the write was blocked, handle the blocking situation
+    if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+    {
+      cli_connect(cptr)->con_rexmit = iov[ii].iov_base;
+      cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len;
+      return IO_BLOCKED;
+    }
+
+    // Handle SSL errors
     orig_errno = errno;
     if (ssl_handle_error(cptr, tls, res, orig_errno) < 0)
       return IO_FAILURE;

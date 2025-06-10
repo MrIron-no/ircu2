@@ -8053,21 +8053,21 @@ else
         _pkg_short_errors_supported=no
 fi
         if test $_pkg_short_errors_supported = yes; then
-	        GNUTLS_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "gnutls" 2>&1`
+                GNUTLS_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "gnutls" 2>&1`
         else
-	        GNUTLS_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "gnutls" 2>&1`
+                GNUTLS_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "gnutls" 2>&1`
         fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$GNUTLS_PKG_ERRORS" >&5
+        # Put the nasty error message in config.log where it belongs
+        echo "$GNUTLS_PKG_ERRORS" >&5
 
-	:
+        :
 elif test $pkg_failed = untried; then
         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
 printf "%s\n" "no" >&6; }
-	:
+        :
 else
-	GNUTLS_CFLAGS=$pkg_cv_GNUTLS_CFLAGS
-	GNUTLS_LIBS=$pkg_cv_GNUTLS_LIBS
+        GNUTLS_CFLAGS=$pkg_cv_GNUTLS_CFLAGS
+        GNUTLS_LIBS=$pkg_cv_GNUTLS_LIBS
         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 printf "%s\n" "yes" >&6; }
 

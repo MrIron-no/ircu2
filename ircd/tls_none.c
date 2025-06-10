@@ -43,8 +43,9 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd)
   return NULL;
 }
 
-void ircd_tls_close(void *ctx, const char *message)
+IOResult ircd_tls_close(void *ctx, const char *message)
 {
+  return IO_SUCCESS;
 }
 
 int ircd_tls_listen(struct Listener *listener)
@@ -55,6 +56,8 @@ int ircd_tls_listen(struct Listener *listener)
 int ircd_tls_negotiate(struct Client *cptr)
 {
   ClearNegotiatingTLS(cptr);
+  if (!IsConnecting(cptr))
+    start_auth(cptr);
   return 1;
 }
 

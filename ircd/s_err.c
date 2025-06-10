@@ -1231,6 +1231,8 @@ static Numeric replyTable[] = {
   { 0 },
 /* 599 */
   { 0 },
+/* 600 */
+  { 0 },
 /* 601 */
   { 0 },
 /* 602 */
@@ -1372,7 +1374,7 @@ static Numeric replyTable[] = {
 /* 670 */
   { RPL_STARTTLS, ":STARTTLS successful, proceed with TLS handshake", "670" },
 /* 671 */
-  { 0 },
+  { RPL_WHOISSECURE, "%s :is using a secure connection", "671" },
 /* 672 */
   { 0 },
 /* 673 */

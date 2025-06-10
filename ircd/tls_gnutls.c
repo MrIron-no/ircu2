@@ -24,6 +24,7 @@
 
 #include "config.h"
 #include "client.h"
+#include "ircd.h"
 #include "ircd_features.h"
 #include "ircd_log.h"
 #include "ircd_string.h"
@@ -31,10 +32,13 @@
 #include "listener.h"
 #include "s_conf.h"
 #include "s_debug.h"
+#include "s_auth.h"
+#include "s_debug.h"
 
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #if defined(GNUTLS_AUTO_REAUTH) /* 3.6.4 */
@@ -255,6 +259,12 @@ int ircd_tls_negotiate(struct Client *cptr)
   if (!tls)
     return 1;
 
+  /* Check for handshake timeout */
+  if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
+    Debug((DEBUG_DEBUG, "TLS handshake timeout for %s", cli_name(cptr)));
+    return -1;
+  }
+
   res = gnutls_handshake(tls);
   switch (res)
   {
@@ -267,8 +277,6 @@ int ircd_tls_negotiate(struct Client *cptr)
     return 0;
 
   case GNUTLS_E_SUCCESS:
-    ClearNegotiatingTLS(cptr);
-
     datum = gnutls_certificate_get_peers(tls, NULL);
     if (!datum)
     {
@@ -282,6 +290,7 @@ int ircd_tls_negotiate(struct Client *cptr)
     {
       log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_init failed for %s: %d",
         cli_name(cptr), res);
+      gnutls_x509_crt_deinit(crt);
         return 1;
     }
 
@@ -291,18 +300,36 @@ int ircd_tls_negotiate(struct Client *cptr)
     {
       log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_import failed for %s: %d",
         cli_name(cptr), res);
+      gnutls_x509_crt_deinit(crt);
       return 1;
     }
 
+    unsigned char buf[64]; // SHA256 is 32 bytes, but allow for longer
     len = sizeof(buf);
     res = gnutls_x509_crt_get_fingerprint(crt, GNUTLS_DIG_SHA256, buf, &len);
-    if (res)
-    {
+    if (res) {
       log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_get_fingerprint failed for %s: %d",
         cli_name(cptr), res);
-        return 1;
+      gnutls_x509_crt_deinit(crt);
+      return 1;
     }
-    /* TODO: convert buf to hex (into cli_tls_fingerprint(cptr)) */
+
+    /* Convert to lowercase hex (no colons) */
+    char *p = cli_tls_fingerprint(cptr);
+    for (size_t i = 0; i < len; i++) {
+      sprintf(p + (i * 2), "%02x", buf[i]);
+    }
+    p[len * 2] = '\0';
+    Debug((DEBUG_DEBUG, "Fingerprint for %s: %s", cli_name(cptr), cli_tls_fingerprint(cptr)));
+    gnutls_x509_crt_deinit(crt);
+
+    /* Now that cert is verified and fingerprint is set, clear TLS flag and start auth */
+    ClearNegotiatingTLS(cptr);
+
+    /* For incoming connections, start auth */
+    if (!IsConnecting(cptr))
+      start_auth(cptr);
+
     return 1;
 
   default:
@@ -322,29 +349,12 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
   tls = s_tls(&cli_socket(cptr));
   if (!tls)
     return IO_FAILURE;
-  if (IsNegotiatingTLS(cptr))
-  {
-    res = gnutls_handshake(tls);
-    if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
-    {
-      handle_blocked(cptr, tls);
-      return IO_BLOCKED;
-    }
-    if (res != GNUTLS_E_SUCCESS)
-      return gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
-  }
 
   res = gnutls_record_recv(tls, buf, length);
   if (res >= 0)
   {
     *count_out = res;
     return IO_SUCCESS;
-  }
-  if (res == GNUTLS_E_REHANDSHAKE)
-  {
-    res = gnutls_handshake(tls);
-    if (res >= 0)
-      return IO_SUCCESS;
   }
   if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
     handle_blocked(cptr, tls);
@@ -365,24 +375,10 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
   tls = s_tls(&con_socket(con));
   if (!tls)
     return IO_FAILURE;
-  if (IsNegotiatingTLS(cptr))
-  {
-    res = gnutls_handshake(tls);
-    if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
-    {
-      handle_blocked(cptr, tls);
-      return IO_BLOCKED;
-    }
-    if (res != GNUTLS_E_SUCCESS)
-      return gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
-  }
 
-  /* TODO: Try to use gnutls_record_cork()/_uncork()/_check_corked().
-   * The exact semantics of check_corked()'s return value are not clear:
-   * What does "the size of the corked data" signify relative to what
-   * has been accepted or must be provided to a future call to
-   * gnutls_record_send()?
-   */
+  // Start corking to buffer multiple records
+  gnutls_record_cork(tls);
+
   *count_out = 0;
   if (con->con_rexmit)
   {
@@ -390,13 +386,22 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
     if (res <= 0)
     {
       if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
+      {
+        Debug((DEBUG_DEBUG, "ircd_tls_sendv: GnuTLS write blocked, retrying send for retransmission."));
         handle_blocked(cptr, tls);
+      }
       return gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
     }
+    if (res == (int)con->con_rexmit_len) {
     msgq_excise(buf, con->con_rexmit, con->con_rexmit_len);
     con->con_rexmit_len = 0;
     con->con_rexmit = NULL;
     result = IO_SUCCESS;
+    } else {
+      con->con_rexmit = (char *)con->con_rexmit + res;
+      con->con_rexmit_len -= res;
+      return IO_BLOCKED;
+    }
   }
 
   count = msgq_mapiov(buf, iov, sizeof(iov) / sizeof(iov[0]), count_in);
@@ -407,18 +412,31 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
     {
       *count_out += res;
       result = IO_SUCCESS;
+      if (res < (int)iov[ii].iov_len) {
+        cli_connect(cptr)->con_rexmit = (char *)iov[ii].iov_base + res;
+        cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len - res;
+        gnutls_record_uncork(tls, 0);
+        return IO_BLOCKED;
+      }
       continue;
     }
 
     if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
     {
+      Debug((DEBUG_DEBUG, "ircd_tls_sendv: GnuTLS write blocked, retrying send for retransmission."));
       handle_blocked(cptr, tls);
       cli_connect(cptr)->con_rexmit = iov[ii].iov_base;
       cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len;
+      // Uncock before returning to ensure partial data is sent
+      gnutls_record_uncork(tls, 0);
+      return IO_BLOCKED;
     }
-    result = gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
-    break;
+
+    Debug((DEBUG_DEBUG, "ircd_tls_sendv: GnuTLS write failed (res=%d).", res));
+    return IO_FAILURE;
   }
+
+  gnutls_record_uncork(tls, 0);
 
   return result;
 }

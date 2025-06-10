@@ -22,11 +22,13 @@
 
 #include "config.h"
 #include "client.h"
+#include "ircd.h"
 #include "ircd_features.h"
 #include "ircd_log.h"
 #include "ircd_string.h"
 #include "ircd_tls.h"
 #include "listener.h"
+#include "s_auth.h"
 #include "s_conf.h"
 #include "s_debug.h"
 
@@ -101,19 +103,7 @@ static struct tls_config *make_tls_config(const char *ciphers)
     goto fail;
   }
 
-  protos = 0;
-  /* libtls does not support SSLv2 or SSLv3. */
-  if (feature_bool(FEAT_TLS_V1P0))
-    protos |= TLS_PROTOCOL_TLSv1_0;
-  if (feature_bool(FEAT_TLS_V1P1))
-    protos |= TLS_PROTOCOL_TLSv1_1;
-  if (feature_bool(FEAT_TLS_V1P2))
-    protos |= TLS_PROTOCOL_TLSv1_2;
-#ifdef TLS_PROTOCOL_TLSv1_3
-  if (feature_bool(FEAT_TLS_V1P3))
-    protos |= TLS_PROTOCOL_TLSv1_3;
-#endif
-  if (tls_config_set_protocols(new_cfg, protos) < 0)
+  if (tls_config_set_protocols(new_cfg, TLS_PROTOCOL_TLSv1_2 | TLS_PROTOCOL_TLSv1_3) < 0)
   {
     log_write(LS_SYSTEM, L_ERROR, 0, "unable to select TLS versions: %s",
               tls_config_error(new_cfg));
@@ -189,7 +179,6 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd)
 
 void ircd_tls_close(void *ctx, const char *message)
 {
-  /* TODO: handle TLS_WANT_POLL{IN,OUT} from tls_close() */
   tls_close(ctx);
   tls_free(ctx);
 }
@@ -259,6 +248,11 @@ int ircd_tls_negotiate(struct Client *cptr)
       ircd_strncpy(cli_tls_fingerprint(cptr), hash+7, 64);
     }
     ClearNegotiatingTLS(cptr);
+
+    /* For incoming connections, start auth */
+    if (!IsConnecting(cptr)) {
+      start_auth(cptr);
+    }
     return 1;
   }
   return tls_handle_error(cptr, tls, res);
