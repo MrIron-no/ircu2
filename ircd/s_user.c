@@ -1241,6 +1241,8 @@ char *umode_str(struct Client *cptr)
     while ((*m++ = *t++))
       ; /* Empty loop */
 
+    m--; /* back up over previous nul-termination */
+
     if (cli_user(cptr)->acc_create) {
       char nbuf[20];
       Debug((DEBUG_DEBUG, "Sending timestamped account in user mode for "
@@ -1248,9 +1250,9 @@ char *umode_str(struct Client *cptr)
 	     cli_user(cptr)->acc_create));
       ircd_snprintf(0, t = nbuf, sizeof(nbuf), ":%Tu",
 		    cli_user(cptr)->acc_create);
-      m--; /* back up over previous nul-termination */
       while ((*m++ = *t++))
-	; /* Empty loop */
+	      ; /* Empty loop */
+      m--; /* back up over previous nul-termination */
     }
   }
 

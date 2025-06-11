@@ -227,7 +227,6 @@ struct Connection
   char con_buffer[BUFSIZE];          /**< Incoming message buffer; or
                                         the error that caused this
                                         clients socket to close. */
-  char con_tls_fingerprint[65];      /**< TLS SHA-256 fingerprint. */
   struct Socket       con_socket;    /**< socket descriptor for
                                       client */
   struct Timer        con_proc;      /**< process latent messages from
@@ -266,6 +265,7 @@ struct Client {
   char cli_name[HOSTLEN + 1];     /**< Unique name of the client, nick or host */
   char cli_username[USERLEN + 1]; /**< Username determined by ident lookup */
   char cli_info[REALLEN + 1];     /**< Free form additional client information */
+  char cli_tls_fingerprint[65];   /**< TLS SHA-256 fingerprint. */
 };
 
 /** Magic constant to identify valid Client structures. */
@@ -327,6 +327,8 @@ struct Client {
 #define cli_info(cli)		((cli)->cli_info)
 /** Get client account string. */
 #define cli_account(cli)	(cli_user(cli) ? cli_user(cli)->account : "0")
+/** Get the client's TLS fingerprint. */
+#define cli_tls_fingerprint(cli) ((cli)->cli_tls_fingerprint)
 
 /** Get number of incoming bytes queued for client. */
 #define cli_count(cli)		con_count(cli_connect(cli))
@@ -378,8 +380,6 @@ struct Client {
 #define cli_sockhost(cli)	con_sockhost(cli_connect(cli))
 /** Get the client's password. */
 #define cli_passwd(cli)		con_passwd(cli_connect(cli))
-/** Get the client's TLS fingerprint. */
-#define cli_tls_fingerprint(cli) con_tls_fingerprint(cli_connect(cli))
 /** Get the unprocessed input buffer for a client's connection.  */
 #define cli_buffer(cli)		con_buffer(cli_connect(cli))
 /** Get the Socket structure for sending to a client. */
@@ -459,8 +459,6 @@ struct Client {
 #define con_sockhost(con)	((con)->con_sockhost)
 /** Get the password sent by the remote end of the connection.  */
 #define con_passwd(con)		((con)->con_passwd)
-/** Get the fingerprint of the peer's TLS certificate. */
-#define con_tls_fingerprint(con) ((con)->con_tls_fingerprint)
 /** Get the buffer of unprocessed incoming data from the connection. */
 #define con_buffer(con)		((con)->con_buffer)
 /** Get the Socket for the connection. */
