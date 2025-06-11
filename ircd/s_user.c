@@ -1277,7 +1277,6 @@ char *umode_str(struct Client *cptr)
       while ((*m++ = *t++))
 	; /* Empty loop */
       m--; /* back up over previous nul-termination */
-
     }
   }
 
