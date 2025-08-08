@@ -652,6 +652,13 @@ struct Message msgtab[] = {
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_cap, m_cap, m_ignore, m_cap, m_ignore }
   },
+  {
+    MSG_STARTTLS,
+    TOK_STARTTLS,
+    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_starttls, m_starttls, m_starttls, m_starttls, m_ignore }
+  },
   /* This command is an alias for QUIT during the unregistered part of
    * of the server.  This is because someone jumping via a broken web
    * proxy will send a 'POST' as their first command - which we will
@@ -757,7 +764,7 @@ msg_tree_parse(char *cmd, struct MessageTree *root)
   for (mtree = root; mtree; mtree = mtree->pointers[(*cmd++) & (MAXPTRLEN-1)]) {
       if (*cmd == '\0' && mtree->msg)
           return mtree->msg;
-      else if (!IsAlpha(*cmd))
+      else if (!IsAlpha(*cmd) && *cmd != '_')
           return NULL;
   }
   return NULL;

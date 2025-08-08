@@ -137,6 +137,7 @@ It's used for providing promotional space to providers as per CFV-202
 
 KILL_IPMISMATCH
  * Type: boolean
+
  * Default: FALSE
 
 When a client connects to your server, the IP address of the client is
@@ -899,11 +900,16 @@ If set, allow users to create local channels.
 
 TOPIC_BURST
  * Type: boolean
- * Default: FALSE
+ * Default: TRUE
 
-If set, send the current topic value and timestamp for channels during
-burst.  This generally only makes sense for hubs to use, and it causes
-a large increase in net.burst size.
+Send during burst the current topic, nick of person who set the topic and
+topic timestamp.
+
+AWAY_BURST
+ * Type: boolean
+ * Default: TRUE
+
+Send the away message for clients flagged as away during burst.
 
 CHANNELLEN
  * Type: integer
@@ -921,6 +927,45 @@ This allows local users to set the +A and +U modes (admin and user
 passwords, respectively) on channels where they are marked as channel
 managers.  This feature must be disabled until all servers on the
 network are able to interpret and handle these modes correctly.
+
+TLS_CACERTFILE
+ * Type: string
+ * Default: ""
+
+This optionally names a file that contains public keys for certificate
+authorities (CAs) that are trusted to sign keys for clients and servers
+connected to this server.  Certificates in this file take precedence
+over those in TLS_CACERTDIR.
+
+TLS_CACERTDIR
+ * Type: string
+ * Default: ""
+
+This optionally names a directory that contains public keys for
+certificate authorities (CAs) that are trusted to sign keys for clients
+and servers connected to this server.
+
+TLS_CIPHERS
+ * Type: string
+ * Default: ""
+
+This specifies the default list of ciphers to use.  This list is used
+for client connections that use STARTTLS, for outbound connections to
+servers with no "tls ciphers" directive in their Connect blocks, and for
+inbound connections on TLS-only ports with no "tls ciphers" directive in
+their Port blocks.
+
+This cipher list is interpreted by, and thus depends on, the TLS library
+in use:
+
+ - For all libraries, an empty string represents use of the library's
+   default cipher suites.
+ - For OpenSSL, it is parsed as "L1 L2" (two lists, separated by spaces)
+   where L1 is used for TLSv1.2 and below (with SSL_set_cipher_list())
+   and L2 is used for TLSv1.3 (with SSL_set_ciphersuites()).
+ - For GnuTLS, it is parsed as a "priority string" by the function
+   gnutls_priority_init() and then applied to sessions.
+ - For OpenBSD's libtls, it is passed to tls_config_set_ciphers().
 
 ZANNELS
  * Type: boolean

@@ -324,6 +324,7 @@ static struct FeatureDesc {
   F_B(ZANNELS, 0, 0, 0),
   F_B(LOCAL_CHANNELS, 0, 1, 0),
   F_B(TOPIC_BURST, 0, 1, 0),
+  F_B(AWAY_BURST, 0, 1, 0),
   F_B(DISABLE_GLINES, 0, 0, 0),
   F_B(JOIN_TARGET, 0, 0, 0),
 
@@ -366,6 +367,10 @@ static struct FeatureDesc {
   F_I(SLINE_HOLD_TIMEOUT, 0, 60, 0),
   F_B(SLINE_HOLD_TIMEOUT_BLOCK, 0, 1, 0),
   F_B(ANNOUNCE_INVITES, 0, 0, 0),
+  F_S(TLS_CACERTFILE, FEAT_NULL | FEAT_CASE | FEAT_OPER, 0, 0),
+  F_S(TLS_CACERTDIR, FEAT_NULL | FEAT_CASE | FEAT_OPER, 0, 0),
+  F_S(TLS_CIPHERS, FEAT_NULL | FEAT_CASE | FEAT_OPER, 0, 0),
+  F_B(TLS_ALLOW_SELFSIGNED, 0, 1, 0),
 
   /* features that affect all operators */
   F_B(CONFIG_OPERCMDS, 0, 0, 0),
