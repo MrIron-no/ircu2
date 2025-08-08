@@ -747,7 +747,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   SetServerYXX(cptr, acptr, parv[6]);
 
   /* Attach any necessary UWorld config items. */
-  struct ConfItem* conf = attach_confs_byhost(acptr, host, CONF_UWORLD);
+  struct ConfItem* conf = attach_confs_byhost(cptr, host, CONF_UWORLD);
 
   /* Flag server as spamfilter. */
   if (conf && (conf->flags & CONF_UWORLD_SPAMFILTER))

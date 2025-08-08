@@ -543,15 +543,27 @@ sline_notify_spamfilters(struct HoldQueueEntry *entry)
       Debug((DEBUG_DEBUG, "sline_notify_spamfilters: sending notification to %s", cli_name(acptr)));
       
       /* Send the S-line match notification to the spam filter server
-       * Format: SLMATCH <token> <sender> <target> <type> <captures>
+       * Format: SL spam:<token> :<sender> <target> :[captures]
        */
-      sendcmdto_one(&me, CMD_XQUERY, acptr, 
-                    "%C spam:%d :SL %C %s %s",
-                    acptr,
-                    entry->token,
-                    entry->sender,
-                    target_name,
-                    entry->captures ? entry->captures : "");
+      if ((entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE) && entry->target.recipient) {
+        /* For private messages, use NumNick format for target */
+        sendcmdto_one(&me, CMD_XQUERY, acptr, 
+                      "%C spam:%d :%C %C :%s",
+                      acptr,
+                      entry->token,
+                      entry->sender,
+                      entry->target.recipient,
+                      entry->captures ? entry->captures : "");
+      } else {
+        /* For channel messages or unknown targets, use target_name as is */
+        sendcmdto_one(&me, CMD_XQUERY, acptr, 
+                      "%C spam:%d :%C %H :%s",
+                      acptr,
+                      entry->token,
+                      entry->sender,
+                      entry->target.channel,
+                      entry->captures ? entry->captures : "");
+      }
 
       sent_marker++;
     }
@@ -751,7 +763,7 @@ sline_check_privmsg(struct Client *sender, struct Client *recipient, const char 
   char *captures;
   struct HoldQueueEntry *entry;
   
-  if (!sender || !recipient || !text)
+  if (!sender || !recipient || !text || IsAnOper(sender))
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_check_privmsg: checking %s from %s to %s: '%s'", 
