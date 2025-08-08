@@ -164,7 +164,7 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
          pattern ? pattern : "NULL", type ? type : "NULL"));
 
   /* Is the server bursting? */
-  if (action == SLINE_BURST && !IsBurst(cptr)) {
+  if (action == SLINE_BURST && !IsBurst(sptr)) {
     Debug((DEBUG_DEBUG, "ms_sline: Not in burst mode, denying SLINE burst command"));
     return send_reply(sptr, ERR_NOPRIVILEGES, parv[1]);
   }
