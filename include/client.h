@@ -693,6 +693,8 @@ struct Client {
 #define ClearPingSent(x)        ClrFlag(x, FLAG_PINGSENT)
 /** Clear the client's HUB flag. */
 #define ClearHub(x)             ClrFlag(x, FLAG_HUB)
+/** Clear the client's spamfilter flag. */
+#define ClearSpamfilter(x)      ClrFlag(x, FLAG_SPAMFILTER)
 /** Clear the client's spam hold flag. */
 #define ClearSpamHold(x)        ClrFlag(x, FLAG_SPAMHOLD)
 

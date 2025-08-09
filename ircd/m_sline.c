@@ -1,7 +1,6 @@
 /*
  * IRC - Internet Relay Chat, ircd/m_sline.c
- * Copyright (C) 1990 Jarkko Oikarinen and
- *                    University of Oulu, Computing Center
+ * Copyright (C) 2025 MrIron <mriron@undernet.org>
  *
  * See file AUTHORS in IRC package for additional names of
  * the programmers.
@@ -116,6 +115,10 @@
  * * parv[0] = Sender prefix
  * * parv[1] = - (deactivate)
  * * parv[2] = pattern
+ * 
+ * SLINE_ACTIVATE and SLINE_DECTIVATE is only accepted from U:lined servers (IsSpamfilter()).
+ * SLINE_BURST is only accepted from a server currently bursting.
+ * 
  */
 int
 ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
@@ -165,15 +168,14 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 
   /* Is the server bursting? */
   if (action == SLINE_BURST && !IsBurst(sptr)) {
-    Debug((DEBUG_DEBUG, "ms_sline: Not in burst mode, denying SLINE burst command"));
+    Debug((DEBUG_DEBUG, "ms_sline: Not in burst mode, denying SLINE burst"));
     return send_reply(sptr, ERR_NOPRIVILEGES, parv[1]);
   }
 
-  /* We only accept SLINE_ACTIVATE and SLINE_DEACTIVATE from U:lined servers (spamfilter). */
-  struct ConfItem* conf = find_conf_byhost(cli_confs(cptr), cli_name(sptr), CONF_UWORLD);
+  /* We only accept SLINE_ACTIVATE and SLINE_DEACTIVATE from U:lined servers (IsSpamfilter()). */
   if ((action == SLINE_ACTIVATE || action == SLINE_DEACTIVATE) 
-      && (!conf || !(conf->flags & CONF_UWORLD_SPAMFILTER))) {
-    Debug((DEBUG_DEBUG, "ms_sline: No U:lined server or not a spamfilter, denying SLINE command"));
+      && (!IsSpamfilter(sptr))) {
+    Debug((DEBUG_DEBUG, "ms_sline: No U:lined server, denying SLINE command"));
     return send_reply(sptr, ERR_NOPRIVILEGES, parv[1]);
   }
 
@@ -209,8 +211,9 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   /* Build flag string for propagation (only for add/burst operations) */
   char flag_str[4] = {0}; /* Maximum 3 chars + null terminator */
   int flag_pos = 0;
-  
+
   if (action == SLINE_ACTIVATE || action == SLINE_BURST) {
+    /* Build flag string for propagation (only for add/burst operations) */
     if (flags & SLINE_ALL) {
       flag_str[flag_pos++] = 'A';
     } else {
@@ -223,22 +226,10 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     }
     flag_str[flag_pos] = '\0';
 
-    // Handle propagation for add/burst
-    sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c %Tu %s :%s",
-      *action_str, lastmod, flag_str, pattern);
-  } else {
-    // Handle propagation for removal
-    sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c :%s",
-      *action_str, pattern);
-  }
-
-  if (action == SLINE_ACTIVATE || action == SLINE_BURST) {
-    /* Adding S-line (+ = normal add, * = burst mode add) */
-    Debug((DEBUG_DEBUG, "Adding S-line (%s): pattern=%s, type=%s, mode=%c",
+    Debug((DEBUG_DEBUG, "Processing activation of S-line (%s): pattern=%s, type=%s, mode=%c",
             action == SLINE_ACTIVATE ? "ACTIVATE" : "BURST",
-            pattern ? pattern : "NULL", 
-            type ? type : "NULL", 
-            *action_str));
+            pattern ? pattern : "NULL",
+            flag_str, *action_str));
 
     /* Check if S-line already exists with the exact same pattern */
     asline = sline_find(pattern);
@@ -249,18 +240,16 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
         return 0; /* Ignore, as per protocol */
       }
 
-      /* Update S:line */
+      /* Update S:line. The pattern cannot be changed. */
       asline->sl_lastmod = lastmod;
       asline->sl_flags = flags;
         
-      /* Inform ops about the update */
       sendto_opmask_butone(0, SNO_GLINE, "%C updating global SLINE for pattern \"%s\" (%s)",
                             sptr, pattern,
                             (flags & SLINE_ALL) ? "ALL" :
                             (flags & SLINE_PRIVATE) ? "PRIVATE" :
                             (flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
 
-      /* and log it */
       log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
                 "%#C updating global SLINE for pattern \"%s\" (%s)", sptr,
                 pattern,
@@ -269,13 +258,15 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
                 (flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
 
       Debug((DEBUG_DEBUG, "Updated flags for existing S-line with same pattern and flags"));
-      return 0;
-      }
+    } else {
+      sline_add(cptr, sptr, pattern, lastmod, flags);
+    }
 
-    sline_add(cptr, sptr, pattern, lastmod, flags);
+    sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c %Tu %s :%s",
+      *action_str, lastmod, flag_str, pattern);
+    
   } else if (action == SLINE_DEACTIVATE) {
-      /* Removing S-line */
-      Debug((DEBUG_DEBUG, "Removing S-line: pattern=%s", pattern));
+      Debug((DEBUG_DEBUG, "Processing removal of S-line with pattern=%s", pattern));
 
       /* Find the S-line to remove */
       asline = sline_find(pattern);
@@ -285,6 +276,9 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
       }
 
       sline_remove(cptr, sptr, asline);
+
+      sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c :%s",
+        *action_str, pattern);
   }
 
   return 1;
