@@ -1,7 +1,6 @@
 /*
  * IRC - Internet Relay Chat, ircd/sline.c
- * Copyright (C) 1990 Jarkko Oikarinen and
- *                    University of Oulu, Finland
+ * Copyright (C) 2025 MrIron <mriron@undernet.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -52,7 +51,9 @@
 #include <regex.h>
 
 /** Maximum number of regex capture groups supported (including full match at index 0) */
+#ifndef SLINE_MAX_CAPTURES
 #define SLINE_MAX_CAPTURES 16
+#endif
 
 /** List of S-lines. */
 struct Sline* GlobalSlineList = 0;
@@ -122,6 +123,18 @@ make_sline(char *pattern, time_t lastmod, unsigned int flags)
   sline->sl_lastmod = lastmod > 0 ? lastmod : TStime(); /* Set last modified time */
   sline->sl_flags = flags & SLINE_MASK;
   sline->sl_count = 0; /* Initialize match count */
+  sline->sl_regex_valid = 0;
+
+  /* Precompile the regex at creation time; invalid patterns are accepted but marked invalid */
+  {
+    int ret = regcomp(&sline->sl_regex, sline->sl_pattern, REG_EXTENDED);
+    if (ret == 0) {
+      sline->sl_regex_valid = 1;
+      Debug((DEBUG_DEBUG, "make_sline: compiled regex for pattern '%s'", sline->sl_pattern));
+    } else {
+      Debug((DEBUG_DEBUG, "make_sline: failed to compile regex for pattern '%s'", sline->sl_pattern));
+    }
+  }
 
   sline->sl_next = GlobalSlineList; /* then link it into list */
   sline->sl_prev_p = &GlobalSlineList;
@@ -295,6 +308,12 @@ sline_free(struct Sline *sline)
   if (sline->sl_next)
     sline->sl_next->sl_prev_p = sline->sl_prev_p;
 
+  /* Free compiled regex if present */
+  if (sline->sl_regex_valid) {
+    regfree(&sline->sl_regex);
+    sline->sl_regex_valid = 0;
+  }
+
   MyFree(sline->sl_pattern); /* free up the memory */
   MyFree(sline);
 }
@@ -316,17 +335,20 @@ sline_stats(struct Client *sptr, const struct StatDesc *sd,
 
   for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
     /* Build type string */
-    if (sline->sl_flags & SLINE_ALL)
-      ircd_strncpy(type_str, "ALL", sizeof(type_str));
+    if (!sline->sl_regex_valid)
+      ircd_strncpy(type_str, "I", sizeof(type_str));
+    else if (sline->sl_flags & SLINE_ALL)
+      ircd_strncpy(type_str, "A", sizeof(type_str));
     else if (sline->sl_flags & SLINE_PRIVATE)
-      ircd_strncpy(type_str, "PRIVATE", sizeof(type_str));
+      ircd_strncpy(type_str, "P", sizeof(type_str));
     else if (sline->sl_flags & SLINE_CHANNEL)
-      ircd_strncpy(type_str, "CHANNEL", sizeof(type_str));
-    else
-      ircd_strncpy(type_str, "UNKNOWN", sizeof(type_str));
+      ircd_strncpy(type_str, "C", sizeof(type_str));
+    else // Should not get to this
+      ircd_strncpy(type_str, "U", sizeof(type_str));
 
-    send_reply(sptr, RPL_STATSSLINE, 'S', sline->sl_pattern,
-	       sline->sl_lastmod, sline->sl_count, type_str);
+    send_reply(sptr, RPL_STATSSLINE, 
+	       sline->sl_lastmod, sline->sl_count, type_str,
+         sline->sl_pattern);
     count++;
   }
   
@@ -439,7 +461,6 @@ char *
 sline_check_pattern(const char *text, unsigned int msg_type)
 {
   struct Sline *sline;
-  regex_t regex;
   regmatch_t matches[SLINE_MAX_CAPTURES]; /* Support up to 15 capture groups + full match */
   int ret;
   char *result = NULL;
@@ -454,17 +475,14 @@ sline_check_pattern(const char *text, unsigned int msg_type)
     if (!(sline->sl_flags & SLINE_ALL) && !(sline->sl_flags & msg_type))
       continue;
 
+    /* Skip invalid regex patterns */
+    if (!sline->sl_regex_valid)
+      continue;
+
     Debug((DEBUG_DEBUG, "sline_check_pattern: testing pattern '%s'", sline->sl_pattern));
 
-    /* Compile the regex pattern */
-    ret = regcomp(&regex, sline->sl_pattern, REG_EXTENDED);
-    if (ret != 0) {
-      Debug((DEBUG_DEBUG, "sline_check_pattern: failed to compile regex '%s'", sline->sl_pattern));
-      continue;
-    }
-
     /* Execute the regex match */
-    ret = regexec(&regex, text, SLINE_MAX_CAPTURES, matches, 0);
+    ret = regexec(&sline->sl_regex, text, SLINE_MAX_CAPTURES, matches, 0);
     if (ret == 0) {
       /* Match found! Extract captures */
       Debug((DEBUG_DEBUG, "sline_check_pattern: pattern '%s' matched text '%s'", sline->sl_pattern, text));
@@ -500,12 +518,8 @@ sline_check_pattern(const char *text, unsigned int msg_type)
         
         Debug((DEBUG_DEBUG, "sline_check_pattern: no captures, returning full match: '%s'", result));
       }
-      
-      regfree(&regex);
       return result;
     }
-    
-    regfree(&regex);
   }
 
   Debug((DEBUG_DEBUG, "sline_check_pattern: no patterns matched"));

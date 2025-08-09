@@ -2,9 +2,7 @@
 #define INCLUDED_sline_h
 /*
  * IRC - Internet Relay Chat, include/sline.h
- * Copyright (C) 1990 Jarkko Oikarinen and
- *                    University of Oulu, Computing Center
- * Copyright (C) 1996 -1997 Carlo Wood
+ * Copyright (C) 2025 MrIron <mriron@undernet.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,16 +18,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
-/** @file
- * @brief Structures and APIs for S-line manipulation.
- * @version $Id$
- */
+
 #ifndef INCLUDED_sys_types_h
 #include <sys/types.h>
 #define INCLUDED_sys_types_h
 #endif
 
 #include <stdint.h>
+#include <regex.h>
 
 struct Client;
 struct StatDesc;
@@ -61,6 +57,8 @@ struct Sline {
   time_t	      sl_lastmod;	  /**< When the S-line was last modified. */
   unsigned int	sl_flags;	    /**< S-line status flags. */
   uint64_t      sl_count;     /**< Number of times this S-line has matched. */
+  regex_t       sl_regex;     /**< Precompiled regex for this pattern. */
+  int           sl_regex_valid; /**< 1 if sl_regex compiled successfully, 0 otherwise. */
 };
 
 /** Return pattern of an S-line. */
