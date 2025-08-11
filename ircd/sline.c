@@ -50,28 +50,16 @@
 #include <stdlib.h>
 #include <regex.h>
 
-/** Maximum number of regex capture groups supported (including full match at index 0) */
-#ifndef SLINE_MAX_CAPTURES
-#define SLINE_MAX_CAPTURES 16
-#endif
-
 /** List of S-lines. */
 struct Sline* GlobalSlineList = 0;
-
-/** Message types for hold queue */
-enum HoldMsgType {
-  HOLD_PRIVMSG_PRIVATE = 1,    /**< Private PRIVMSG between users */
-  HOLD_PRIVMSG_NOTICE = 2,     /**< Private NOTICE between users */
-  HOLD_CHANMSG_PRIVATE = 3,    /**< Channel PRIVMSG */
-  HOLD_CHANMSG_NOTICE = 4      /**< Channel NOTICE */
-};
 
 /** Hold queue entry structure */
 struct HoldQueueEntry {
   struct HoldQueueEntry *next;      /**< Next entry in queue */
   struct HoldQueueEntry **prev_p;   /**< Previous pointer to this entry */
   unsigned int token;               /**< Unique token for this entry */
-  enum HoldMsgType msg_type;        /**< Type and command of message */
+  msgtype_t msgtype;                /**< Type of message (SLINE_PRIVATE, SLINE_CHANNEL) */
+  const char *cmdtype;                   /**< Type of command (MSG_PRIVATE, MSG_NOTICE, MSG_WALLCHOPS, MSG_WALLVOICES) */
   struct Client *sender;            /**< Sender of the message */
   union {
     struct Client *recipient;       /**< Recipient for private messages */
@@ -112,8 +100,10 @@ static void sline_hold_timeout_callback(struct Event* ev);
  * @return Newly allocated S-line.
  */
 static struct Sline *
-make_sline(char *pattern, time_t lastmod, unsigned int flags)
+make_sline(char *pattern, time_t lastmod, msgtype_t msgtype)
 {
+  assert(pattern);
+
   struct Sline *sline;
 
   sline = (struct Sline *)MyMalloc(sizeof(struct Sline)); /* alloc memory */
@@ -121,7 +111,7 @@ make_sline(char *pattern, time_t lastmod, unsigned int flags)
 
   DupString(sline->sl_pattern, pattern);
   sline->sl_lastmod = lastmod > 0 ? lastmod : TStime(); /* Set last modified time */
-  sline->sl_flags = flags & SLINE_MASK;
+  sline->sl_msgtype = msgtype;
   sline->sl_count = 0; /* Initialize match count */
   sline->sl_regex_valid = 0;
 
@@ -150,22 +140,26 @@ make_sline(char *pattern, time_t lastmod, unsigned int flags)
  * @param[in] sptr Client that originated the S-line.
  * @param[in] pattern Regex pattern to match against messages.
  * @param[in] lastmod Last modification time of S-line.
- * @param[in] flags Bitwise combination of SLINE_* flags.
+ * @param[in] msgtype Bitwise combination of SLINE_* flags.
  * @return Zero.
  */
 int
 sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
-	  time_t lastmod, unsigned int flags)
+	  time_t lastmod, msgtype_t msgtype)
 {
+  assert(pattern);
+  assert(cptr);
+  assert(sptr);
+
   struct Sline *asline;
 
   assert(0 != pattern);
 
   Debug((DEBUG_DEBUG, "sline_add(\"%s\", \"%s\", \"%s\", %Tu, 0x%04x)",
-	 cli_name(cptr), cli_name(sptr), pattern, lastmod, flags));
+	 cli_name(cptr), cli_name(sptr), pattern, lastmod, msgtype));
 
   /* Check pattern length */
-  if (strlen(pattern) >= BUFSIZE)
+  if (strlen(pattern) >= SLINELEN)
     return send_reply(sptr, ERR_LONGMASK);
 
   /* Inform ops... */
@@ -174,28 +168,24 @@ sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
                          cli_name(sptr) :
                          cli_name((cli_user(sptr))->server),
 		                 pattern, 
-		                 (flags & SLINE_ALL) ? "ALL" :
-		                 (flags & SLINE_PRIVATE) ? "PRIVATE" :
-		                 (flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
+		                 sline_flags_to_string(msgtype));
 
   /* and log it */
   log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
 	    "%#C adding global SLINE for pattern \"%s\" (%s)", sptr,
 	    pattern,
-	    (flags & SLINE_ALL) ? "ALL" :
-	    (flags & SLINE_PRIVATE) ? "PRIVATE" :
-	    (flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
+	    sline_flags_to_string(msgtype));
 
   /* make the sline */
-  asline = make_sline(pattern, lastmod, flags);
+  asline = make_sline(pattern, lastmod, msgtype);
 
   /* since we've disabled overlapped S-line checking, asline should
    * never be NULL...
    */
   assert(asline);
 
-  Debug((DEBUG_DEBUG, "S-line added successfully: pattern=%s, flags=0x%04x, lastmod=%Tu",
-         asline->sl_pattern, asline->sl_flags, asline->sl_lastmod));
+  Debug((DEBUG_DEBUG, "S-line added successfully: pattern=%s, msgtype=0x%04x, lastmod=%Tu",
+         asline->sl_pattern, asline->sl_msgtype, asline->sl_lastmod));
 
   return 0;
 }
@@ -209,6 +199,8 @@ sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
 int
 sline_remove(struct Client *cptr, struct Client *sptr, struct Sline *sline)
 {
+  assert(cptr);
+  assert(sptr);
   assert(sline);
 
   /* Inform ops and log it */
@@ -216,15 +208,11 @@ sline_remove(struct Client *cptr, struct Client *sptr, struct Sline *sline)
 		       (feature_bool(FEAT_HIS_SNOTICES) || IsServer(sptr)) ?
 		       cli_name(sptr) : cli_name((cli_user(sptr))->server),
 		       sline->sl_pattern,
-		       (sline->sl_flags & SLINE_ALL) ? "ALL" :
-		       (sline->sl_flags & SLINE_PRIVATE) ? "PRIVATE" :
-		       (sline->sl_flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
+		       sline_flags_to_string(sline->sl_msgtype));
   log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
 	    "%#C removing global SLINE for pattern \"%s\" (%s)", sptr,
 	    sline->sl_pattern,
-	    (sline->sl_flags & SLINE_ALL) ? "ALL" :
-	    (sline->sl_flags & SLINE_PRIVATE) ? "PRIVATE" :
-	    (sline->sl_flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
+	    sline_flags_to_string(sline->sl_msgtype));
 
   sline_free(sline); /* get rid of the S-line */
 
@@ -233,7 +221,6 @@ sline_remove(struct Client *cptr, struct Client *sptr, struct Sline *sline)
 
 /** Find an S-line for a particular pattern, guided by certain flags.
  * @param[in] pattern Pattern to search for.
- * @param[in] flags Bitwise combination of SLINE_* flags.
  * @return First matching S-line, or NULL if none are found.
  */
 struct Sline *
@@ -246,53 +233,6 @@ sline_find(char *pattern)
       return sline;
   }
 
-  return 0;
-}
-
-/** Check if adding new flags would conflict with existing S-line.
- * @param[in] sline Existing S-line.
- * @param[in] new_flags New flags to add.
- * @return Non-zero if there's a conflict, zero otherwise.
- */
-int
-sline_has_type_conflict(struct Sline *sline, unsigned int new_flags)
-{
-  /* If new flags are ALL, check if existing is ALL or same specific type */
-  if (new_flags & SLINE_ALL) {
-    if (sline->sl_flags & SLINE_ALL) {
-      return 1; /* Both are ALL, conflict */
-    }
-    if ((new_flags & SLINE_PRIVATE) && (sline->sl_flags & SLINE_PRIVATE)) {
-      return 1; /* Both have PRIVATE, conflict */
-    }
-    if ((new_flags & SLINE_CHANNEL) && (sline->sl_flags & SLINE_CHANNEL)) {
-      return 1; /* Both have CHANNEL, conflict */
-    }
-    return 0; /* Can merge */
-  }
-  
-  /* If new flags are PRIVATE, check if existing is ALL or PRIVATE */
-  if (new_flags & SLINE_PRIVATE) {
-    if (sline->sl_flags & SLINE_ALL) {
-      return 1; /* Existing is ALL, conflict */
-    }
-    if (sline->sl_flags & SLINE_PRIVATE) {
-      return 1; /* Both have PRIVATE, conflict */
-    }
-    return 0; /* Can merge with CHANNEL */
-  }
-  
-  /* If new flags are CHANNEL, check if existing is ALL or CHANNEL */
-  if (new_flags & SLINE_CHANNEL) {
-    if (sline->sl_flags & SLINE_ALL) {
-      return 1; /* Existing is ALL, conflict */
-    }
-    if (sline->sl_flags & SLINE_CHANNEL) {
-      return 1; /* Both have CHANNEL, conflict */
-    }
-    return 0; /* Can merge with PRIVATE */
-  }
-  
   return 0;
 }
 
@@ -318,6 +258,48 @@ sline_free(struct Sline *sline)
   MyFree(sline);
 }
 
+/** Convert S-line message type flags to a readable string.
+ * @param[in] msgtype Message type flags to convert.
+ * @return Static string buffer containing the flag representation.
+ */
+const char *
+sline_flags_to_string(msgtype_t msgtype)
+{
+  static char flag_str[16]; /* Buffer for flag string */
+  int flag_pos = 0;
+  
+  /* Clear the buffer */
+  memset(flag_str, 0, sizeof(flag_str));
+  
+  /* Check for SLINE_ALL first */
+  if (msgtype == SLINE_ALL) {
+    return "A";
+  }
+  
+  /* Build individual flag string */
+  if (msgtype & SLINE_PRIVATE) {
+    flag_str[flag_pos++] = 'P';
+  }
+  if (msgtype & SLINE_CHANNEL) {
+    flag_str[flag_pos++] = 'C';
+  }
+  if (msgtype & SLINE_PART) {
+    flag_str[flag_pos++] = 'L';
+  }
+  if (msgtype & SLINE_QUIT) {
+    flag_str[flag_pos++] = 'Q';
+  }
+  
+  /* If no flags were set, return "U" for unknown */
+  if (flag_pos == 0) {
+    return "U";
+  }
+  
+  /* Null terminate and return */
+  flag_str[flag_pos] = '\0';
+  return flag_str;
+}
+
 /** Statistics callback to list S-lines.
  * @param[in] sptr Client requesting statistics.
  * @param[in] sd Stats descriptor for request (ignored).
@@ -337,14 +319,8 @@ sline_stats(struct Client *sptr, const struct StatDesc *sd,
     /* Build type string */
     if (!sline->sl_regex_valid)
       ircd_strncpy(type_str, "I", sizeof(type_str));
-    else if (sline->sl_flags & SLINE_ALL)
-      ircd_strncpy(type_str, "A", sizeof(type_str));
-    else if (sline->sl_flags & SLINE_PRIVATE)
-      ircd_strncpy(type_str, "P", sizeof(type_str));
-    else if (sline->sl_flags & SLINE_CHANNEL)
-      ircd_strncpy(type_str, "C", sizeof(type_str));
-    else // Should not get to this
-      ircd_strncpy(type_str, "U", sizeof(type_str));
+    else
+      ircd_strncpy(type_str, sline_flags_to_string(sline->sl_msgtype), sizeof(type_str));
 
     send_reply(sptr, RPL_STATSSLINE, 
 	       sline->sl_lastmod, sline->sl_count, type_str,
@@ -425,24 +401,12 @@ sline_send_meminfo(struct Client* sptr)
 void
 sline_burst(struct Client *cptr)
 {
+  assert(cptr);
+
   struct Sline *sline;
 
   for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
-    /* Build flag string for burst */
-    char flag_str[4] = {0}; /* Maximum 3 chars + null terminator */
-    int flag_pos = 0;
-    
-    if (sline->sl_flags & SLINE_ALL) {
-      flag_str[flag_pos++] = 'A';
-    } else {
-      if (sline->sl_flags & SLINE_PRIVATE) {
-        flag_str[flag_pos++] = 'P';
-      }
-      if (sline->sl_flags & SLINE_CHANNEL) {
-        flag_str[flag_pos++] = 'C';
-      }
-    }
-    flag_str[flag_pos] = '\0';
+    const char *flag_str = sline_flags_to_string(sline->sl_msgtype);
 
     sendcmdto_one(&me, CMD_SLINE, cptr, "* %Tu %s :%s",
       sline->sl_lastmod,
@@ -458,13 +422,13 @@ sline_burst(struct Client *cptr)
  *         Caller is responsible for freeing the returned string.
  */
 char *
-sline_check_pattern(const char *text, unsigned int msg_type)
+sline_check_pattern(const char *text, msgtype_t msg_type)
 {
   struct Sline *sline;
   regmatch_t matches[SLINE_MAX_CAPTURES]; /* Support up to 15 capture groups + full match */
   int ret;
   char *result = NULL;
-  
+
   if (!text)
     return NULL;
 
@@ -472,7 +436,7 @@ sline_check_pattern(const char *text, unsigned int msg_type)
 
   for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
     /* Check if this S-line applies to the message type */
-    if (!(sline->sl_flags & SLINE_ALL) && !(sline->sl_flags & msg_type))
+    if (!(sline->sl_msgtype & msg_type))
       continue;
 
     /* Skip invalid regex patterns */
@@ -526,12 +490,59 @@ sline_check_pattern(const char *text, unsigned int msg_type)
   return NULL;
 }
 
-/** Send S-line match notification to all spam filter servers.
+/** Check if text matches any S-line patterns for a given message type.
+ * This is a boolean version that doesn't allocate memory.
+ * @param[in] text Text to check against S-line patterns.
+ * @param[in] msg_type Message type to check (SLINE_PRIVATE, SLINE_CHANNEL, etc.).
+ * @return 1 if text matches any S-line pattern, 0 otherwise.
+ */
+int
+sline_check_pattern_bool(const char *text, msgtype_t msg_type)
+{
+  struct Sline *sline;
+  regmatch_t matches[SLINE_MAX_CAPTURES];
+  
+  if (!text)
+    return 0;
+
+  Debug((DEBUG_DEBUG, "sline_check_pattern_bool: checking text='%s' against msg_type=0x%04x", text, msg_type));
+
+  /* Check each S-line pattern */
+  for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
+    /* Check if this S-line applies to the message type */
+    if (!(sline->sl_msgtype & msg_type))
+      continue;
+
+    /* Skip invalid regex patterns */
+    if (!sline->sl_regex_valid)
+      continue;
+
+    Debug((DEBUG_DEBUG, "sline_check_pattern_bool: testing pattern '%s'", sline->sl_pattern));
+
+    /* Execute the precompiled regex match */
+    if (regexec(&sline->sl_regex, text, SLINE_MAX_CAPTURES, matches, 0) == 0) {
+      Debug((DEBUG_DEBUG, "sline_check_pattern_bool: pattern '%s' matched text '%s'", sline->sl_pattern, text));
+      sline->sl_count++; /* Increment match count for this S-line */
+      sline_stats_counters.sline_hits++; /* Increment global hit counter */
+      return 1; /* Match found */
+    }
+  }
+
+  Debug((DEBUG_DEBUG, "sline_check_pattern_bool: no patterns matched"));
+  return 0;
+}
+
+/** Send S-line match notification to the nearest spam filter server.
  * @param[in] entry Hold queue entry containing message and match information.
  */
 int
 sline_notify_spamfilters(struct HoldQueueEntry *entry)
 {
+  assert(entry);
+  assert(entry->sender);
+  assert(entry->target.recipient || entry->target.channel);
+  assert(entry->msgtype == SLINE_PRIVATE || entry->msgtype == SLINE_CHANNEL);
+
   struct Client *acptr;
   const char *target_name;
   int sent_marker = 0;
@@ -540,50 +551,58 @@ sline_notify_spamfilters(struct HoldQueueEntry *entry)
     return 0;
 
   /* Get target name based on message type */
-  if ((entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE) && entry->target.recipient)
+  if (entry->msgtype == SLINE_PRIVATE && entry->target.recipient)
     target_name = NumNick(entry->target.recipient);
-  else if ((entry->msg_type == HOLD_CHANMSG_PRIVATE || entry->msg_type == HOLD_CHANMSG_NOTICE) && entry->target.channel)
+  else if (entry->msgtype == SLINE_CHANNEL && entry->target.channel)
     target_name = entry->target.channel->chname;
   else
-    target_name = "*unknown*";
+    return 0;
 
   Debug((DEBUG_DEBUG, "sline_notify_spamfilters: notifying about token %u from %s to %s", 
          entry->token, cli_name(entry->sender), target_name));
 
-  /* Iterate through all servers */
-  for (acptr = GlobalClientList; acptr; acptr = cli_next(acptr)) {
-    /* Only send to spamfilter servers */
-    if (IsServer(acptr) && IsSpamfilter(acptr)) {
-      Debug((DEBUG_DEBUG, "sline_notify_spamfilters: sending notification to %s", cli_name(acptr)));
-      
-      /* Send the S-line match notification to the spam filter server
-       * Format: SL spam:<token> :<sender> <target> :[captures]
-       */
-      if ((entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE) && entry->target.recipient) {
-        /* For private messages, use NumNick format for target */
-        sendcmdto_one(&me, CMD_XQUERY, acptr, 
-                      "%C spam:%d :%C %C :%s",
-                      acptr,
-                      entry->token,
-                      entry->sender,
-                      entry->target.recipient,
-                      entry->captures ? entry->captures : "");
-      } else {
-        /* For channel messages or unknown targets, use target_name as is */
-        sendcmdto_one(&me, CMD_XQUERY, acptr, 
-                      "%C spam:%d :%C %H :%s",
-                      acptr,
-                      entry->token,
-                      entry->sender,
-                      entry->target.channel,
-                      entry->captures ? entry->captures : "");
-      }
+  /* Find nearest spamfilter server by hopcount */
+  struct Client *nearest = NULL;
+  unsigned int min_hops = 0; /* valid only when nearest != NULL */
 
-      sent_marker++;
+  for (acptr = GlobalClientList; acptr; acptr = cli_next(acptr)) {
+    if (IsServer(acptr) && IsSpamfilter(acptr)) {
+      unsigned int hops = cli_hopcount(acptr);
+      if (!nearest || hops < min_hops) {
+        nearest = acptr;
+        min_hops = hops;
+      }
     }
   }
 
-  return sent_marker; /* Return number of spam filters notified */
+  if (nearest) {
+    Debug((DEBUG_DEBUG, "sline_notify_spamfilters: sending notification to nearest spamfilter %s (hops=%u)", cli_name(nearest), min_hops));
+
+    /* Send the S-line match notification to the nearest spam filter server
+     * Format: SL spam:<token> :<sender> <target> :<captures>
+     */
+    if (entry->msgtype == SLINE_PRIVATE) {
+      sendcmdto_one(&me, CMD_XQUERY, nearest,
+                    "%C spam:%d :%C %C :%s",
+                    nearest,
+                    entry->token,
+                    entry->sender,
+                    entry->target.recipient,
+                    entry->captures ? entry->captures : "");
+    } else {
+      sendcmdto_one(&me, CMD_XQUERY, nearest,
+                    "%C spam:%d :%C %H :%s",
+                    nearest,
+                    entry->token,
+                    entry->sender,
+                    entry->target.channel,
+                    entry->captures ? entry->captures : "");
+    }
+
+    sent_marker = 1;
+  }
+
+  return sent_marker;
 }
 
 /** Add a private message to the hold queue.
@@ -591,20 +610,23 @@ sline_notify_spamfilters(struct HoldQueueEntry *entry)
  * @param[in] recipient Client who should receive the message.
  * @param[in] text Message text.
  * @param[in] captures S-line regex captures (can be NULL).
+ * @param[in] cmd_type Message type (MSG_PRIVATE, MSG_NOTICE).
  * @return Pointer to the created hold queue entry, or NULL on failure.
  */
 struct HoldQueueEntry *
 sline_hold_privmsg(struct Client *sender, struct Client *recipient, 
-                   const char *text, const char *captures, int is_notice)
+                   const char *text, const char *captures, const char* cmd_type)
 {
+  assert(sender);
+  assert(recipient);
+
   struct HoldQueueEntry *entry;
   
   if (!sender || !recipient || !text)
     return NULL;
 
   Debug((DEBUG_DEBUG, "sline_hold_privmsg: holding %s from %s to %s: '%s'", 
-         is_notice ? "NOTICE" : "PRIVMSG",
-         cli_name(sender), cli_name(recipient), text));
+         cmd_type, cli_name(sender), cli_name(recipient), text));
 
   /* Allocate new hold queue entry */
   entry = (struct HoldQueueEntry *)MyMalloc(sizeof(struct HoldQueueEntry));
@@ -613,7 +635,8 @@ sline_hold_privmsg(struct Client *sender, struct Client *recipient,
 
   /* Initialize entry */
   entry->token = next_hold_token++;
-  entry->msg_type = is_notice ? HOLD_PRIVMSG_NOTICE : HOLD_PRIVMSG_PRIVATE;
+  entry->msgtype = SLINE_PRIVATE;
+  entry->cmdtype = cmd_type;
   entry->sender = sender;
   entry->target.recipient = recipient;
   entry->timestamp = TStime();
@@ -648,20 +671,23 @@ sline_hold_privmsg(struct Client *sender, struct Client *recipient,
  * @param[in] channel Channel where message was sent.
  * @param[in] text Message text.
  * @param[in] captures S-line regex captures (can be NULL).
+ * @param[in] cmd_type Type of command (MSG_PRIVATE, MSG_NOTICE, MSG_WALLCHOPS, MSG_WALLVOICES).
  * @return Pointer to the created hold queue entry, or NULL on failure.
  */
 struct HoldQueueEntry *
 sline_hold_chanmsg(struct Client *sender, struct Channel *channel,
-                   const char *text, const char *captures, int is_notice)
+                   const char *text, const char *captures, const char* cmd_type)
 {
+  assert(sender);
+  assert(channel);
+
   struct HoldQueueEntry *entry;
   
   if (!sender || !channel || !text)
     return NULL;
 
   Debug((DEBUG_DEBUG, "sline_hold_chanmsg: holding %s from %s to %s: '%s'", 
-         is_notice ? "NOTICE" : "PRIVMSG",
-         cli_name(sender), channel->chname, text));
+         cmd_type, cli_name(sender), channel->chname, text));
 
   /* Allocate new hold queue entry */
   entry = (struct HoldQueueEntry *)MyMalloc(sizeof(struct HoldQueueEntry));
@@ -670,7 +696,8 @@ sline_hold_chanmsg(struct Client *sender, struct Channel *channel,
 
   /* Initialize entry */
   entry->token = next_hold_token++;
-  entry->msg_type = is_notice ? HOLD_CHANMSG_NOTICE : HOLD_CHANMSG_PRIVATE;
+  entry->msgtype = SLINE_CHANNEL;
+  entry->cmdtype = cmd_type;
   entry->sender = sender;
   entry->target.channel = channel;
   entry->timestamp = TStime();
@@ -706,6 +733,8 @@ sline_hold_chanmsg(struct Client *sender, struct Channel *channel,
 static void
 sline_check_clear_spamhold(struct Client *cptr)
 {
+  assert(cptr);
+
   struct HoldQueueEntry *entry;
   
   if (!cptr || !IsSpamHold(cptr))
@@ -716,7 +745,7 @@ sline_check_clear_spamhold(struct Client *cptr)
     if (entry->sender == cptr)
       return; /* Still has messages on hold as sender */
     
-    if ((entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE) && 
+    if (entry->msgtype == SLINE_PRIVATE && 
         entry->target.recipient == cptr)
       return; /* Still has messages on hold as recipient */
   }
@@ -732,6 +761,8 @@ sline_check_clear_spamhold(struct Client *cptr)
 void
 sline_hold_free(struct HoldQueueEntry *entry)
 {
+  assert(entry);
+
   struct Client *sender, *recipient;
   
   if (!entry)
@@ -742,7 +773,7 @@ sline_hold_free(struct HoldQueueEntry *entry)
   /* Store references for FLAG_SPAMHOLD cleanup */
   sender = entry->sender;
   recipient = NULL;
-  if (entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE)
+  if (entry->msgtype == SLINE_PRIVATE)
     recipient = entry->target.recipient;
 
   /* Remove from linked list */
@@ -769,11 +800,16 @@ sline_hold_free(struct HoldQueueEntry *entry)
  * @param[in] sender Client who sent the message.
  * @param[in] recipient Client who should receive the message.
  * @param[in] text Message text to check against S-lines.
+ * @param[in] cmd_type Message type (MSG_PRIVATE, MSG_NOTICE).
  * @return 1 if message was held (S-line matched), 0 if message should be delivered normally.
  */
 int
-sline_check_privmsg(struct Client *sender, struct Client *recipient, const char *text, int is_notice)
+sline_check_privmsg(struct Client *sender, struct Client *recipient, const char *text, const char* cmd_type)
 {
+  assert(sender);
+  assert(recipient);
+  assert(text);
+
   char *captures;
   struct HoldQueueEntry *entry;
   
@@ -781,11 +817,10 @@ sline_check_privmsg(struct Client *sender, struct Client *recipient, const char 
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_check_privmsg: checking %s from %s to %s: '%s'", 
-         is_notice ? "NOTICE" : "PRIVMSG",
-         cli_name(sender), cli_name(recipient), text));
+         cmd_type, cli_name(sender), cli_name(recipient), text));
 
   /* Check if message matches any S-line patterns for private messages */
-  captures = sline_check_pattern(text, SLINE_PRIVATE | SLINE_ALL);
+  captures = sline_check_pattern(text, SLINE_PRIVATE);
   if (!captures) {
     Debug((DEBUG_DEBUG, "sline_check_privmsg: no S-line match, allowing message"));
     return 0; /* No match, allow message to be delivered */
@@ -794,7 +829,7 @@ sline_check_privmsg(struct Client *sender, struct Client *recipient, const char 
   Debug((DEBUG_DEBUG, "sline_check_privmsg: S-line matched, captures: '%s'", captures));
 
   /* S-line matched, add to hold queue */
-  entry = sline_hold_privmsg(sender, recipient, text, captures, is_notice);
+  entry = sline_hold_privmsg(sender, recipient, text, captures, cmd_type);
   if (!entry) {
     Debug((DEBUG_DEBUG, "sline_check_privmsg: failed to add to hold queue"));
     MyFree(captures);
@@ -815,11 +850,16 @@ sline_check_privmsg(struct Client *sender, struct Client *recipient, const char 
  * @param[in] sender Client who sent the message.
  * @param[in] channel Channel where message was sent.
  * @param[in] text Message text to check against S-lines.
+ * @param[in] cmd_type Message type (MSG_PRIVATE, MSG_NOTICE, MSG_WALLCHOPS, MSG_WALLVOICES).
  * @return 1 if message was held (S-line matched), 0 if message should be delivered normally.
  */
 int
-sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *text, int is_notice)
+sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *text, const char* cmd_type)
 {
+  assert(sender);
+  assert(channel);
+  assert(text);
+
   char *captures;
   struct HoldQueueEntry *entry;
   
@@ -827,11 +867,10 @@ sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_check_chanmsg: checking %s from %s to %s: '%s'", 
-         is_notice ? "NOTICE" : "PRIVMSG",
-         cli_name(sender), channel->chname, text));
+         cmd_type, cli_name(sender), channel->chname, text));
 
   /* Check if message matches any S-line patterns for channel messages */
-  captures = sline_check_pattern(text, SLINE_CHANNEL | SLINE_ALL);
+  captures = sline_check_pattern(text, SLINE_CHANNEL);
   if (!captures) {
     Debug((DEBUG_DEBUG, "sline_check_chanmsg: no S-line match, allowing message"));
     return 0; /* No match, allow message to be delivered */
@@ -840,7 +879,7 @@ sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *
   Debug((DEBUG_DEBUG, "sline_check_chanmsg: S-line matched, captures: '%s'", captures));
 
   /* S-line matched, add to hold queue */
-  entry = sline_hold_chanmsg(sender, channel, text, captures, is_notice);
+  entry = sline_hold_chanmsg(sender, channel, text, captures, cmd_type);
   if (!entry) {
     Debug((DEBUG_DEBUG, "sline_check_chanmsg: failed to add to hold queue"));
     MyFree(captures);
@@ -881,7 +920,13 @@ sline_find_hold_entry(unsigned int token)
 int
 sline_release_privmsg(struct HoldQueueEntry *entry)
 {
-  if (!entry || (entry->msg_type != HOLD_PRIVMSG_PRIVATE && entry->msg_type != HOLD_PRIVMSG_NOTICE) || !entry->sender || !entry->target.recipient || !entry->text)
+  assert(entry != NULL);
+  assert(entry->sender != NULL);
+  assert(entry->target.recipient != NULL);
+  assert(entry->text != NULL);
+  assert(entry->msgtype == SLINE_PRIVATE);
+  
+  if (!entry || entry->msgtype != SLINE_PRIVATE || !entry->sender || !entry->target.recipient || !entry->text)
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_release_privmsg: releasing token %u from %s to %s", 
@@ -907,15 +952,9 @@ sline_release_privmsg(struct HoldQueueEntry *entry)
   if (MyUser(entry->target.recipient))
     add_target(entry->target.recipient, entry->sender);
 
-  if (entry->msg_type == HOLD_PRIVMSG_NOTICE) {
-    sendcmdto_one(entry->sender, CMD_NOTICE, entry->target.recipient, "%C :%s", entry->target.recipient, entry->text);
-    if (CapHas(cli_active(entry->sender), CAP_ECHOMESSAGE))
-      sendcmdto_one(entry->sender, CMD_NOTICE, cli_from(entry->sender), "%C :%s", entry->target.recipient, entry->text);
-  } else {
-    sendcmdto_one(entry->sender, CMD_PRIVATE, entry->target.recipient, "%C :%s", entry->target.recipient, entry->text);
-    if (CapHas(cli_active(entry->sender), CAP_ECHOMESSAGE))
-      sendcmdto_one(entry->sender, CMD_PRIVATE, cli_from(entry->sender), "%C :%s", entry->target.recipient, entry->text);
-  }
+  sendcmdto_one(entry->sender, entry->cmdtype == MSG_NOTICE ? CMD_NOTICE : CMD_PRIVATE, entry->target.recipient, "%C :%s", entry->target.recipient, entry->text);
+  if (CapHas(cli_active(entry->sender), CAP_ECHOMESSAGE))
+    sendcmdto_one(entry->sender, entry->cmdtype == MSG_NOTICE ? CMD_NOTICE : CMD_PRIVATE, cli_from(entry->sender), "%C :%s", entry->target.recipient, entry->text);
 
   Debug((DEBUG_DEBUG, "sline_release_privmsg: message delivered successfully"));
   return 1;
@@ -928,7 +967,13 @@ sline_release_privmsg(struct HoldQueueEntry *entry)
 int
 sline_release_chanmsg(struct HoldQueueEntry *entry)
 {
-  if (!entry || (entry->msg_type != HOLD_CHANMSG_PRIVATE && entry->msg_type != HOLD_CHANMSG_NOTICE) || !entry->sender || !entry->target.channel || !entry->text)
+  assert(entry != NULL);
+  assert(entry->sender != NULL);
+  assert(entry->target.channel != NULL);
+  assert(entry->text != NULL);
+  assert(entry->msgtype == SLINE_CHANNEL);
+
+  if (!entry || entry->msgtype != SLINE_CHANNEL || !entry->sender || !entry->target.channel || !entry->text)
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_release_chanmsg: releasing token %u from %s to %s", 
@@ -950,16 +995,27 @@ sline_release_chanmsg(struct HoldQueueEntry *entry)
   RevealDelayedJoinIfNeeded(entry->sender, entry->target.channel);
 
   /* Deliver the message */
-  if (entry->msg_type == HOLD_CHANMSG_NOTICE) {
-    sendcmdto_channel_butone(entry->sender, CMD_NOTICE, entry->target.channel, cli_from(entry->sender),
+  if (entry->cmdtype == MSG_NOTICE || entry->cmdtype == MSG_PRIVATE) {
+    sendcmdto_channel_butone(entry->sender, entry->cmdtype == MSG_NOTICE ? CMD_NOTICE : CMD_PRIVATE,
+                             entry->target.channel, cli_from(entry->sender),
                              SKIP_DEAF | SKIP_BURST, "%H :%s", entry->target.channel, entry->text);
     if (CapHas(cli_active(entry->sender), CAP_ECHOMESSAGE))
-      sendcmdto_one(entry->sender, CMD_NOTICE, cli_from(entry->sender), "%H :%s", entry->target.channel, entry->text);
-  } else {
-    sendcmdto_channel_butone(entry->sender, CMD_PRIVATE, entry->target.channel, cli_from(entry->sender),
-                             SKIP_DEAF | SKIP_BURST, "%H :%s", entry->target.channel, entry->text);
+      sendcmdto_one(entry->sender, entry->cmdtype == MSG_NOTICE ? CMD_NOTICE : CMD_PRIVATE,
+                    cli_from(entry->sender), "%H :%s", entry->target.channel, entry->text);
+  } else if (entry->cmdtype == MSG_WALLVOICES) {
+    sendcmdto_channel_butone(entry->sender, CMD_WALLVOICES, entry->target.channel, cli_from(entry->sender),
+                             SKIP_DEAF | SKIP_BURST | SKIP_NONVOICES, 
+                             "%H :+ %s", entry->target.channel, entry->text);
     if (CapHas(cli_active(entry->sender), CAP_ECHOMESSAGE))
-      sendcmdto_one(entry->sender, CMD_PRIVATE, cli_from(entry->sender), "%H :%s", entry->target.channel, entry->text);
+      sendcmdto_one(entry->sender, CMD_NOTICE, cli_from(entry->sender), // Sending CMD_NOTICE since CMD_WALLVOICES is translated into CMD_NOTICE in sendcmdto_channel_butone()
+                    "@%H :+ %s", entry->target.channel, entry->text);
+  } else if (entry->cmdtype == MSG_WALLCHOPS) {
+    sendcmdto_channel_butone(entry->sender, CMD_WALLCHOPS, entry->target.channel, cli_from(entry->sender),
+                             SKIP_DEAF | SKIP_BURST | SKIP_NONOPS,
+                             "%H :@ %s", entry->target.channel, entry->text);
+    if (CapHas(cli_active(entry->sender), CAP_ECHOMESSAGE))
+    sendcmdto_one(entry->sender, CMD_NOTICE, cli_from(entry->sender), // Sending CMD_NOTICE since CMD_WALLCHOPS is translated into CMD_NOTICE in sendcmdto_channel_butone()
+                  "@%H :@ %s", entry->target.channel, entry->text);
   }
 
   Debug((DEBUG_DEBUG, "sline_release_chanmsg: message delivered successfully"));
@@ -975,9 +1031,9 @@ sline_release_hold(unsigned int token)
 {
   struct HoldQueueEntry *entry;
   int result = 0;
-  
+
   Debug((DEBUG_DEBUG, "sline_release_hold: attempting to release token %u", token));
-  
+
   entry = sline_find_hold_entry(token);
   if (!entry) {
     Debug((DEBUG_DEBUG, "sline_release_hold: token %u not found in hold queue", token));
@@ -985,17 +1041,17 @@ sline_release_hold(unsigned int token)
   }
 
   /* Release based on message type */
-  if (entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE) {
+  if (entry->msgtype == SLINE_PRIVATE) {
     result = sline_release_privmsg(entry);
-  } else if (entry->msg_type == HOLD_CHANMSG_PRIVATE || entry->msg_type == HOLD_CHANMSG_NOTICE) {
+  } else if (entry->msgtype == SLINE_CHANNEL) {
     result = sline_release_chanmsg(entry);
   } else {
-    Debug((DEBUG_DEBUG, "sline_release_hold: unknown message type %d for token %u", entry->msg_type, token));
+    Debug((DEBUG_DEBUG, "sline_release_hold: unknown message type %d for token %u", entry->msgtype, token));
   }
 
   /* Remove from hold queue regardless of delivery result */
   sline_hold_free(entry);
-  
+
   return result;
 }
 
@@ -1007,9 +1063,9 @@ int
 sline_drop_hold(unsigned int token)
 {
   struct HoldQueueEntry *entry;
-  
+
   Debug((DEBUG_DEBUG, "sline_drop_hold: attempting to drop token %u", token));
-  
+
   entry = sline_find_hold_entry(token);
   if (!entry) {
     Debug((DEBUG_DEBUG, "sline_drop_hold: token %u not found in hold queue", token));
@@ -1027,20 +1083,22 @@ sline_drop_hold(unsigned int token)
 static void
 sline_block_message(struct HoldQueueEntry *entry)
 {
+  assert(entry);
+
   if (!entry || !entry->sender || !IsUser(entry->sender))
     return;
 
   Debug((DEBUG_DEBUG, "sline_block_message: blocking token %u", entry->token));
 
   /* Send error to sender based on message type */
-  if (entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE) {
+  if (entry->msgtype == SLINE_PRIVATE) {
     /* Private message - send ERR_NOSUCHNICK */
     if (entry->target.recipient) {
       send_reply(entry->sender, ERR_NOSUCHNICK, cli_name(entry->target.recipient));
       Debug((DEBUG_DEBUG, "sline_block_message: sent ERR_NOSUCHNICK to %s for %s", 
              cli_name(entry->sender), cli_name(entry->target.recipient)));
     }
-  } else if (entry->msg_type == HOLD_CHANMSG_PRIVATE || entry->msg_type == HOLD_CHANMSG_NOTICE) {
+  } else if (entry->msgtype == SLINE_CHANNEL) {
     /* Channel message - send ERR_CANNOTSENDTOCHAN */
     if (entry->target.channel) {
       send_reply(entry->sender, ERR_CANNOTSENDTOCHAN, entry->target.channel->chname);
@@ -1134,6 +1192,8 @@ sline_xreply_handler(struct Client *sptr, const char *token, const char *reply)
 void
 sline_cleanup_client(struct Client *cptr)
 {
+  assert(cptr);
+
   struct HoldQueueEntry *entry, *next_entry;
   int cleaned = 0;
   
@@ -1144,7 +1204,7 @@ sline_cleanup_client(struct Client *cptr)
     
     /* Check if this entry references the disconnecting client */
     if (entry->sender == cptr || 
-        ((entry->msg_type == HOLD_PRIVMSG_PRIVATE || entry->msg_type == HOLD_PRIVMSG_NOTICE) && entry->target.recipient == cptr)) {
+        (entry->msgtype == SLINE_PRIVATE && entry->target.recipient == cptr)) {
       
       Debug((DEBUG_DEBUG, "sline_cleanup_client: removing hold entry token %u", entry->token));
       sline_hold_free(entry);
@@ -1165,6 +1225,8 @@ sline_cleanup_client(struct Client *cptr)
 void
 sline_cleanup_channel(struct Channel *chptr)
 {
+  assert(chptr);
+  
   struct HoldQueueEntry *entry, *next_entry;
   int cleaned = 0;
   
@@ -1174,7 +1236,7 @@ sline_cleanup_channel(struct Channel *chptr)
     next_entry = entry->next;
     
     /* Check if this entry references the channel being destroyed */
-    if ((entry->msg_type == HOLD_CHANMSG_PRIVATE || entry->msg_type == HOLD_CHANMSG_NOTICE) && entry->target.channel == chptr) {
+    if (entry->msgtype == SLINE_CHANNEL && entry->target.channel == chptr) {
       Debug((DEBUG_DEBUG, "sline_cleanup_channel: removing hold entry token %u", entry->token));
       sline_hold_free(entry);
       cleaned++;
