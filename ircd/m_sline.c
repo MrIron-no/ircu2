@@ -106,9 +106,9 @@
  *
  * SLINE_ACTIVATE or SLINE_BURST:
  * * parv[0] = Sender prefix
- * * parv[1] = (*, +) (burst or activate)
+ * * parv[1] = (* or +) (burst or activate)
  * * parv[2] = last modified timestamp
- * * parv[3] = type (A/P/C)
+ * * parv[3] = type (A/P/C/L/Q)
  * * parv[4] = pattern
  *
  * SLINE_DEACTIVATE:
@@ -196,66 +196,51 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
         flags |= SLINE_PRIVATE;
       } else if (type[i] == 'C') {
         flags |= SLINE_CHANNEL;
+      } else if (type[i] == 'L') {
+        flags |= SLINE_PART;
+      } else if (type[i] == 'Q') {
+        flags |= SLINE_QUIT;
       } else {
         // If we are adding other types later, we could perhaps propagate unknown types but avoid adding them ourself.
-        return protocol_violation(sptr, "Invalid SLINE type '%c', expected 'A', 'P', or 'C'", type[i]);
+        return protocol_violation(sptr, "Invalid SLINE type '%c', expected 'A', 'P', 'C', 'L', or 'Q'", type[i]);
       }
-    }
-    
-    /* If both P and C are set, it's equivalent to A */
-    if ((flags & SLINE_PRIVATE) && (flags & SLINE_CHANNEL)) {
-      flags = (flags & ~(SLINE_PRIVATE | SLINE_CHANNEL)) | SLINE_ALL;
     }
   }
 
   /* Build flag string for propagation (only for add/burst operations) */
-  char flag_str[4] = {0}; /* Maximum 3 chars + null terminator */
-  int flag_pos = 0;
-
   if (action == SLINE_ACTIVATE || action == SLINE_BURST) {
-    /* Build flag string for propagation (only for add/burst operations) */
-    if (flags & SLINE_ALL) {
-      flag_str[flag_pos++] = 'A';
-    } else {
-      if (flags & SLINE_PRIVATE) {
-        flag_str[flag_pos++] = 'P';
-      }
-      if (flags & SLINE_CHANNEL) {
-        flag_str[flag_pos++] = 'C';
-      }
-    }
-    flag_str[flag_pos] = '\0';
-
     Debug((DEBUG_DEBUG, "Processing activation of S-line (%s): pattern=%s, type=%s, mode=%c",
             action == SLINE_ACTIVATE ? "ACTIVATE" : "BURST",
             pattern ? pattern : "NULL",
-            flag_str, *action_str));
+            sline_flags_to_string(flags), *action_str));
 
     /* Check if S-line already exists with the exact same pattern */
     asline = sline_find(pattern);
     if (asline) {
       /* Check whether the flags match. If they do, we ignore. */
-      if (asline->sl_flags == flags) {
-        Debug((DEBUG_DEBUG, "S-line already exists with same pattern and flags"));
-        return 0; /* Ignore, as per protocol */
+      if (asline->sl_msgtype == flags) {
+        Debug((DEBUG_DEBUG, "S-line already exists with same pattern and flags, ignoring"));
+        return 0;
+      }
+
+      /* Check whether the timestamp is older than the existing S-line. If it is, we ignore. */
+      if (asline->sl_lastmod >= lastmod) {
+        Debug((DEBUG_DEBUG, "S-line already exists with newer or equal timestamp, ignoring"));
+        return 0;
       }
 
       /* Update S:line. The pattern cannot be changed. */
       asline->sl_lastmod = lastmod;
-      asline->sl_flags = flags;
+      asline->sl_msgtype = flags;
         
       sendto_opmask_butone(0, SNO_GLINE, "%C updating global SLINE for pattern \"%s\" (%s)",
                             sptr, pattern,
-                            (flags & SLINE_ALL) ? "ALL" :
-                            (flags & SLINE_PRIVATE) ? "PRIVATE" :
-                            (flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
+                            sline_flags_to_string(flags));
 
       log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
                 "%#C updating global SLINE for pattern \"%s\" (%s)", sptr,
                 pattern,
-                (flags & SLINE_ALL) ? "ALL" :
-                (flags & SLINE_PRIVATE) ? "PRIVATE" :
-                (flags & SLINE_CHANNEL) ? "CHANNEL" : "UNKNOWN");
+                sline_flags_to_string(flags));
 
       Debug((DEBUG_DEBUG, "Updated flags for existing S-line with same pattern and flags"));
     } else {
@@ -263,7 +248,7 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     }
 
     sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c %Tu %s :%s",
-      *action_str, lastmod, flag_str, pattern);
+      *action_str, lastmod, sline_flags_to_string(flags), pattern);
     
   } else if (action == SLINE_DEACTIVATE) {
       Debug((DEBUG_DEBUG, "Processing removal of S-line with pattern=%s", pattern));

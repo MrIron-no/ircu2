@@ -130,7 +130,7 @@ void relay_channel_message(struct Client* sptr, const char* name, const char* te
     }
   }
 
-  if (sline_check_chanmsg(sptr, chptr, text, 0)) {
+  if (sline_check_chanmsg(sptr, chptr, text, MSG_PRIVATE)) {
     return;
   }
 
@@ -191,7 +191,7 @@ void relay_channel_notice(struct Client* sptr, const char* name, const char* tex
     }
   }
 
-  if (sline_check_chanmsg(sptr, chptr, text, 1)) {
+  if (sline_check_chanmsg(sptr, chptr, text, MSG_NOTICE)) {
     return;
   }
 
@@ -324,7 +324,7 @@ void relay_directed_message(struct Client* sptr, char* name, char* server, const
     return;
   }
 
-  if (sline_check_privmsg(sptr, acptr, text, 0)) {
+  if (sline_check_privmsg(sptr, acptr, text, MSG_PRIVATE)) {
     return;
   }
   
@@ -400,7 +400,7 @@ void relay_directed_notice(struct Client* sptr, char* name, char* server, const 
     return;
   }
 
-  if (sline_check_privmsg(sptr, acptr, text, 1)) {
+  if (sline_check_privmsg(sptr, acptr, text, MSG_NOTICE)) {
     return;
   }
 
@@ -443,7 +443,7 @@ void relay_private_message(struct Client* sptr, const char* name, const char* te
       is_silenced(sptr, acptr))
     return;
 
-  if (sline_check_privmsg(sptr, acptr, text, 0)) {
+  if (sline_check_privmsg(sptr, acptr, text, MSG_PRIVATE)) {
     return;
   }
 
@@ -486,7 +486,7 @@ void relay_private_notice(struct Client* sptr, const char* name, const char* tex
       is_silenced(sptr, acptr))
     return;
 
-  if (sline_check_privmsg(sptr, acptr, text, 1)) {
+  if (sline_check_privmsg(sptr, acptr, text, MSG_NOTICE)) {
     return;
   }
 
