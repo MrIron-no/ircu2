@@ -176,7 +176,6 @@ IRCD_SRC = \
 	m_settime.c \
 	m_silence.c \
 	m_squit.c \
-	m_starttls.c \
 	m_stats.c \
 	m_time.c \
 	m_topic.c \
@@ -1043,12 +1042,6 @@ m_squit.o: m_squit.c ../config.h ../include/client.h \
  ../include/ircd_reply.h ../include/ircd_string.h ../include/numeric.h \
  ../include/numnicks.h ../include/match.h ../include/s_debug.h \
  ../include/s_misc.h ../include/s_user.h ../include/send.h
-m_starttls.o: m_starttls.c ../config.h ../include/client.h \
- ../include/ircd_defs.h ../include/dbuf.h ../include/msgq.h \
- ../include/ircd_events.h ../include/ircd_handler.h ../include/res.h \
- ../include/capab.h ../include/dbuf.h ../include/handlers.h \
- ../include/ircd_reply.h ../include/ircd_tls.h ../include/ircd_osdep.h \
- ../include/numeric.h ../include/send.h
 m_stats.o: m_stats.c ../config.h ../include/client.h \
  ../include/ircd_defs.h ../include/dbuf.h ../include/msgq.h \
  ../include/ircd_events.h ../include/ircd_handler.h ../include/res.h \
