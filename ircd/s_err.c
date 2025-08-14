@@ -1231,6 +1231,8 @@ static Numeric replyTable[] = {
   { 0 },
 /* 599 */
   { 0 },
+/* 600 */
+  { 0 },
 /* 601 */
   { 0 },
 /* 602 */
@@ -1370,9 +1372,9 @@ static Numeric replyTable[] = {
 /* 669 */
   { 0 },
 /* 670 */
-  { RPL_STARTTLS, ":STARTTLS successful, proceed with TLS handshake", "670" },
-/* 671 */
   { 0 },
+/* 671 */
+  { RPL_WHOISSECURE, "%s :is using a secure connection", "671" },
 /* 672 */
   { 0 },
 /* 673 */
@@ -1412,7 +1414,7 @@ static Numeric replyTable[] = {
 /* 690 */
   { 0 },
 /* 691 */
-  { ERR_STARTTLS, ":STARTTLS failed (%s)", "691" },
+  { 0 },
 };
 
 /** Return a pointer to the Numeric for a particular code.
