@@ -243,7 +243,6 @@ struct Connection
   const struct wline* con_wline;     /**< WebIRC authorization for client */
   char*               con_rexmit;    /**< TLS retransmission data */
   size_t              con_rexmit_len; /**, TLS retransmission length */
-  void*               con_rexmit_orig; /**< Original buffer pointer for cleanup */
 };
 
 /** Magic constant to identify valid Connection structures. */
@@ -481,12 +480,6 @@ struct Client {
 #define con_auth(con)		((con)->con_auth)
 /** Get the WebIRC block (if any) used by the connection. */
 #define con_wline(con)          ((con)->con_wline)
-/** Get the TLS retransmission data for the connection. */
-#define con_rexmit(con)         ((con)->con_rexmit)
-/** Get the TLS retransmission length for the connection. */
-#define con_rexmit_len(con)     ((con)->con_rexmit_len)
-/** Get the original buffer pointer for TLS retransmission cleanup. */
-#define con_rexmit_orig(con)    ((con)->con_rexmit_orig)
 
 #define STAT_CONNECTING         0x001 /**< connecting to another server */
 #define STAT_HANDSHAKE          0x002 /**< pass - server sent */

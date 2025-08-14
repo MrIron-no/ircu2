@@ -342,10 +342,8 @@ int ircd_tls_listen(struct Listener *listener)
 static void clear_tls_rexmit(struct Connection *con)
 {
   if (con && con->con_rexmit) {
-    MyFree(con->con_rexmit);
     con->con_rexmit = NULL;
     con->con_rexmit_len = 0;
-    con->con_rexmit_orig = NULL;
   }
 }
 
@@ -513,8 +511,6 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
   if (!tls)
     return IO_FAILURE;
   *count_out = 0;
-  
-  // Handle retransmission first
   if (con->con_rexmit)
   {
     ERR_clear_error();
@@ -526,16 +522,13 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
 
     // Only excise the message if the full message was sent
     if (res == (int)con->con_rexmit_len) {
-      // Message fully sent, remove from queue and clean up
-      msgq_excise(buf, con->con_rexmit_orig, con->con_rexmit_len);
-      MyFree(con->con_rexmit);
-      con->con_rexmit = NULL;
+      msgq_excise(buf, con->con_rexmit, con->con_rexmit_len);
       con->con_rexmit_len = 0;
-      con->con_rexmit_orig = NULL;
+      con->con_rexmit = NULL;
       result = IO_SUCCESS;
     } else {
-      // Partial send, update buffer for next retry
-      memmove(con->con_rexmit, con->con_rexmit + res, con->con_rexmit_len - res);
+      // Partial send, update pointer and length for next retry
+      con->con_rexmit = (char *)con->con_rexmit + res;
       con->con_rexmit_len -= res;
       return IO_BLOCKED;
     }
@@ -552,24 +545,19 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
       *count_out += res;
       result = IO_SUCCESS;
       if (res < (int)iov[ii].iov_len) {
-        // Partial send - store remaining data for retransmission
-        con->con_rexmit = MyMalloc(iov[ii].iov_len - res);
-        memcpy(con->con_rexmit, (char *)iov[ii].iov_base + res, iov[ii].iov_len - res);
-        con->con_rexmit_len = iov[ii].iov_len - res;
-        con->con_rexmit_orig = iov[ii].iov_base;
+        // Partial send, store for retransmission
+        cli_connect(cptr)->con_rexmit = (char *)iov[ii].iov_base + res;
+        cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len - res;
         return IO_BLOCKED;
       }
-      // Full message sent, continue to next
+      // else, full message sent, continue to next
       continue;
     }
 
     /* We only reach this if the SSL_write failed. */
     orig_errno = errno;
-    // Store failed message for retransmission
-    con->con_rexmit = MyMalloc(iov[ii].iov_len);
-    memcpy(con->con_rexmit, iov[ii].iov_base, iov[ii].iov_len);
-    con->con_rexmit_len = iov[ii].iov_len;
-    con->con_rexmit_orig = iov[ii].iov_base;
+    cli_connect(cptr)->con_rexmit = iov[ii].iov_base;
+    cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len;
     return ssl_handle_error(cptr, tls, res, orig_errno);
   }
 
