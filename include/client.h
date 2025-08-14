@@ -159,6 +159,8 @@ enum Flag
     FLAG_BURST_ACK,                 /**< Server is waiting for eob ack */
     FLAG_IPCHECK,                   /**< Added or updated IPregistry data */
     FLAG_IAUTH_STATS,               /**< Wanted IAuth statistics */
+    FLAG_NEGOTIATING_TLS,           /**< TLS negotation ongoing */
+
     FLAG_LOCOP,                     /**< Local operator -- SRB */
     FLAG_SERVNOTICE,                /**< server notices such as kill */
     FLAG_OPER,                      /**< Operator */
@@ -171,6 +173,7 @@ enum Flag
     FLAG_ACCOUNT,                   /**< account name has been set */
     FLAG_HIDDENHOST,                /**< user's host is hidden */
     FLAG_SPAMHOLD,                  /**< user is the sender or recipient of a message on hold */
+    FLAG_TLS,                       /**< user is using TLS */
     FLAG_LAST_FLAG,                 /**< number of flags */
     FLAG_LOCAL_UMODES = FLAG_LOCOP, /**< First local mode flag */
     FLAG_GLOBAL_UMODES = FLAG_OPER  /**< First global mode flag */
@@ -238,6 +241,8 @@ struct Connection
   capset_t            con_active;    /**< Active capabilities (to us) */
   struct AuthRequest* con_auth;      /**< Auth request for client */
   const struct wline* con_wline;     /**< WebIRC authorization for client */
+  char*               con_rexmit;    /**< TLS retransmission data */
+  size_t              con_rexmit_len; /**, TLS retransmission length */
 };
 
 /** Magic constant to identify valid Connection structures. */
@@ -265,6 +270,7 @@ struct Client {
   char cli_name[HOSTLEN + 1];     /**< Unique name of the client, nick or host */
   char cli_username[USERLEN + 1]; /**< Username determined by ident lookup */
   char cli_info[REALLEN + 1];     /**< Free form additional client information */
+  char cli_tls_fingerprint[65];   /**< TLS SHA-256 fingerprint. */
 };
 
 /** Magic constant to identify valid Client structures. */
@@ -326,6 +332,8 @@ struct Client {
 #define cli_info(cli)		((cli)->cli_info)
 /** Get client account string. */
 #define cli_account(cli)	(cli_user(cli) ? cli_user(cli)->account : "0")
+/** Get the client's TLS fingerprint. */
+#define cli_tls_fingerprint(cli) ((cli)->cli_tls_fingerprint)
 
 /** Get number of incoming bytes queued for client. */
 #define cli_count(cli)		con_count(cli_connect(cli))
@@ -608,6 +616,10 @@ struct Client {
 #define IsPingSent(x)           HasFlag(x, FLAG_PINGSENT)
 /** Return non-zero if the client is the sender or recipient of a message on hold (spamfilter) */
 #define IsSpamHold(x)           HasFlag(x, FLAG_SPAMHOLD)
+/** Return non-zero if the client is using TLS. */
+#define IsTLS(x)                HasFlag(x, FLAG_TLS)
+/** Return non-zero if the client is (re-)negotiating TLS. */
+#define IsNegotiatingTLS(x)     HasFlag(x, FLAG_NEGOTIATING_TLS)
 
 /** Return non-zero if the client has operator or server privileges. */
 #define IsPrivileged(x)         (IsAnOper(x) || IsServer(x))
@@ -658,6 +670,10 @@ struct Client {
 #define SetPingSent(x)          SetFlag(x, FLAG_PINGSENT)
 /** Mark a client as being the sender or recipient of a message on hold (spamfilter). */
 #define SetSpamHold(x)          SetFlag(x, FLAG_SPAMHOLD)
+/** Mark a client as using TLS. */
+#define SetTLS(x)               SetFlag(x, FLAG_TLS)
+/** Mark a client as (re-)negotiating TLS. */
+#define SetNegotiatingTLS(x)    SetFlag(x, FLAG_NEGOTIATING_TLS)
 
 /** Return non-zero if \a sptr sees \a acptr as an operator. */
 #define SeeOper(sptr,acptr) (IsAnOper(acptr) && (HasPriv(acptr, PRIV_DISPLAY) \
@@ -697,6 +713,8 @@ struct Client {
 #define ClearSpamfilter(x)      ClrFlag(x, FLAG_SPAMFILTER)
 /** Clear the client's spam hold flag. */
 #define ClearSpamHold(x)        ClrFlag(x, FLAG_SPAMHOLD)
+/** Mark a client's TLS negotation as complete. */
+#define ClearNegotiatingTLS(x)  ClrFlag(x, FLAG_NEGOTIATING_TLS)
 
 /* free flags */
 #define FREEFLAG_SOCKET	0x0001	/**< socket needs to be freed */
