@@ -27,7 +27,7 @@ struct MsgBuf;
  */
 extern struct SLink *opsarray[];
 
-extern void send_buffer(struct Client* to, struct MsgBuf* buf, int prio);
+extern void send_buffer(struct Client* to, struct Client* from, struct MsgBuf* buf, int prio);
 
 /** Queue raw octets on a sendq (no IRC CRLF, no WebSocket framing). */
 extern void send_raw_buffer(struct Client *to, struct MsgBuf *mb, int prio);

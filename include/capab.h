@@ -49,6 +49,8 @@
 	_CAP(UHNAMES, FEAT_CAP_UHNAMES, 0, "userhost-in-names"), \
 	_CAP(CAPNOTIFY, 0, CAPFL_HIDDEN_302 | CAPFL_STICKY_302, "cap-notify"), \
 	_CAP(SASL, FEAT_CAP_SASL, CAPFL_UNAVAILABLE, "sasl")
+	_CAP(ACCOUNT_TAG, FEAT_CAP_ACCOUNT_TAG, 0, "account-tag"), \
+	_CAP(SERVER_TIME, FEAT_CAP_SERVER_TIME, 0, "server-time")
 
 /** Client capabilities, counting by index. */
 enum Capab {
