@@ -212,12 +212,44 @@ void send_queued(struct Client *to)
   update_write(to);
 }
 
+void send_tags(struct Client* to, struct Client* from, int prio)
+{
+  char tags_buffer[512] = "";
+  char *pos = tags_buffer;
+  struct MsgBuf* buf;
+
+  if (IsServer(to))
+    return;
+
+  if (CapHas(cli_active(to), CAP_SERVER_TIME)) {
+    char timestamp[32];
+    iso8601_timestamp(timestamp, sizeof(timestamp));
+    pos += sprintf(pos, "@time=%s ", timestamp);
+  }
+
+  if (CapHas(cli_active(to), CAP_ACCOUNT_TAG)
+      && from != NULL
+      && IsUser(from)
+      && cli_user(from) != NULL
+      && IsAccount(from)) {
+    pos += sprintf(pos, "@account=%s ", cli_user(from)->account);
+  }
+
+  if (strlen(tags_buffer) > 0) {
+    buf = msgq_tags(to, tags_buffer);
+    msgq_add(&(cli_sendQ(to)), buf, prio);
+    client_add_sendq(cli_connect(to), &send_queues);
+    update_write(to);
+    msgq_clean(buf);
+  }
+}
+
 /** Try to send a buffer to a client, queueing it if needed.
  * @param[in,out] to Client to send message to.
  * @param[in] buf Message to send.
  * @param[in] prio If non-zero, send as high priority.
  */
-void send_buffer(struct Client* to, struct MsgBuf* buf, int prio)
+void send_buffer(struct Client* to, struct Client* from, struct MsgBuf* buf, int prio)
 {
   assert(0 != to);
   assert(0 != buf);
@@ -240,6 +272,7 @@ void send_buffer(struct Client* to, struct MsgBuf* buf, int prio)
     return;
   }
 
+  send_tags(to, from, prio);
   Debug((DEBUG_SEND, "Sending [%p] to %s", buf, cli_name(to)));
 
   msgq_add(&(cli_sendQ(to)), buf, prio);
@@ -305,7 +338,7 @@ void sendrawto_one(struct Client *to, const char *pattern, ...)
   mb = msgq_vmake(to, pattern, vl);
   va_end(vl);
 
-  send_buffer(to, mb, 0);
+  send_buffer(to, NULL, mb, 0);
 
   msgq_clean(mb);
 }
@@ -333,7 +366,7 @@ void sendcmdto_one(struct Client *from, const char *cmd, const char *tok,
 
   va_end(vd.vd_args);
 
-  send_buffer(to, mb, 0);
+  send_buffer(to, from, mb, 0);
 
   msgq_clean(mb);
 }
@@ -362,7 +395,7 @@ void sendcmdto_prio_one(struct Client *from, const char *cmd, const char *tok,
 
   va_end(vd.vd_args);
 
-  send_buffer(to, mb, 1);
+  send_buffer(to, from, mb, 1);
 
   msgq_clean(mb);
 }
@@ -402,7 +435,7 @@ void sendcmdto_flag_serv_butone(struct Client *from, const char *cmd,
       continue;
     if ((forbid < FLAG_LAST_FLAG) && HasFlag(lp->value.cptr, forbid))
       continue;
-    send_buffer(lp->value.cptr, mb, 0);
+    send_buffer(lp->value.cptr, from, mb, 0);
   }
 
   msgq_clean(mb);
@@ -435,7 +468,7 @@ void sendcmdto_serv_butone(struct Client *from, const char *cmd,
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (one && lp->value.cptr == cli_from(one))
       continue;
-    send_buffer(lp->value.cptr, mb, 0);
+    send_buffer(lp->value.cptr, from, mb, 0);
   }
 
   msgq_clean(mb);
@@ -506,12 +539,12 @@ void sendcmdto_common_channels_butone(struct Client *from, const char *cmd,
           && member->user != one
           && cli_sentalong(member->user) != sentalong_marker) {
 	cli_sentalong(member->user) = sentalong_marker;
-	send_buffer(member->user, mb, 0);
+	send_buffer(member->user, from, mb, 0);
       }
   }
 
   if (MyConnect(from) && from != one)
-    send_buffer(from, mb, 0);
+    send_buffer(from, from, mb, 0);
 
   msgq_clean(mb);
 }
@@ -567,7 +600,7 @@ void sendcmdto_capflag_common_channels_butone(struct Client *from, const char *c
           && (forbid == 0 || !CapHas(cli_active(member->user), forbid)))
       {
           cli_sentalong(member->user) = sentalong_marker;
-          send_buffer(member->user, mb, 0);
+          send_buffer(member->user, from, mb, 0);
       }
     }
   }
@@ -576,7 +609,7 @@ void sendcmdto_capflag_common_channels_butone(struct Client *from, const char *c
       && from != one
       && (require == 0 || CapHas(cli_active(from), require))
       && (forbid == 0 || !CapHas(cli_active(from), forbid)))
-    send_buffer(from, mb, 0);
+    send_buffer(from, from, mb, 0);
 
   msgq_clean(mb);
 }
@@ -621,7 +654,7 @@ void sendcmdto_capflag_channel_butserv_butone(struct Client *from, const char *c
         || (forbid && CapHas(cli_active(member->user), forbid)))
         continue;
 
-    send_buffer(member->user, mb, 0);
+    send_buffer(member->user, from, mb, 0);
   }
 
   msgq_clean(mb);
@@ -695,7 +728,7 @@ void sendcmdto_channel_butserv_butone(struct Client *from, const char *cmd,
         || (skip & SKIP_NONOPS && !IsChanOp(member))
         || (skip & SKIP_NONVOICES && !IsChanOp(member) && !HasVoice(member)))
         continue;
-      send_buffer(member->user, mb, 0);
+      send_buffer(member->user, from, mb, 0);
   }
 
   msgq_clean(mb);
@@ -738,7 +771,7 @@ void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
         || (skip & SKIP_NONVOICES && !IsChanOp(member) && !HasVoice(member)))
       continue;
     cli_sentalong(member->user) = sentalong_marker;
-    send_buffer(member->user, serv_mb, 0);
+    send_buffer(member->user, from, serv_mb, 0);
   }
   msgq_clean(serv_mb);
 }
@@ -793,9 +826,9 @@ void sendcmdto_channel_butone(struct Client *from, const char *cmd,
     cli_sentalong(member->user) = sentalong_marker;
 
     if (MyConnect(member->user)) /* pick right buffer to send */
-      send_buffer(member->user, user_mb, 0);
+      send_buffer(member->user, from, user_mb, 0);
     else
-      send_buffer(member->user, serv_mb, 0);
+      send_buffer(member->user, from, serv_mb, 0);
   }
 
   msgq_clean(user_mb);
@@ -855,7 +888,7 @@ void sendwallto_group_butone(struct Client *from, int type, struct Client *one,
          (!SendWallops(cptr) || (his_wallops && !IsAnOper(cptr)))) ||
         (type == WALL_WALLUSERS && !SendWallops(cptr)))
       continue; /* skip it */
-    send_buffer(cptr, mb, 1);
+    send_buffer(cptr, from, mb, 1);
   }
 
   msgq_clean(mb);
@@ -869,7 +902,7 @@ void sendwallto_group_butone(struct Client *from, int type, struct Client *one,
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (one && lp->value.cptr == cli_from(one))
       continue;
-    send_buffer(lp->value.cptr, mb, 1);
+    send_buffer(lp->value.cptr, from, mb, 1);
   }
 
   msgq_clean(mb);
@@ -917,9 +950,9 @@ void sendcmdto_match_butone(struct Client *from, const char *cmd,
     cli_sentalong(cptr) = sentalong_marker;
 
     if (MyConnect(cptr)) /* send right buffer */
-      send_buffer(cptr, user_mb, 0);
+      send_buffer(cptr, from, user_mb, 0);
     else
-      send_buffer(cptr, serv_mb, 0);
+      send_buffer(cptr, from, serv_mb, 0);
   }
 
   msgq_clean(user_mb);
@@ -998,7 +1031,7 @@ void vsendto_opmask_butone(struct Client *one, unsigned int mask,
 
   for (; opslist; opslist = opslist->next)
     if (opslist->value.cptr != one)
-      send_buffer(opslist->value.cptr, mb, 0);
+      send_buffer(opslist->value.cptr, NULL, mb, 0);
 
   msgq_clean(mb);
 }
