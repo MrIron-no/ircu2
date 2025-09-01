@@ -614,15 +614,12 @@ struct Client {
 #define IsHiddenHost(x)         HasFlag(x, FLAG_HIDDENHOST)
 /** Return non-zero if the client has an active PING request. */
 #define IsPingSent(x)           HasFlag(x, FLAG_PINGSENT)
-<<<<<<< HEAD
 /** Return non-zero if the client is the sender or recipient of a message on hold (spamfilter) */
 #define IsSpamHold(x)           HasFlag(x, FLAG_SPAMHOLD)
-=======
 /** Return non-zero if the client is using TLS. */
 #define IsTLS(x)                HasFlag(x, FLAG_TLS)
 /** Return non-zero if the client is (re-)negotiating TLS. */
 #define IsNegotiatingTLS(x)     HasFlag(x, FLAG_NEGOTIATING_TLS)
->>>>>>> de8eda3 (Support SSL and TLS (UNTESTED))
 
 /** Return non-zero if the client has operator or server privileges. */
 #define IsPrivileged(x)         (IsAnOper(x) || IsServer(x))
@@ -671,15 +668,12 @@ struct Client {
 #define SetHiddenHost(x)        SetFlag(x, FLAG_HIDDENHOST)
 /** Mark a client as having a pending PING. */
 #define SetPingSent(x)          SetFlag(x, FLAG_PINGSENT)
-<<<<<<< HEAD
 /** Mark a client as being the sender or recipient of a message on hold (spamfilter). */
 #define SetSpamHold(x)          SetFlag(x, FLAG_SPAMHOLD)
-=======
 /** Mark a client as using TLS. */
 #define SetTLS(x)               SetFlag(x, FLAG_TLS)
 /** Mark a client as (re-)negotiating TLS. */
 #define SetNegotiatingTLS(x)    SetFlag(x, FLAG_NEGOTIATING_TLS)
->>>>>>> de8eda3 (Support SSL and TLS (UNTESTED))
 
 /** Return non-zero if \a sptr sees \a acptr as an operator. */
 #define SeeOper(sptr,acptr) (IsAnOper(acptr) && (HasPriv(acptr, PRIV_DISPLAY) \
@@ -715,15 +709,12 @@ struct Client {
 #define ClearPingSent(x)        ClrFlag(x, FLAG_PINGSENT)
 /** Clear the client's HUB flag. */
 #define ClearHub(x)             ClrFlag(x, FLAG_HUB)
-<<<<<<< HEAD
 /** Clear the client's spamfilter flag. */
 #define ClearSpamfilter(x)      ClrFlag(x, FLAG_SPAMFILTER)
 /** Clear the client's spam hold flag. */
 #define ClearSpamHold(x)        ClrFlag(x, FLAG_SPAMHOLD)
-=======
 /** Mark a client's TLS negotation as complete. */
 #define ClearNegotiatingTLS(x)  ClrFlag(x, FLAG_NEGOTIATING_TLS)
->>>>>>> de8eda3 (Support SSL and TLS (UNTESTED))
 
 /* free flags */
 #define FREEFLAG_SOCKET	0x0001	/**< socket needs to be freed */

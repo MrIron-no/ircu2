@@ -643,8 +643,6 @@ ac_header_c_list=
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
 TLS_C
-LIBTLS_LIBS
-LIBTLS_CFLAGS
 GNUTLS_LIBS
 GNUTLS_CFLAGS
 OPENSSL_LDFLAGS
@@ -768,9 +766,7 @@ PKG_CONFIG_LIBDIR
 YACC
 YFLAGS
 GNUTLS_CFLAGS
-GNUTLS_LIBS
-LIBTLS_CFLAGS
-LIBTLS_LIBS'
+GNUTLS_LIBS'
 
 
 # Initialize some variables set by options.
@@ -1446,9 +1442,6 @@ Some influential environment variables:
   GNUTLS_CFLAGS
               C compiler flags for GNUTLS, overriding pkg-config
   GNUTLS_LIBS linker flags for GNUTLS, overriding pkg-config
-  LIBTLS_CFLAGS
-              C compiler flags for LIBTLS, overriding pkg-config
-  LIBTLS_LIBS linker flags for LIBTLS, overriding pkg-config
 
 Use these variables to override the choices made by 'configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -8100,67 +8093,7 @@ if test x"$unet_cv_with_tls" = xyes ; then
   fi
 fi
 if test x"$unet_cv_with_tls" = xyes ; then
-
-pkg_failed=no
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for libtls" >&5
-printf %s "checking for libtls... " >&6; }
-
-if test -n "$LIBTLS_CFLAGS"; then
-    pkg_cv_LIBTLS_CFLAGS="$LIBTLS_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libtls\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libtls") 2>&5
-  ac_status=$?
-  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_LIBTLS_CFLAGS=`$PKG_CONFIG --cflags "libtls" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$LIBTLS_LIBS"; then
-    pkg_cv_LIBTLS_LIBS="$LIBTLS_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libtls\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libtls") 2>&5
-  ac_status=$?
-  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_LIBTLS_LIBS=`$PKG_CONFIG --libs "libtls" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-printf "%s\n" "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-                LIBTLS_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libtls" 2>&1`
-        else
-                LIBTLS_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libtls" 2>&1`
-        fi
-        # Put the nasty error message in config.log where it belongs
-        echo "$LIBTLS_PKG_ERRORS" >&5
-
-
-        ac_fn_c_check_header_compile "$LINENO" "tls.h" "ac_cv_header_tls_h" "$ac_includes_default"
+                ac_fn_c_check_header_compile "$LINENO" "tls.h" "ac_cv_header_tls_h" "$ac_includes_default"
 if test "x$ac_cv_header_tls_h" = xyes
 then :
 
@@ -8211,85 +8144,16 @@ if test "x$ac_cv_lib_tls_tls_init" = xyes
 then :
 
         unet_cv_with_tls=libtls
+        LIBTLS_LIBS="-ltls"
+        LIBTLS_CFLAGS=""
+        LIBTLS_LDFLAGS=""
 
 fi
 
 
 fi
 
-
-elif test $pkg_failed = untried; then
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-printf "%s\n" "no" >&6; }
-
-        ac_fn_c_check_header_compile "$LINENO" "tls.h" "ac_cv_header_tls_h" "$ac_includes_default"
-if test "x$ac_cv_header_tls_h" = xyes
-then :
-
-      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for tls_init in -ltls" >&5
-printf %s "checking for tls_init in -ltls... " >&6; }
-if test ${ac_cv_lib_tls_tls_init+y}
-then :
-  printf %s "(cached) " >&6
-else case e in #(
-  e) ac_check_lib_save_LIBS=$LIBS
-LIBS="-ltls  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.
-   The 'extern "C"' is for builds by C++ compilers;
-   although this is not generally supported in C code supporting it here
-   has little cost and some practical benefit (sr 110532).  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char tls_init (void);
-int
-main (void)
-{
-return tls_init ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"
-then :
-  ac_cv_lib_tls_tls_init=yes
-else case e in #(
-  e) ac_cv_lib_tls_tls_init=no ;;
-esac
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.beam \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS ;;
-esac
-fi
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_tls_tls_init" >&5
-printf "%s\n" "$ac_cv_lib_tls_tls_init" >&6; }
-if test "x$ac_cv_lib_tls_tls_init" = xyes
-then :
-
-        unet_cv_with_tls=libtls
-
-fi
-
-
-fi
-
-
-else
-        LIBTLS_CFLAGS=$pkg_cv_LIBTLS_CFLAGS
-        LIBTLS_LIBS=$pkg_cv_LIBTLS_LIBS
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-printf "%s\n" "yes" >&6; }
-
-    unet_cv_with_tls=libtls
-
-fi
-fi
+  fi
 
 case x"$unet_cv_with_tls" in
 xopenssl)
@@ -8305,6 +8169,10 @@ xgnutls)
     TLS_C="tls_gnutls.c"
     ;;
 xlibtls)
+    # Ensure LIBTLS_LIBS is set even when explicitly specified
+    if test x"$LIBTLS_LIBS" = x ; then
+        LIBTLS_LIBS="-ltls"
+    fi
     CFLAGS="$CFLAGS $LIBTLS_CFLAGS"
     LDFLAGS="$LDFLAGS $LIBTLS_LDFLAGS"
     LIBS="$LIBS $LIBTLS_LIBS"
