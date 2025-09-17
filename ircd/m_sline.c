@@ -88,6 +88,7 @@
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
+#include "ircd_snprintf.h"
 #include "match.h"
 #include "msg.h"
 #include "numeric.h"
@@ -104,167 +105,114 @@
 /*
  * ms_sline - server message handler
  *
- * SLINE_ACTIVATE or SLINE_BURST:
  * * parv[0] = Sender prefix
- * * parv[1] = (* or +) (burst or activate)
+ * * parv[1] = (+ or -) (activate or deactivate)
  * * parv[2] = last modified timestamp
- * * parv[3] = type (A/P/C/L/Q)
- * * parv[4] = pattern
- *
- * SLINE_DEACTIVATE:
- * * parv[0] = Sender prefix
- * * parv[1] = - (deactivate)
- * * parv[2] = pattern
- * 
- * SLINE_ACTIVATE and SLINE_DECTIVATE is only accepted from U:lined servers (IsSpamfilter()).
- * SLINE_BURST is only accepted from a server currently bursting.
+ * * parv[3] = expiration timestamp (0 = never)
+ * * parv[4] = type (A/P/C/L/Q)
+ * * parv[5] = pattern
  * 
  */
 int
 ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 {
   struct Sline *asline = 0;
-  unsigned int flags = 0, action = 0;
-  time_t lastmod = 0;
-  char *action_str = parv[1], *pattern = NULL, *type = NULL;
+  sl_msgtype_t msgtype = 0;
+  time_t lastmod = 0, expire = 0;
+  char *state = NULL, *pattern = NULL, *type = NULL;
 
-  Debug((DEBUG_DEBUG, "ms_sline called: parc=%d, action_str=%s", 
-         parc, action_str ? action_str : "NULL"));
-
-  if (parc < 3)
+  if (parc < 5)
     return need_more_params(sptr, "SLINE");
 
-  /* Parse action (+, -, or *) */
-  switch (*action_str) {
-    case '+':
-      /* Adding S-line */
-      if (parc < 5)
-        return need_more_params(sptr, "SLINE");
-      action = SLINE_ACTIVATE; /* Normal add */
-      pattern = parv[4];
-      type = parv[3];
-      break;
-    case '-':
-      /* Removing S-line */
-      if (parc < 3)
-        return need_more_params(sptr, "SLINE");
-      action = SLINE_DEACTIVATE; /* Remove */
-      pattern = parv[2]; /* For removal, pattern is in parv[2] */
-      break;
-    case '*':
-      /* Burst mode - adding S-line during burst */
-      if (parc < 5)
-        return need_more_params(sptr, "SLINE");
-      action = SLINE_BURST; /* Burst add */
-      pattern = parv[4];
-      type = parv[3];
-      break;
-    default:
-      return protocol_violation(sptr, "Invalid SLINE action '%c', expected '+', '-', or '*'", *action_str);
-  }
+  state = parv[1];
+  lastmod = atoi(parv[2]) == 0 ? TStime() : atoi(parv[2]);
+  expire = atoi(parv[3]);
+  type = parv[4];
+  pattern = parv[5];
 
-  Debug((DEBUG_DEBUG, "ms_sline: pattern=%s, type=%s", 
-         pattern ? pattern : "NULL", type ? type : "NULL"));
+  if (*state != '+' && *state != '-')
+    return protocol_violation(sptr, "Invalid SLINE action, expected '+' or '-'");
 
-  /* Is the server bursting? */
-  if (action == SLINE_BURST && !IsBurst(sptr)) {
-    Debug((DEBUG_DEBUG, "ms_sline: Not in burst mode, denying SLINE burst"));
+  /* We only accept CMD_SLINE from:
+   * 1. U:lined servers (IsSpamfilter(sptr))
+   * 2. Bursting servers (IsBurst(sptr))
+   * Provided in each case that sptr is on the path from us (cli_from(sptr) == cptr).
+   */
+  if (cli_from(sptr) != cptr) {
+    Debug((DEBUG_DEBUG, "ms_sline: sptr not on path from us, denying SLINE command"));
     return send_reply(sptr, ERR_NOPRIVILEGES, parv[1]);
   }
 
-  /* We only accept SLINE_ACTIVATE and SLINE_DEACTIVATE from U:lined servers (IsSpamfilter()). */
-  if ((action == SLINE_ACTIVATE || action == SLINE_DEACTIVATE) 
-      && (!IsSpamfilter(sptr))) {
-    Debug((DEBUG_DEBUG, "ms_sline: No U:lined server, denying SLINE command"));
+  if (!IsSpamfilter(sptr) && !IsBurst(sptr)) {
+    Debug((DEBUG_DEBUG, "ms_sline: Not a U:lined or bursting server, denying SLINE command"));
     return send_reply(sptr, ERR_NOPRIVILEGES, parv[1]);
   }
 
   /* Check if the pattern is valid */
   if (!pattern || strlen(pattern) == 0)
-    return protocol_violation(sptr, "Invalid SLINE pattern: cannot be empty");
+    return protocol_violation(sptr, "Invalid SLINE pattern");
     
-  /* Parse timestamps - only for add/burst operations */
-  if (action == SLINE_ACTIVATE || action == SLINE_BURST) {
-    lastmod = atoi(parv[2]) == 0 ? TStime() : atoi(parv[2]);
- 
-    /* Parse type flags */
-    for (int i = 0; type[i] != '\0'; i++) {
-      if (type[i] == 'A') {
-        flags |= SLINE_ALL;
-        break; /* A overrides everything */
-      } else if (type[i] == 'P') {
-        flags |= SLINE_PRIVATE;
-      } else if (type[i] == 'C') {
-        flags |= SLINE_CHANNEL;
-      } else if (type[i] == 'L') {
-        flags |= SLINE_PART;
-      } else if (type[i] == 'Q') {
-        flags |= SLINE_QUIT;
-      } else {
-        // If we are adding other types later, we could perhaps propagate unknown types but avoid adding them ourself.
-        return protocol_violation(sptr, "Invalid SLINE type '%c', expected 'A', 'P', 'C', 'L', or 'Q'", type[i]);
-      }
-    }
-  }
-
-  /* Build flag string for propagation (only for add/burst operations) */
-  if (action == SLINE_ACTIVATE || action == SLINE_BURST) {
-    Debug((DEBUG_DEBUG, "Processing activation of S-line (%s): pattern=%s, type=%s, mode=%c",
-            action == SLINE_ACTIVATE ? "ACTIVATE" : "BURST",
-            pattern ? pattern : "NULL",
-            sline_flags_to_string(flags), *action_str));
-
-    /* Check if S-line already exists with the exact same pattern */
-    asline = sline_find(pattern);
-    if (asline) {
-      /* Check whether the flags match. If they do, we ignore. */
-      if (asline->sl_msgtype == flags) {
-        Debug((DEBUG_DEBUG, "S-line already exists with same pattern and flags, ignoring"));
-        return 0;
-      }
-
-      /* Check whether the timestamp is older than the existing S-line. If it is, we ignore. */
-      if (asline->sl_lastmod >= lastmod) {
-        Debug((DEBUG_DEBUG, "S-line already exists with newer or equal timestamp, ignoring"));
-        return 0;
-      }
-
-      /* Update S:line. The pattern cannot be changed. */
-      asline->sl_lastmod = lastmod;
-      asline->sl_msgtype = flags;
-        
-      sendto_opmask_butone(0, SNO_GLINE, "%C updating global SLINE for pattern \"%s\" (%s)",
-                            sptr, pattern,
-                            sline_flags_to_string(flags));
-
-      log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
-                "%#C updating global SLINE for pattern \"%s\" (%s)", sptr,
-                pattern,
-                sline_flags_to_string(flags));
-
-      Debug((DEBUG_DEBUG, "Updated flags for existing S-line with same pattern and flags"));
+  /* Parse type flags */
+  for (int i = 0; type[i] != '\0'; i++) {
+    if (type[i] == 'A') {
+      msgtype |= SLINE_ALL;
+      break; /* A overrides everything */
+    } else if (type[i] == 'P') {
+      msgtype |= SLINE_PRIVATE;
+    } else if (type[i] == 'C') {
+      msgtype |= SLINE_CHANNEL;
+    } else if (type[i] == 'L') {
+      msgtype |= SLINE_PART;
+    } else if (type[i] == 'Q') {
+      msgtype |= SLINE_QUIT;
     } else {
-      sline_add(cptr, sptr, pattern, lastmod, flags);
+      // If we are adding other types later, we could perhaps propagate unknown types but avoid adding them ourself.
+      return protocol_violation(sptr, "Invalid SLINE type '%c', expected 'A', 'P', 'C', 'L', or 'Q'", type[i]);
+    }
+  }
+
+  /* Check if S-line already exists with the exact same pattern */
+  asline = sline_find(pattern);
+  if (asline) {
+    unsigned int updates = 0;
+
+    /* If we have a newer last modified timestamp, we ignore. */
+    if (asline->sl_lastmod >= lastmod) {
+      Debug((DEBUG_DEBUG, "S-line already exists with newer or equal timestamp, ignoring"));
+      return 0;
     }
 
-    sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c %Tu %s :%s",
-      *action_str, lastmod, sline_flags_to_string(flags), pattern);
-    
-  } else if (action == SLINE_DEACTIVATE) {
-      Debug((DEBUG_DEBUG, "Processing removal of S-line with pattern=%s", pattern));
+    /* Check whether there is a state update. */
+    if ((*state == '+' && !(asline->sl_flags & SLINE_ACTIVE)) ||
+        (*state == '-' && (asline->sl_flags & SLINE_ACTIVE))) {
+      updates |= SLINE_STATE;
+    }
 
-      /* Find the S-line to remove */
-      asline = sline_find(pattern);
-      if (!asline) {
-        Debug((DEBUG_DEBUG, "S-line not found"));
-        return 0;
-      }
+    /* Check whether there is a message type update. */
+    if (asline->sl_msgtype != msgtype) {
+      updates |= SLINE_MSGTYPE;
+    }
 
-      sline_remove(cptr, sptr, asline);
+    /* Check whether the expire time has updated. */
+    if (asline->sl_expire != expire) {
+      updates |= SLINE_EXPIRE;
+    }
 
-      sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c :%s",
-        *action_str, pattern);
+    /* If there is no updates, we ignore. */
+    if (updates == 0) {
+      Debug((DEBUG_DEBUG, "S-line already exists with same state, msgtype and expire time, ignoring"));
+      return 0;
+    }
+
+    /* Modify S:line record. */
+    sline_modify(sptr, asline, lastmod, expire, msgtype, *state == '+' ? SLINE_ACTIVE : 0, updates);
+  } else {
+    sline_add(cptr, sptr, pattern, lastmod, expire, msgtype, *state == '+' ? SLINE_ACTIVE : 0);
   }
+
+  /* Propagate. */  
+  sendcmdto_serv_butone(sptr, CMD_SLINE, cptr, "%c %Tu %Tu %s :%s",
+    *state, lastmod, expire, sline_flags_to_string(msgtype), pattern);
 
   return 1;
 } 

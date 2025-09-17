@@ -61,6 +61,7 @@ enum Feature {
   FEAT_TOPIC_BURST,
   FEAT_AWAY_BURST,
   FEAT_DISABLE_GLINES,
+  FEAT_DISABLE_SLINES,
   FEAT_JOIN_TARGET,
 
   /* features that probably should not be touched */
