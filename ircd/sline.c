@@ -58,8 +58,8 @@ struct HoldQueueEntry {
   struct HoldQueueEntry *next;      /**< Next entry in queue */
   struct HoldQueueEntry **prev_p;   /**< Previous pointer to this entry */
   unsigned int token;               /**< Unique token for this entry */
-  msgtype_t msgtype;                /**< Type of message (SLINE_PRIVATE, SLINE_CHANNEL) */
-  const char *cmdtype;                   /**< Type of command (MSG_PRIVATE, MSG_NOTICE, MSG_WALLCHOPS, MSG_WALLVOICES) */
+  sl_msgtype_t msgtype;             /**< Type of message (SLINE_PRIVATE, SLINE_CHANNEL) */
+  const char *cmdtype;              /**< Type of command (MSG_PRIVATE, MSG_NOTICE, MSG_WALLCHOPS, MSG_WALLVOICES) */
   struct Client *sender;            /**< Sender of the message */
   union {
     struct Client *recipient;       /**< Recipient for private messages */
@@ -74,7 +74,7 @@ struct HoldQueueEntry {
 static struct HoldQueueEntry *GlobalHoldQueue = 0;
 
 /** Next available token number */
-static unsigned int next_hold_token = 1;
+static uint64_t next_hold_token = 1;
 
 /** Statistics counters for S-line operations */
 static struct {
@@ -100,28 +100,29 @@ static void sline_hold_timeout_callback(struct Event* ev);
  * @return Newly allocated S-line.
  */
 static struct Sline *
-make_sline(char *pattern, time_t lastmod, msgtype_t msgtype)
+make_sline(char *pattern, time_t lastmod, time_t expire, sl_msgtype_t msgtype, sl_flagtype_t flags)
 {
   assert(pattern);
 
   struct Sline *sline;
 
-  sline = (struct Sline *)MyMalloc(sizeof(struct Sline)); /* alloc memory */
+  sline = (struct Sline *)MyMalloc(sizeof(struct Sline));
   assert(0 != sline);
 
   DupString(sline->sl_pattern, pattern);
-  sline->sl_lastmod = lastmod > 0 ? lastmod : TStime(); /* Set last modified time */
+  sline->sl_lastmod = lastmod > 0 ? lastmod : TStime();
+  sline->sl_expire = expire;
   sline->sl_msgtype = msgtype;
-  sline->sl_count = 0; /* Initialize match count */
-  sline->sl_regex_valid = 0;
+  sline->sl_count = 0;
+  sline->sl_flags = flags;
 
   /* Precompile the regex at creation time; invalid patterns are accepted but marked invalid */
   {
     int ret = regcomp(&sline->sl_regex, sline->sl_pattern, REG_EXTENDED);
     if (ret == 0) {
-      sline->sl_regex_valid = 1;
       Debug((DEBUG_DEBUG, "make_sline: compiled regex for pattern '%s'", sline->sl_pattern));
     } else {
+      sline->sl_flags |= SLINE_INVALID;
       Debug((DEBUG_DEBUG, "make_sline: failed to compile regex for pattern '%s'", sline->sl_pattern));
     }
   }
@@ -145,7 +146,7 @@ make_sline(char *pattern, time_t lastmod, msgtype_t msgtype)
  */
 int
 sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
-	  time_t lastmod, msgtype_t msgtype)
+	  time_t lastmod, time_t expire, sl_msgtype_t msgtype, sl_flagtype_t flags)
 {
   assert(pattern);
   assert(cptr);
@@ -155,37 +156,30 @@ sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
 
   assert(0 != pattern);
 
-  Debug((DEBUG_DEBUG, "sline_add(\"%s\", \"%s\", \"%s\", %Tu, 0x%04x)",
-	 cli_name(cptr), cli_name(sptr), pattern, lastmod, msgtype));
+  Debug((DEBUG_DEBUG, "sline_add(\"%s\", \"%s\", \"%s\", %Tu, %Tu, 0x%04x, 0x%04x)",
+	 cli_name(cptr), cli_name(sptr), pattern, lastmod, expire, msgtype, flags));
 
   /* Check pattern length */
   if (strlen(pattern) >= SLINELEN)
     return send_reply(sptr, ERR_LONGMASK);
 
+  /* make the sline */
+  asline = make_sline(pattern, lastmod, expire, msgtype, flags);
+  assert(asline);
+
   /* Inform ops... */
-  sendto_opmask_butone(0, SNO_GLINE, "%s adding global SLINE for pattern \"%s\" (%s)",
-                       (feature_bool(FEAT_HIS_SNOTICES) || IsServer(sptr)) ?
-                         cli_name(sptr) :
-                         cli_name((cli_user(sptr))->server),
-		                 pattern, 
-		                 sline_flags_to_string(msgtype));
+  sendto_opmask_butone(0, SNO_GLINE, "%s adding SLINE for pattern \"%s\" (%s) expiring at %Tu",
+                      cli_name(sptr), pattern,
+		                  asline->sl_flags & SLINE_INVALID ? "I" : sline_flags_to_string(msgtype), expire);
 
   /* and log it */
   log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
-	    "%#C adding global SLINE for pattern \"%s\" (%s)", sptr,
+	    "%#C adding SLINE for pattern \"%s\" (%s)", sptr,
 	    pattern,
-	    sline_flags_to_string(msgtype));
+	    asline->sl_flags & SLINE_INVALID ? "I" : sline_flags_to_string(msgtype));
 
-  /* make the sline */
-  asline = make_sline(pattern, lastmod, msgtype);
-
-  /* since we've disabled overlapped S-line checking, asline should
-   * never be NULL...
-   */
-  assert(asline);
-
-  Debug((DEBUG_DEBUG, "S-line added successfully: pattern=%s, msgtype=0x%04x, lastmod=%Tu",
-         asline->sl_pattern, asline->sl_msgtype, asline->sl_lastmod));
+  Debug((DEBUG_DEBUG, "S-line added successfully: pattern=%s, msgtype=0x%04x, lastmod=%Tu, expire=%Tu, flags=0x%04x",
+         asline->sl_pattern, asline->sl_msgtype, asline->sl_lastmod, asline->sl_expire, asline->sl_flags));
 
   return 0;
 }
@@ -197,7 +191,7 @@ sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
  * @return Zero.
  */
 int
-sline_remove(struct Client *cptr, struct Client *sptr, struct Sline *sline)
+sline_deactivate(struct Client *cptr, struct Client *sptr, struct Sline *sline)
 {
   assert(cptr);
   assert(sptr);
@@ -214,9 +208,60 @@ sline_remove(struct Client *cptr, struct Client *sptr, struct Sline *sline)
 	    sline->sl_pattern,
 	    sline_flags_to_string(sline->sl_msgtype));
 
-  sline_free(sline); /* get rid of the S-line */
+  sline->sl_flags &= ~SLINE_ACTIVE;
 
   return 0; /* convenience return */
+}
+
+void sline_modify(struct Client *sptr, struct Sline *sline, time_t lastmod, time_t expire, sl_msgtype_t msgtype, sl_flagtype_t flags, unsigned int updates)
+{
+  assert(sline);
+
+  const char *buf;
+  char text_extra[128] = "";
+  char text_msgtype[40] = "";
+
+  sline->sl_lastmod = lastmod;
+
+  if (updates & SLINE_STATE) {
+    if (flags & SLINE_ACTIVE) {
+      sline->sl_flags |= SLINE_ACTIVE;
+    } else {
+      sline->sl_flags &= ~SLINE_ACTIVE;
+    }
+    buf = (sline->sl_flags & SLINE_ACTIVE) ? "activating" : "deactivating";
+  } else {
+    buf = "updating";
+  }
+
+  if (updates & SLINE_EXPIRE) {
+    sline->sl_expire = expire;
+    ircd_snprintf(0, text_extra, sizeof(text_extra), " changing expire time to %Tu", expire);
+  } else if (sline->sl_flags & SLINE_ACTIVE && sline->sl_expire > 0) {
+    ircd_snprintf(0, text_extra, sizeof(text_extra), " expiring at %Tu", sline->sl_expire);
+  }
+
+  if (updates & SLINE_MSGTYPE) {
+    char old_type[16], new_type[16];
+    strlcpy(old_type, sline_flags_to_string(sline->sl_msgtype), sizeof(old_type));
+    strlcpy(new_type, sline_flags_to_string(msgtype), sizeof(new_type));
+    ircd_snprintf(0, text_msgtype, sizeof(text_msgtype), "%s -> %s", old_type, new_type);
+    sline->sl_msgtype = msgtype;
+  } else {
+    ircd_snprintf(0, text_msgtype, sizeof(text_msgtype), "%s", sline_flags_to_string(sline->sl_msgtype));
+  }
+
+  sendto_opmask_butone(0, SNO_GLINE, "%C %s SLINE for pattern \"%s\" (%s)%s",
+                        sptr, buf, sline->sl_pattern,
+                        text_msgtype, text_extra);
+
+  log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
+            "%#C %s SLINE for pattern \"%s\" (%s)%s",
+                        sptr, buf, sline->sl_pattern,
+                        text_msgtype, text_extra);
+
+  Debug((DEBUG_DEBUG, "S-line modified successfully: pattern=%s, msgtype=0x%04x, lastmod=%Tu, expire=%Tu, flags=0x%04x",
+        sline->sl_pattern, sline->sl_msgtype, sline->sl_lastmod, sline->sl_expire, sline->sl_flags));
 }
 
 /** Find an S-line for a particular pattern, guided by certain flags.
@@ -239,7 +284,7 @@ sline_find(char *pattern)
 /** Delink and free an S-line.
  * @param[in] sline S-line to free.
  */
-void
+static void
 sline_free(struct Sline *sline)
 {
   assert(0 != sline);
@@ -249,9 +294,9 @@ sline_free(struct Sline *sline)
     sline->sl_next->sl_prev_p = sline->sl_prev_p;
 
   /* Free compiled regex if present */
-  if (sline->sl_regex_valid) {
+  if (sline->sl_flags & SLINE_INVALID) {
     regfree(&sline->sl_regex);
-    sline->sl_regex_valid = 0;
+    sline->sl_flags &= ~SLINE_INVALID;
   }
 
   MyFree(sline->sl_pattern); /* free up the memory */
@@ -263,7 +308,7 @@ sline_free(struct Sline *sline)
  * @return Static string buffer containing the flag representation.
  */
 const char *
-sline_flags_to_string(msgtype_t msgtype)
+sline_flags_to_string(sl_msgtype_t msgtype)
 {
   static char flag_str[16]; /* Buffer for flag string */
   int flag_pos = 0;
@@ -313,17 +358,20 @@ sline_stats(struct Client *sptr, const struct StatDesc *sd,
   char type_str[32];
   int count = 0;
 
-  Debug((DEBUG_DEBUG, "sline_stats called with param=%s", param ? param : "NULL"));
-
   for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
+    if (sline->sl_expire > 0 && sline->sl_expire < TStime()) {
+      /* Expired S-line, skip it */
+      continue;
+    }
+
     /* Build type string */
-    if (!sline->sl_regex_valid)
+    if (sline->sl_flags & SLINE_INVALID)
       ircd_strncpy(type_str, "I", sizeof(type_str));
     else
       ircd_strncpy(type_str, sline_flags_to_string(sline->sl_msgtype), sizeof(type_str));
 
     send_reply(sptr, RPL_STATSSLINE, 
-	       sline->sl_lastmod, sline->sl_count, type_str,
+	       sline->sl_lastmod, sline->sl_expire, sline->sl_count, type_str,
          sline->sl_pattern);
     count++;
   }
@@ -331,8 +379,6 @@ sline_stats(struct Client *sptr, const struct StatDesc *sd,
   /* Send summary statistics */
   send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE, 
              "S :--- S-line Summary ---");
-  send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE,
-             "S :Total S-lines: %d", count);
   send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE,
              "S :S-line Hits: %u", sline_stats_counters.sline_hits);
   send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE,
@@ -355,7 +401,7 @@ sline_stats(struct Client *sptr, const struct StatDesc *sd,
  * @param[out] sl_size Number of bytes used by S-lines.
  * @return Number of S-lines in use.
  */
-int
+static int
 sline_memory_count(size_t *sl_size)
 {
   struct Sline *sline;
@@ -405,12 +451,18 @@ sline_burst(struct Client *cptr)
 
   struct Sline *sline;
 
-  for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
-    const char *flag_str = sline_flags_to_string(sline->sl_msgtype);
-
-    sendcmdto_one(&me, CMD_SLINE, cptr, "* %Tu %s :%s",
+  struct Sline *next;
+  for (sline = GlobalSlineList; sline; sline = next) {
+    next = sline->sl_next;
+    if (sline->sl_expire > 0 && sline->sl_expire < TStime()) {
+      sline_free(sline);
+      continue;
+    }
+    sendcmdto_one(&me, CMD_SLINE, cptr, "%c %Tu %Tu %s :%s",
+      sline->sl_flags & SLINE_ACTIVE ? '+' : '-',
       sline->sl_lastmod,
-      flag_str,
+      sline->sl_expire,
+      sline_flags_to_string(sline->sl_msgtype),
       sline->sl_pattern);
   }
 }
@@ -422,7 +474,7 @@ sline_burst(struct Client *cptr)
  *         Caller is responsible for freeing the returned string.
  */
 char *
-sline_check_pattern(const char *text, msgtype_t msg_type)
+sline_check_pattern(const char *text, sl_msgtype_t msg_type)
 {
   struct Sline *sline;
   regmatch_t matches[SLINE_MAX_CAPTURES]; /* Support up to 15 capture groups + full match */
@@ -435,12 +487,15 @@ sline_check_pattern(const char *text, msgtype_t msg_type)
   Debug((DEBUG_DEBUG, "sline_check_pattern: checking text='%s' against msg_type=0x%04x", text, msg_type));
 
   for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
-    /* Check if this S-line applies to the message type */
-    if (!(sline->sl_msgtype & msg_type))
+    if (sline->sl_expire > 0 && sline->sl_expire < TStime()) {
+      sline_free(sline);
       continue;
+    }
 
-    /* Skip invalid regex patterns */
-    if (!sline->sl_regex_valid)
+    /* Check if this S-line is active and valid and applies to the message type */
+    if (!(sline->sl_msgtype & msg_type)
+        || !(sline->sl_flags & SLINE_ACTIVE)
+        || (sline->sl_flags & SLINE_INVALID))
       continue;
 
     Debug((DEBUG_DEBUG, "sline_check_pattern: testing pattern '%s'", sline->sl_pattern));
@@ -497,7 +552,7 @@ sline_check_pattern(const char *text, msgtype_t msg_type)
  * @return 1 if text matches any S-line pattern, 0 otherwise.
  */
 int
-sline_check_pattern_bool(const char *text, msgtype_t msg_type)
+sline_check_pattern_bool(const char *text, sl_msgtype_t msg_type)
 {
   struct Sline *sline;
   regmatch_t matches[SLINE_MAX_CAPTURES];
@@ -509,12 +564,11 @@ sline_check_pattern_bool(const char *text, msgtype_t msg_type)
 
   /* Check each S-line pattern */
   for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
-    /* Check if this S-line applies to the message type */
-    if (!(sline->sl_msgtype & msg_type))
-      continue;
-
-    /* Skip invalid regex patterns */
-    if (!sline->sl_regex_valid)
+    /* Check if this S-line is active and valid and applies to the message type */
+    if (!(sline->sl_msgtype & msg_type)
+        || (sline->sl_expire > 0 && sline->sl_expire < TStime())
+        || !(sline->sl_flags & SLINE_ACTIVE)
+        || !(sline->sl_flags & SLINE_INVALID))
       continue;
 
     Debug((DEBUG_DEBUG, "sline_check_pattern_bool: testing pattern '%s'", sline->sl_pattern));
@@ -535,7 +589,7 @@ sline_check_pattern_bool(const char *text, msgtype_t msg_type)
 /** Send S-line match notification to the nearest spam filter server.
  * @param[in] entry Hold queue entry containing message and match information.
  */
-int
+static int
 sline_notify_spamfilters(struct HoldQueueEntry *entry)
 {
   assert(entry);
@@ -545,7 +599,6 @@ sline_notify_spamfilters(struct HoldQueueEntry *entry)
 
   struct Client *acptr;
   const char *target_name;
-  int sent_marker = 0;
   
   if (!entry || !entry->sender)
     return 0;
@@ -561,48 +614,49 @@ sline_notify_spamfilters(struct HoldQueueEntry *entry)
   Debug((DEBUG_DEBUG, "sline_notify_spamfilters: notifying about token %u from %s to %s", 
          entry->token, cli_name(entry->sender), target_name));
 
-  /* Find nearest spamfilter server by hopcount */
-  struct Client *nearest = NULL;
-  unsigned int min_hops = 0; /* valid only when nearest != NULL */
+  /* Find the spamfilter server with lowest lag */
+  struct Client *serv = NULL;
+  unsigned int min_lag = 0; /* valid only when serv != NULL */
 
   for (acptr = GlobalClientList; acptr; acptr = cli_next(acptr)) {
     if (IsServer(acptr) && IsSpamfilter(acptr)) {
-      unsigned int hops = cli_hopcount(acptr);
-      if (!nearest || hops < min_hops) {
-        nearest = acptr;
-        min_hops = hops;
+      unsigned int lag = cli_serv(acptr)->lag;
+      if (min_lag == 0 || lag < min_lag) {
+        serv = acptr;
+        min_lag = lag;
       }
     }
   }
 
-  if (nearest) {
-    Debug((DEBUG_DEBUG, "sline_notify_spamfilters: sending notification to nearest spamfilter %s (hops=%u)", cli_name(nearest), min_hops));
-
-    /* Send the S-line match notification to the nearest spam filter server
-     * Format: SL spam:<token> :<sender> <target> :<captures>
-     */
-    if (entry->msgtype == SLINE_PRIVATE) {
-      sendcmdto_one(&me, CMD_XQUERY, nearest,
-                    "%C spam:%d :%C %C :%s",
-                    nearest,
-                    entry->token,
-                    entry->sender,
-                    entry->target.recipient,
-                    entry->captures ? entry->captures : "");
-    } else {
-      sendcmdto_one(&me, CMD_XQUERY, nearest,
-                    "%C spam:%d :%C %H :%s",
-                    nearest,
-                    entry->token,
-                    entry->sender,
-                    entry->target.channel,
-                    entry->captures ? entry->captures : "");
-    }
-
-    sent_marker = 1;
+  if (!serv) {
+    Debug((DEBUG_DEBUG, "sline_notify_spamfilters: no spamfilter servers available"));
+    return 0;
   }
 
-  return sent_marker;
+  Debug((DEBUG_DEBUG, "sline_notify_spamfilters: sending notification to nearest spamfilter %s (lag=%u)", cli_name(serv), min_lag));
+
+  /* Send the S-line match notification to the nearest spam filter server
+  * Format: SL spam:<token> :<sender> <target> :<captures>
+  */
+  if (entry->msgtype == SLINE_PRIVATE) {
+    sendcmdto_one(&me, CMD_XQUERY, serv,
+                  "%C spam:%d :%C %C :%s",
+                  serv,
+                  entry->token,
+                  entry->sender,
+                  entry->target.recipient,
+                  entry->captures ? entry->captures : "");
+  } else {
+    sendcmdto_one(&me, CMD_XQUERY, serv,
+                  "%C spam:%d :%C %H :%s",
+                  serv,
+                  entry->token,
+                  entry->sender,
+                  entry->target.channel,
+                  entry->captures ? entry->captures : "");
+  }
+
+  return 1;
 }
 
 /** Add a private message to the hold queue.
@@ -613,7 +667,7 @@ sline_notify_spamfilters(struct HoldQueueEntry *entry)
  * @param[in] cmd_type Message type (MSG_PRIVATE, MSG_NOTICE).
  * @return Pointer to the created hold queue entry, or NULL on failure.
  */
-struct HoldQueueEntry *
+static struct HoldQueueEntry *
 sline_hold_privmsg(struct Client *sender, struct Client *recipient, 
                    const char *text, const char *captures, const char* cmd_type)
 {
@@ -674,7 +728,7 @@ sline_hold_privmsg(struct Client *sender, struct Client *recipient,
  * @param[in] cmd_type Type of command (MSG_PRIVATE, MSG_NOTICE, MSG_WALLCHOPS, MSG_WALLVOICES).
  * @return Pointer to the created hold queue entry, or NULL on failure.
  */
-struct HoldQueueEntry *
+static struct HoldQueueEntry *
 sline_hold_chanmsg(struct Client *sender, struct Channel *channel,
                    const char *text, const char *captures, const char* cmd_type)
 {
@@ -758,7 +812,7 @@ sline_check_clear_spamhold(struct Client *cptr)
 /** Remove and free a hold queue entry.
  * @param[in] entry Hold queue entry to remove.
  */
-void
+static void
 sline_hold_free(struct HoldQueueEntry *entry)
 {
   assert(entry);
@@ -812,8 +866,8 @@ sline_check_privmsg(struct Client *sender, struct Client *recipient, const char 
 
   char *captures;
   struct HoldQueueEntry *entry;
-  
-  if (!sender || !recipient || !text || IsAnOper(sender))
+
+  if (!sender || !recipient || !text || IsAnOper(sender) || feature_bool(FEAT_DISABLE_SLINES))
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_check_privmsg: checking %s from %s to %s: '%s'", 
@@ -863,7 +917,7 @@ sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *
   char *captures;
   struct HoldQueueEntry *entry;
   
-  if (!sender || !channel || !text || IsAnOper(sender))
+  if (!sender || !channel || !text || IsAnOper(sender) || feature_bool(FEAT_DISABLE_SLINES))
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_check_chanmsg: checking %s from %s to %s: '%s'", 
@@ -900,7 +954,7 @@ sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *
  * @param[in] token Token to search for.
  * @return Pointer to hold queue entry if found, NULL otherwise.
  */
-struct HoldQueueEntry *
+static struct HoldQueueEntry *
 sline_find_hold_entry(unsigned int token)
 {
   struct HoldQueueEntry *entry;
@@ -917,7 +971,7 @@ sline_find_hold_entry(unsigned int token)
  * @param[in] entry Hold queue entry to release.
  * @return 1 if message was delivered, 0 if there was an error.
  */
-int
+static int
 sline_release_privmsg(struct HoldQueueEntry *entry)
 {
   assert(entry != NULL);
@@ -964,7 +1018,7 @@ sline_release_privmsg(struct HoldQueueEntry *entry)
  * @param[in] entry Hold queue entry to release.
  * @return 1 if message was delivered, 0 if there was an error.
  */
-int
+static int
 sline_release_chanmsg(struct HoldQueueEntry *entry)
 {
   assert(entry != NULL);
@@ -1026,7 +1080,7 @@ sline_release_chanmsg(struct HoldQueueEntry *entry)
  * @param[in] token Token of the message to release.
  * @return 1 if message was found and delivered, 0 otherwise.
  */
-int
+static int
 sline_release_hold(unsigned int token)
 {
   struct HoldQueueEntry *entry;
@@ -1053,28 +1107,6 @@ sline_release_hold(unsigned int token)
   sline_hold_free(entry);
 
   return result;
-}
-
-/** Drop a message from the hold queue by token without delivering it.
- * @param[in] token Token of the message to drop.
- * @return 1 if message was found and dropped, 0 otherwise.
- */
-int
-sline_drop_hold(unsigned int token)
-{
-  struct HoldQueueEntry *entry;
-
-  Debug((DEBUG_DEBUG, "sline_drop_hold: attempting to drop token %u", token));
-
-  entry = sline_find_hold_entry(token);
-  if (!entry) {
-    Debug((DEBUG_DEBUG, "sline_drop_hold: token %u not found in hold queue", token));
-    return 0;
-  }
-
-  Debug((DEBUG_DEBUG, "sline_drop_hold: dropping token %u", token));
-  sline_hold_free(entry);
-  return 1;
 }
 
 /** Block a held message and send appropriate error to sender.
@@ -1257,8 +1289,6 @@ sline_hold_timeout_callback(struct Event* ev)
   struct HoldQueueEntry *entry, *next_entry;
   time_t current_time = TStime();
   
-  Debug((DEBUG_DEBUG, "sline_hold_timeout_callback: checking for expired hold queue entries"));
-
   /* Iterate over hold queue and find expired entries */
   for (entry = GlobalHoldQueue; entry; entry = next_entry) {
     next_entry = entry->next;
@@ -1297,28 +1327,6 @@ sline_hold_timeout_callback(struct Event* ev)
   }
 }
 
-/** Start the hold queue timeout timer.
- * This should be called during initialization to start the periodic
- * timer that checks for expired hold queue entries.
- */
-void
-sline_start_hold_timeout_timer()
-{
-  Debug((DEBUG_DEBUG, "sline_start_hold_timeout_timer: starting timer"));
-  timer_add(timer_init(&hold_timeout_timer), sline_hold_timeout_callback, 0, TT_PERIODIC, 10);
-}
-
-/** Stop the hold queue timeout timer.
- * This should be called during shutdown to stop the periodic
- * timer that checks for expired hold queue entries.
- */
-void
-sline_stop_hold_timeout_timer()
-{
-  Debug((DEBUG_DEBUG, "sline_stop_hold_timeout_timer: stopping timer"));
-  timer_del(&hold_timeout_timer);
-}
-
 /** Initialize the S-line subsystem.
  * This should be called during server initialization to start the
  * hold queue timeout timer.
@@ -1326,8 +1334,5 @@ sline_stop_hold_timeout_timer()
 void
 sline_init(void)
 {
-  Debug((DEBUG_DEBUG, "sline_init: initializing S-line subsystem"));
-  sline_start_hold_timeout_timer();
+  timer_add(timer_init(&hold_timeout_timer), sline_hold_timeout_callback, 0, TT_PERIODIC, 10);
 }
-
-
