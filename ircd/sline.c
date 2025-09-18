@@ -184,35 +184,6 @@ sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
   return 0;
 }
 
-/** Remove an S-line.
- * @param[in] cptr Peer that gave us the message.
- * @param[in] sptr Client that initiated the removal.
- * @param[in] sline S-line to remove.
- * @return Zero.
- */
-int
-sline_deactivate(struct Client *cptr, struct Client *sptr, struct Sline *sline)
-{
-  assert(cptr);
-  assert(sptr);
-  assert(sline);
-
-  /* Inform ops and log it */
-  sendto_opmask_butone(0, SNO_GLINE, "%s removing global SLINE for pattern \"%s\" (%s)",
-		       (feature_bool(FEAT_HIS_SNOTICES) || IsServer(sptr)) ?
-		       cli_name(sptr) : cli_name((cli_user(sptr))->server),
-		       sline->sl_pattern,
-		       sline_flags_to_string(sline->sl_msgtype));
-  log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
-	    "%#C removing global SLINE for pattern \"%s\" (%s)", sptr,
-	    sline->sl_pattern,
-	    sline_flags_to_string(sline->sl_msgtype));
-
-  sline->sl_flags &= ~SLINE_ACTIVE;
-
-  return 0; /* convenience return */
-}
-
 void sline_modify(struct Client *sptr, struct Sline *sline, time_t lastmod, time_t expire, sl_msgtype_t msgtype, sl_flagtype_t flags, unsigned int updates)
 {
   assert(sline);
@@ -473,7 +444,7 @@ sline_burst(struct Client *cptr)
  * @return Allocated string with captures if match found, NULL otherwise.
  *         Caller is responsible for freeing the returned string.
  */
-char *
+static char *
 sline_check_pattern(const char *text, sl_msgtype_t msg_type)
 {
   struct Sline *sline;

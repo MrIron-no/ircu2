@@ -77,8 +77,6 @@ struct Sline {
 
 extern int sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
  		                 time_t lastmod, time_t expire, sl_msgtype_t msgtype, sl_flagtype_t flags);
-extern int sline_deactivate(struct Client *cptr, struct Client *sptr,
- 			                      struct Sline *sline);
 extern void sline_modify(struct Client *sptr, struct Sline *sline, time_t lastmod,
                          time_t expire, sl_msgtype_t msgtype, sl_flagtype_t flags, unsigned int updates);
 
@@ -87,7 +85,6 @@ extern void sline_stats(struct Client *sptr, const struct StatDesc *sd,
                         char *param);
 extern void sline_send_meminfo(struct Client* sptr);
 extern void sline_burst(struct Client *cptr);
-extern char *sline_check_pattern(const char *text, sl_msgtype_t msg_type);
 extern int sline_check_pattern_bool(const char *text, sl_msgtype_t msg_type);
 extern int sline_check_privmsg(struct Client *sender, struct Client *recipient, const char *text, const char* cmd_type);
 extern int sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *text, const char* cmd_type);
