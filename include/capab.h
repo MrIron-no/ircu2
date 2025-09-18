@@ -45,7 +45,8 @@
 	_CAP(INVITENOTIFY, FEAT_CAP_INVITENOTIFY, 0, "invite-notify"), \
 	_CAP(SASL, FEAT_CAP_SASL, 0, "sasl"), \
 	_CAP(ACCOUNT_TAG, FEAT_CAP_ACCOUNT_TAG, 0, "account-tag"), \
-	_CAP(SERVER_TIME, FEAT_CAP_SERVER_TIME, 0, "server-time")
+	_CAP(SERVER_TIME, FEAT_CAP_SERVER_TIME, 0, "server-time"), \
+	_CAP(UHNAMES, FEAT_CAP_UHNAMES, 0, "userhost-in-names")
 
 /** Client capabilities, counting by index. */
 enum Capab {
