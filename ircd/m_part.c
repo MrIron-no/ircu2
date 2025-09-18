@@ -211,10 +211,6 @@ int ms_part(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     }
   }
 
-  /* Check if the part message matches any S-line patterns */
-  if (sline_check_pattern_bool(parts.jb_comment, SLINE_PART))
-    slined = 1;
-
   /* scan through channel list */
   for (name = ircd_strtok(&p, parv[1], ","); name;
        name = ircd_strtok(&p, 0, ",")) {
@@ -229,12 +225,6 @@ int ms_part(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 
     if (IsZombie(member)) /* figure out special flags... */
       flags |= CHFL_ZOMBIE;
-
-    if (!member_can_send_to_channel(member, 0)
-        || ((member->channel->mode.mode & MODE_NOCOLOR) && colors)
-        || (member->channel->mode.mode & MODE_NOPARTMSGS)
-        || slined)
-      flags |= CHFL_BANNED;
 
     if (IsDelayedJoin(member))
       flags |= CHFL_DELAYED;
