@@ -568,7 +568,7 @@ sline_check_pattern_bool(const char *text, sl_msgtype_t msg_type)
     if (!(sline->sl_msgtype & msg_type)
         || (sline->sl_expire > 0 && sline->sl_expire < TStime())
         || !(sline->sl_flags & SLINE_ACTIVE)
-        || !(sline->sl_flags & SLINE_INVALID))
+        || (sline->sl_flags & SLINE_INVALID))
       continue;
 
     Debug((DEBUG_DEBUG, "sline_check_pattern_bool: testing pattern '%s'", sline->sl_pattern));
