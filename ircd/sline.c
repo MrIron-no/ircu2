@@ -214,8 +214,10 @@ void sline_modify(struct Client *sptr, struct Sline *sline, time_t lastmod, time
 
   if (updates & SLINE_MSGTYPE) {
     char old_type[16], new_type[16];
-    strlcpy(old_type, sline_flags_to_string(sline->sl_msgtype), sizeof(old_type));
-    strlcpy(new_type, sline_flags_to_string(msgtype), sizeof(new_type));
+    strncpy(old_type, sline_flags_to_string(sline->sl_msgtype), sizeof(old_type));
+    old_type[sizeof(old_type) - 1] = '\0';
+    strncpy(new_type, sline_flags_to_string(msgtype), sizeof(new_type));
+    new_type[sizeof(new_type) - 1] = '\0';
     ircd_snprintf(0, text_msgtype, sizeof(text_msgtype), "%s -> %s", old_type, new_type);
     sline->sl_msgtype = msgtype;
   } else {
