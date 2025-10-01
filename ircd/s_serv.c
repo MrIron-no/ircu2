@@ -57,6 +57,7 @@
 #include "struct.h"
 #include "sys.h"
 #include "userload.h"
+#include "sasl.h"
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <stdlib.h>
@@ -196,6 +197,9 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
    */
   gline_burst(cptr);
   jupe_burst(cptr);
+
+  /* Burst SASL configuration. */
+  sasl_burst(cptr);
 
   /*
    * Pass on my client information to the new server
