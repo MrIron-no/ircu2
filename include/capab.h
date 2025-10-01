@@ -36,7 +36,7 @@
 #define CAPFL_PROHIBIT  	0x0004	/**< Client may not set this capability */
 #define CAPFL_PROTO    		0x0008	/**< Cap must be acknowledged by client */
 #define CAPFL_STICKY		0x0010	/**< Cap may not be cleared once set */
-#define CAPFL_STICKY_302   	0x0008  /**< Cap may not be cleared once set by users supporting LS 302 */
+#define CAPFL_STICKY_302   	0x0020  /**< Cap may not be cleared once set by users supporting LS 302 */
 #define CAPFL_UNAVAILABLE 	(CAPFL_HIDDEN | CAPFL_PROHIBIT)
 
 #define CAPLIST	\
