@@ -35,6 +35,7 @@
 #include "hash.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
+#include "ircd_config.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
@@ -58,6 +59,7 @@
 #include "struct.h"
 #include "sys.h"
 #include "userload.h"
+#include "sasl.h"
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <stdlib.h>
@@ -198,6 +200,9 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
   gline_burst(cptr);
   jupe_burst(cptr);
   sline_burst(cptr);
+
+  /* Burst server configuration. */
+  config_burst(cptr);
 
   /*
    * Pass on my client information to the new server

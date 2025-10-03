@@ -81,31 +81,168 @@
 
 #include "client.h"
 #include "ircd.h"
+#include "ircd_config.h"
+#include "ircd_events.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "msg.h"
 #include "numeric.h"
+#include "numnicks.h"
+#include "sasl.h"
 #include "send.h"
-#include "s_auth.h"
+#include "s_debug.h"
+
+#include <stdlib.h>
+
+/** SASL timeout callback - called when a SASL session times out
+ * @param[in] ev Timer event (contains client pointer in timer data)
+ */
+static void sasl_timeout_callback(struct Event* ev)
+{
+  struct Client* cptr;
+  
+  assert(0 != ev_timer(ev));
+  assert(0 != t_data(ev_timer(ev)));
+  
+  if (ev_type(ev) == ET_EXPIRE) {
+    cptr = (struct Client*) t_data(ev_timer(ev));
+    
+    /* Verify the client is still valid */
+    if (!cptr || cli_magic(cptr) != CLIENT_MAGIC || !MyConnect(cptr))
+      return;
+      
+    /* Verify the client still has an active SASL session */
+    if (!cli_sasl(cptr))
+      return;
+      
+    Debug((DEBUG_INFO, "SASL timeout for client %s (cookie: %lu)", 
+           cli_name(cptr), cli_sasl(cptr)));
+    
+    /* Send timeout error to client */
+    send_reply(cptr, ERR_SASLFAIL, "Authentication timed out");
+    
+    /* Clear SASL session */
+    cli_sasl(cptr) = 0;
+  }
+}/** Start the SASL timeout timer for a client
+ * @param[in] cptr Client to set timeout for
+ */
+static void sasl_start_timeout(struct Client* cptr)
+{
+  struct Timer* timer;
+  const char* timeout_str;
+  int timeout_seconds = 60; /* Default 1 minute */
+  
+  assert(cptr != NULL);
+  assert(MyConnect(cptr));
+  assert(cli_sasl(cptr) != 0); /* Should have active SASL session */
+
+  /* Get configured timeout */
+  timeout_str = config_get("sasl.timeout");
+  if (timeout_str) {
+    timeout_seconds = atoi(timeout_str);
+    if (timeout_seconds <= 0)
+      timeout_seconds = 60;
+  }
+
+  timer = cli_sasl_timer(cptr);
+  
+  /* Timer should not already be active */
+  assert(!t_active(timer));
+
+  /* Start timer */
+  timer_add(timer_init(timer), sasl_timeout_callback, (void*) cptr,
+            TT_RELATIVE, timeout_seconds);
+
+  Debug((DEBUG_INFO, "SASL timeout started for client %s (%d seconds)", 
+         cli_name(cptr), timeout_seconds));
+}
+
+/** Stop the SASL timeout timer for a client
+ * @param[in] cptr Client to stop timeout for
+ */
+void sasl_stop_timeout(struct Client* cptr)
+{
+  struct Timer* timer;
+  
+  assert(cptr != NULL);
+  assert(MyConnect(cptr));
+
+  timer = cli_sasl_timer(cptr);
+  
+  /* Only delete if timer exists and is active */
+  if (t_active(timer)) {
+    timer_del(timer);
+    Debug((DEBUG_INFO, "SASL timeout stopped for client %s", cli_name(cptr)));
+  }
+}
 
 int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
-{		
+{
+  struct Client* acptr;
+  static uint64_t routing_ticker = 0;
+
   if (parc < 2 || *parv[1] == '\0')
     return need_more_params(sptr, "AUTHENTICATE");
 
   if (!CapHas(cli_active(cptr), CAP_SASL))
     return 0;
 
-  // Do not accept AUTHENTICATE from registered connections (as per IRCv3.1 SASL specifications).
-  if (!IsUserPort(cptr))
-    return 0;
-
   if (HasFlag(sptr, FLAG_SASL) || HasFlag(sptr, FLAG_ACCOUNT))
     return send_reply(cptr, ERR_SASLALREADY);
 
+  acptr = find_match_server((char*)sasl_get_server());
+  if (!sasl_available() || !acptr)
+    return send_reply(cptr, ERR_SASLFAIL, "The login server is currently disconnected.  Please excuse the inconvenience.");
+
   if (strlen(parv[1]) > 400)
     return send_reply(cptr, ERR_SASLTOOLONG);
+ 
+  if (strcmp(parv[1], "*") == 0) {
+    /* SASL abort - stop timeout and clear session */
+    if (cli_sasl(cptr)) {
+      sasl_stop_timeout(cptr);
+      cli_sasl(cptr) = 0;
+    }
+    send_reply(cptr, ERR_SASLABORTED);
+    return 0;
+  }
 
-  return auth_parse_sasl(cli_auth(cptr), parc, parv);
+  /* Is this the initial authentication challenge? */
+  if (!cli_sasl(cptr)) {
+    if (!sasl_mechanism_supported(parv[1]))
+      return send_reply(cptr, RPL_SASLMECHS, sasl_get_mechanisms());
+
+    cli_sasl(cptr) = ++routing_ticker;
+    
+    Debug((DEBUG_INFO, "SASL session started for %s (cookie: %lu)", 
+           cli_name(cptr), cli_sasl(cptr)));
+
+    /* Start timeout for new session */
+    sasl_start_timeout(cptr);
+
+    /* Send the initial SASL message to the authentication server */
+    if (IsUser(cptr)) {
+      /* Is the user already registered? We then send the NumNick. */
+      sendcmdto_one(&me, CMD_XQUERY, acptr, "%C sasl:%lu :SASL %s%s %s",
+                    acptr, cli_sasl(cptr), NumNick(cptr), parv[1]);
+    } else {
+      /* If not, we pass on the IP and fingerprint. */
+      sendcmdto_one(&me, CMD_XQUERY, acptr, "%C sasl:%lu :SASL %s %s %s",
+                    acptr, cli_sasl(cptr), ircd_ntoa(&cli_ip(cptr)),
+                    /*cli_fingerprint(cptr) ? cli_fingerprint(cptr) : */"_",
+                    parv[1]);
+    }
+  } else {
+    /* Continuation message - cli_sasl(cptr) should be non-zero */
+    assert(cli_sasl(cptr) != 0);
+    
+    /* Send continuation SASL message (timer keeps running) */
+    sendcmdto_one(&me, CMD_XQUERY, acptr, "%C sasl:%lu :SASL %s",
+                  acptr, cli_sasl(cptr), parv[1]);
+  }
+
+  return 0;
 }
+

@@ -175,6 +175,7 @@ enum Flag
     FLAG_HIDDENHOST,                /**< user's host is hidden */
     FLAG_SPAMHOLD,                  /**< user is the sender or recipient of a message on hold */
     FLAG_TLS,                       /**< user is using TLS */
+    FLAG_CAP302,                    /**< client supports IRCv3.2 */
     FLAG_LAST_FLAG,                 /**< number of flags */
     FLAG_LOCAL_UMODES = FLAG_LOCOP, /**< First local mode flag */
     FLAG_GLOBAL_UMODES = FLAG_OPER  /**< First global mode flag */
@@ -244,6 +245,8 @@ struct Connection
   const struct wline* con_wline;     /**< WebIRC authorization for client */
   char*               con_rexmit;    /**< TLS retransmission data */
   size_t              con_rexmit_len; /**, TLS retransmission length */
+  uint64_t            con_sasl;      /**< SASL session cookie */
+  struct Timer        con_sasl_timer; /**< SASL timeout timer */
 };
 
 /** Magic constant to identify valid Connection structures. */
@@ -398,6 +401,10 @@ struct Client {
 #define cli_wline(cli)          con_wline(cli_connect(cli))
 /** Get sentalong marker for client. */
 #define cli_sentalong(cli)      con_sentalong(cli_connect(cli))
+/** Get SASL session cookie for client. */
+#define cli_sasl(cli)           con_sasl(cli_connect(cli))
+/** Get SASL timeout timer for client. */
+#define cli_sasl_timer(cli)     (&con_sasl_timer(cli_connect(cli)))
 
 /** Verify that a connection is valid. */
 #define con_verify(con)		((con)->con_magic == CONNECTION_MAGIC)
@@ -481,6 +488,10 @@ struct Client {
 #define con_auth(con)		((con)->con_auth)
 /** Get the WebIRC block (if any) used by the connection. */
 #define con_wline(con)          ((con)->con_wline)
+/** Get the SASL session cookie for the connection. */
+#define con_sasl(con)           ((con)->con_sasl)
+/** Get the SASL timeout timer for the connection. */
+#define con_sasl_timer(con)     ((con)->con_sasl_timer)
 
 #define STAT_CONNECTING         0x001 /**< connecting to another server */
 #define STAT_HANDSHAKE          0x002 /**< pass - server sent */
