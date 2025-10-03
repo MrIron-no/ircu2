@@ -97,6 +97,7 @@ IRCD_SRC = \
 	hash.c \
 	ircd.c \
 	ircd_alloc.c \
+	ircd_config.c \
 	ircd_crypt.c \
 	ircd_events.c \
 	ircd_features.c \
@@ -165,6 +166,7 @@ IRCD_SRC = \
 	m_rping.c \
 	m_rpong.c \
 	m_sasl.c \
+	m_config.c \
 	m_server.c \
 	m_set.c \
 	m_settime.c \

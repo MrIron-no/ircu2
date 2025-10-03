@@ -28,16 +28,15 @@ struct Client;
 struct StatDesc;
 
 /* Public SASL functions */
+extern void sasl_init(void);
 extern int sasl_available(void);
 extern const char* sasl_get_server(void);
 extern const char* sasl_get_mechanisms(void);
 extern int sasl_mechanism_supported(const char* mechanism);
-extern void sasl_update_configuration(time_t timestamp, const char* server, const char* mechanisms);
-extern time_t sasl_get_timestamp(void);
-extern void sasl_burst(struct Client* cptr);
 extern void sasl_check_capability(void);
 extern void sasl_send_xreply(struct Client* sptr, const char* routing, const char* reply);
 extern struct Client* find_sasl_client(unsigned long cookie);
 extern void sasl_stats(struct Client* sptr, const struct StatDesc* sd, char* param);
+extern void sasl_stop_timeout(struct Client* cptr);
 
 #endif /* INCLUDED_sasl_h */

@@ -33,6 +33,7 @@
 #include "ircd_alloc.h"
 #include "ircd_events.h"
 #include "ircd_features.h"
+#include "ircd_config.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_signal.h"
@@ -54,6 +55,7 @@
 #include "s_debug.h"
 #include "s_misc.h"
 #include "s_stats.h"
+#include "sasl.h"
 #include "send.h"
 #include "sys.h"
 #include "uping.h"
@@ -698,6 +700,7 @@ int main(int argc, char **argv) {
   initwhowas();
   initmsgtree();
   initstats();
+  sasl_init();
 
   /* we need this for now, when we're modular this 
      should be removed -- hikari */

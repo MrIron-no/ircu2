@@ -27,6 +27,7 @@
 #include "hash.h"
 #include "ircd.h"
 #include "ircd_chattr.h"
+#include "ircd_config.h"
 #include "ircd_events.h"
 #include "ircd_features.h"
 #include "ircd_crypt.h"
@@ -662,6 +663,9 @@ struct StatDesc statsinfo[] = {
   { ' ', "iauthconf", (STAT_FLAG_OPERFEAT | STAT_FLAG_VARPARAM), FEAT_HIS_STATS_IAUTH,
     report_iauth_conf, 0,
     "IAuth configuration." },
+  { ' ', "netconf", (STAT_FLAG_OPERFEAT | STAT_FLAG_CASESENS), FEAT_HIS_STATS_C,
+    config_stats, 0,
+    "Network configuration entries." },
   { '*', "help", STAT_FLAG_CASESENS, FEAT_LAST_F,
     stats_help, 0,
     "Send help for stats." },

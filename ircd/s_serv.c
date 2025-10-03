@@ -34,6 +34,7 @@
 #include "hash.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
+#include "ircd_config.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
@@ -198,8 +199,8 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
   gline_burst(cptr);
   jupe_burst(cptr);
 
-  /* Burst SASL configuration. */
-  sasl_burst(cptr);
+  /* Burst server configuration. */
+  config_burst(cptr);
 
   /*
    * Pass on my client information to the new server

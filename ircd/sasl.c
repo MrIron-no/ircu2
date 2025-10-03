@@ -30,6 +30,8 @@
 #include "client.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
+#include "ircd_config.h"
+#include "ircd_events.h"
 #include "ircd_string.h"
 #include "ircd_reply.h"
 #include "send.h"
@@ -42,26 +44,24 @@
 
 #include <string.h>
 
-/** SASL server information */
-struct SaslServer {
-  time_t timestamp;        /**< Timestamp of the AU configuration */
-  char *server;            /**< Server name providing SASL */
-  char *mechanisms;        /**< Comma-delimited list of supported mechanisms */
+/** SASL statistics */
+struct SaslStats {
   unsigned long auth_success; /**< Number of successful authentications */
   unsigned long auth_failed;  /**< Number of failed authentications */
 };
 
-/** Global SASL server info - only one allowed */
-static struct SaslServer sasl_server = { 0, NULL, NULL, 0, 0 };
+/** Global SASL statistics */
+static struct SaslStats sasl_statistics = { 0, 0 };
 
 /** Check if SASL is available
  * @return 1 if SASL server is configured, 0 otherwise
  */
 int sasl_available(void)
 {
-  if (sasl_server.server == NULL
-      || sasl_server.mechanisms == NULL
-      || !find_match_server((char*)sasl_get_server()))
+  const char* server = config_get("sasl.server");
+  const char* mechanisms = config_get("sasl.mechanisms");
+  
+  if (!server || !mechanisms || !find_match_server((char*)server))
     return 0;
 
   return 1;
@@ -72,7 +72,7 @@ int sasl_available(void)
  */
 const char* sasl_get_server(void)
 {
-  return sasl_server.server;
+  return config_get("sasl.server");
 }
 
 /** Get the current SASL mechanisms
@@ -80,7 +80,7 @@ const char* sasl_get_server(void)
  */
 const char* sasl_get_mechanisms(void)
 {
-  return sasl_server.mechanisms;
+  return config_get("sasl.mechanisms");
 }
 
 /** Check if a mechanism exists in a mechanism list
@@ -125,66 +125,41 @@ static int mechanism_in_list(const char* mechanism, const char* mechanism_list)
  */
 int sasl_mechanism_supported(const char* mechanism)
 {
-  return mechanism_in_list(mechanism, sasl_server.mechanisms);
-}
-
-/** Update SASL configuration
- * @param[in] timestamp Timestamp from AU message
- * @param[in] server Server name
- * @param[in] mechanisms Comma-delimited mechanism list
- */
-void sasl_update_configuration(time_t timestamp, const char* server, const char* mechanisms)
-{
-  /* Free old data */
-  if (sasl_server.server) {
-    MyFree(sasl_server.server);
-    sasl_server.server = NULL;
-  }
-  if (sasl_server.mechanisms) {
-    MyFree(sasl_server.mechanisms);
-    sasl_server.mechanisms = NULL;
-  }
-
-  /* Set new data */
-  sasl_server.timestamp = timestamp;
-  DupString(sasl_server.server, server);
-  DupString(sasl_server.mechanisms, mechanisms);
-
-  /* Update capability information */
-  cap_set_value(E_CAP_SASL, sasl_server.mechanisms);
-  
-  /* Check if SASL capability availability changed */
-  sasl_check_capability();
-}
-
-/** Get SASL server timestamp
- * @return Timestamp of current SASL server info
- */
-time_t sasl_get_timestamp(void)
-{
-  return sasl_server.timestamp;
-}
-
-/** Burst SASL server information to a newly connected server
- * @param[in] cptr Server to send AU message to
- */
-void sasl_burst(struct Client* cptr)
-{
-  if (sasl_server.server && sasl_server.mechanisms) {
-    sendcmdto_one(&me, CMD_AUTHENTICATE, cptr, "= %Tu %s %s",
-                  sasl_server.timestamp,
-                  sasl_server.server,
-                  sasl_server.mechanisms);
-  }
+  return mechanism_in_list(mechanism, config_get("sasl.mechanisms"));
 }
 
 /** Check and update SASL capability availability
  * This function should be called when events occur that might change
- * SASL availability (netjoin/netsplit, AU messages)
+ * SASL availability (netjoin/netsplit, config changes)
  */
 void sasl_check_capability(void)
 {
   cap_update_availability(E_CAP_SASL, sasl_available());
+}
+
+/** Config change callback for SASL-related configuration
+ * @param[in] key Configuration key that changed
+ * @param[in] old_value Old value (NULL if new key)
+ * @param[in] new_value New value
+ */
+static void sasl_config_callback(const char *key, const char *old_value, const char *new_value)
+{
+  Debug((DEBUG_INFO, "SASL config changed: %s = %s (was: %s)", 
+         key, new_value, old_value ? old_value : "(unset)"));
+  
+  /* Update SASL capability value if mechanisms changed */
+  if (ircd_strcmp(key, "sasl.mechanisms") == 0) {
+    cap_set_value(E_CAP_SASL, new_value);
+  }
+  
+  /* Update SASL capability availability */
+  sasl_check_capability();
+}
+
+/** Initialize SASL subsystem and register config callbacks */
+void sasl_init(void)
+{
+  config_register_callback("sasl.", sasl_config_callback);
 }
 
 /** Find a client by their SASL session cookie
@@ -280,6 +255,8 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
       MyFree(account_copy);
     }
 
+    /* Stop SASL timeout timer and clear session */
+    sasl_stop_timeout(cli);
     cli_sasl(cli) = 0;
     SetFlag(cli, FLAG_SASL);
 
@@ -290,16 +267,19 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
     send_reply(cli, RPL_SASLSUCCESS);
     
     /* Increment successful authentication counter */
-    sasl_server.auth_success++;
+    sasl_statistics.auth_success++;
 
       
   } else if (0 == ircd_strncmp(reply, "NO ", 3)) {
     /* Authentication failed, send failure message to client */
     send_reply(cli, ERR_SASLFAIL, reply + 3);
+    
+    /* Stop SASL timeout timer and clear session */
+    sasl_stop_timeout(cli);
     cli_sasl(cli) = 0;
     
     /* Increment failed authentication counter */
-    sasl_server.auth_failed++;
+    sasl_statistics.auth_failed++;
 
   } else if (0 == ircd_strncmp(reply, "SASL ", 5)) {
     /* Send the AUTHENTICATE reply to the client */
@@ -314,15 +294,21 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
  */
 void sasl_stats(struct Client* sptr, const struct StatDesc* sd, char* param)
 {
-  if (sasl_server.server && sasl_server.mechanisms) {
+  const char* server = config_get("sasl.server");
+  const char* mechanisms = config_get("sasl.mechanisms");
+  const char* timeout = config_get("sasl.timeout");
+  
+  if (server && mechanisms) {
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL server: %s", sasl_server.server);
+               ":SASL server: %s", server);
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL mechanisms: %s", sasl_server.mechanisms);
+               ":SASL mechanisms: %s", mechanisms);
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL successful auths: %lu", sasl_server.auth_success);
+               ":SASL timeout: %s", timeout);
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL failed auths: %lu", sasl_server.auth_failed);
+               ":SASL successful auths: %lu", sasl_statistics.auth_success);
+    send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
+               ":SASL failed auths: %lu", sasl_statistics.auth_failed);
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
                ":SASL available: %s", sasl_available() ? "Yes" : "No");
   } else {

@@ -88,6 +88,7 @@
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
+#include "sasl.h"
 #include "msg.h"
 #include "numeric.h"
 #include "numnicks.h"

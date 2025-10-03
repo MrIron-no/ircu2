@@ -81,6 +81,9 @@
 
 #include "client.h"
 #include "ircd.h"
+#include "ircd_config.h"
+#include "ircd_events.h"
+#include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "msg.h"
@@ -88,8 +91,92 @@
 #include "numnicks.h"
 #include "sasl.h"
 #include "send.h"
+#include "s_debug.h"
 
 #include <stdlib.h>
+
+/** SASL timeout callback - called when a SASL session times out
+ * @param[in] ev Timer event (contains client pointer in timer data)
+ */
+static void sasl_timeout_callback(struct Event* ev)
+{
+  struct Client* cptr;
+  
+  assert(0 != ev_timer(ev));
+  assert(0 != t_data(ev_timer(ev)));
+  
+  if (ev_type(ev) == ET_EXPIRE) {
+    cptr = (struct Client*) t_data(ev_timer(ev));
+    
+    /* Verify the client is still valid */
+    if (!cptr || cli_magic(cptr) != CLIENT_MAGIC || !MyConnect(cptr))
+      return;
+      
+    /* Verify the client still has an active SASL session */
+    if (!cli_sasl(cptr))
+      return;
+      
+    Debug((DEBUG_INFO, "SASL timeout for client %s (cookie: %lu)", 
+           cli_name(cptr), cli_sasl(cptr)));
+    
+    /* Send timeout error to client */
+    send_reply(cptr, ERR_SASLFAIL, "Authentication timed out");
+    
+    /* Clear SASL session */
+    cli_sasl(cptr) = 0;
+  }
+}/** Start the SASL timeout timer for a client
+ * @param[in] cptr Client to set timeout for
+ */
+static void sasl_start_timeout(struct Client* cptr)
+{
+  struct Timer* timer;
+  const char* timeout_str;
+  int timeout_seconds = 60; /* Default 1 minute */
+  
+  assert(cptr != NULL);
+  assert(MyConnect(cptr));
+  assert(cli_sasl(cptr) != 0); /* Should have active SASL session */
+
+  /* Get configured timeout */
+  timeout_str = config_get("sasl.timeout");
+  if (timeout_str) {
+    timeout_seconds = atoi(timeout_str);
+    if (timeout_seconds <= 0)
+      timeout_seconds = 60;
+  }
+
+  timer = cli_sasl_timer(cptr);
+  
+  /* Timer should not already be active */
+  assert(!t_active(timer));
+
+  /* Start timer */
+  timer_add(timer_init(timer), sasl_timeout_callback, (void*) cptr,
+            TT_RELATIVE, timeout_seconds);
+
+  Debug((DEBUG_INFO, "SASL timeout started for client %s (%d seconds)", 
+         cli_name(cptr), timeout_seconds));
+}
+
+/** Stop the SASL timeout timer for a client
+ * @param[in] cptr Client to stop timeout for
+ */
+void sasl_stop_timeout(struct Client* cptr)
+{
+  struct Timer* timer;
+  
+  assert(cptr != NULL);
+  assert(MyConnect(cptr));
+
+  timer = cli_sasl_timer(cptr);
+  
+  /* Only delete if timer exists and is active */
+  if (t_active(timer)) {
+    timer_del(timer);
+    Debug((DEBUG_INFO, "SASL timeout stopped for client %s", cli_name(cptr)));
+  }
+}
 
 int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
@@ -113,8 +200,12 @@ int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return send_reply(cptr, ERR_SASLTOOLONG);
  
   if (strcmp(parv[1], "*") == 0) {
+    /* SASL abort - stop timeout and clear session */
+    if (cli_sasl(cptr)) {
+      sasl_stop_timeout(cptr);
+      cli_sasl(cptr) = 0;
+    }
     send_reply(cptr, ERR_SASLABORTED);
-    cli_sasl(cptr) = 0;
     return 0;
   }
 
@@ -124,9 +215,16 @@ int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       return send_reply(cptr, RPL_SASLMECHS, sasl_get_mechanisms());
 
     cli_sasl(cptr) = ++routing_ticker;
+    
+    Debug((DEBUG_INFO, "SASL session started for %s (cookie: %lu)", 
+           cli_name(cptr), cli_sasl(cptr)));
 
-    /* Is the user already registered? We then send the NumNick. */
+    /* Start timeout for new session */
+    sasl_start_timeout(cptr);
+
+    /* Send the initial SASL message to the authentication server */
     if (IsUser(cptr)) {
+      /* Is the user already registered? We then send the NumNick. */
       sendcmdto_one(&me, CMD_XQUERY, acptr, "%C sasl:%lu :SASL %s%s %s",
                     acptr, cli_sasl(cptr), NumNick(cptr), parv[1]);
     } else {
@@ -137,6 +235,10 @@ int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                     parv[1]);
     }
   } else {
+    /* Continuation message - cli_sasl(cptr) should be non-zero */
+    assert(cli_sasl(cptr) != 0);
+    
+    /* Send continuation SASL message (timer keeps running) */
     sendcmdto_one(&me, CMD_XQUERY, acptr, "%C sasl:%lu :SASL %s",
                   acptr, cli_sasl(cptr), parv[1]);
   }
@@ -144,46 +246,3 @@ int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   return 0;
 }
 
-/** Handler for configuring the SASL authentication layer on the network
- * @param[in] cptr Local client that sent us the message
- * @param[in] sptr Original source of the message  
- * @param[in] parc Number of parameters
- * @param[in] parv Parameter vector
- * @return 0 on success
- */
-int ms_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
-{
-  time_t timestamp;
-  struct Client* acptr;
-  
-  if (parc < 2)
-    return need_more_params(sptr, "AU");
-
-  /* Check if this is a configuration message */
-  if (parv[1][0] == '=') {
-    /* Format: AU = <timestamp> <server> <mechanisms> */
-    if (parc < 5)
-      return need_more_params(sptr, "AU");
-
-    timestamp = atoi(parv[2]);  
-    if (timestamp > sasl_get_timestamp() || !sasl_get_server()) {
-      const char* old_server = sasl_get_server();
-      const char* old_mechanisms = sasl_get_mechanisms();
-      
-      sasl_update_configuration(timestamp, parv[3], parv[4]);
-      sendcmdto_serv_butone(sptr, CMD_AUTHENTICATE, cptr, "= %s %s %s", 
-                            parv[2], parv[3], parv[4]);
-      
-      /* Only send opmask if there was actually a change */
-      if (!old_server || !old_mechanisms || 
-          ircd_strcmp(old_server, parv[3]) != 0 || 
-          ircd_strcmp(old_mechanisms, parv[4]) != 0) {
-        sendto_opmask_butone(0, SNO_NETWORK,
-                "SASL authentication layer is %s accepting %s",
-                parv[3], parv[4]);
-      }
-    }
-  }
-  
-  return 0;
-}
