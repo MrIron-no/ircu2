@@ -488,7 +488,9 @@ sline_check_pattern(const char *text, sl_msgtype_t msg_type)
 
   Debug((DEBUG_DEBUG, "sline_check_pattern: checking text='%s' against msg_type=0x%04x", text, msg_type));
 
-  for (sline = GlobalSlineList; sline; sline = sline->sl_next) {
+  struct Sline *next;
+  for (sline = GlobalSlineList; sline; sline = next) {
+    next = sline->sl_next;
     if (sline->sl_expire > 0 && sline->sl_expire < TStime()) {
       sline_free(sline);
       continue;
