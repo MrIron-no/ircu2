@@ -586,10 +586,6 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
 
     if (res == 0)
     {
-      /**
-       * For SASL authentication during registration we send RPL_LOGGEDIN
-       * when registration completes due to e.g. username set by iauth.
-       */
       if (HasFlag(auth->client, FLAG_SASL)) {
         send_reply(auth->client, RPL_LOGGEDIN,
           cli_name(auth->client), cli_username(auth->client),
