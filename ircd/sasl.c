@@ -40,6 +40,7 @@
 #include "numnicks.h"
 #include "s_debug.h"
 #include "s_bsd.h"
+#include "s_user.h"
 #include "numeric.h"
 
 #include <string.h>
@@ -220,6 +221,10 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
     const char *account_info = reply + 3; /* Skip "OK " */
     char *account_copy, *username, *id_str, *flags_str, *extra;
     
+    /**
+     * We only parse this information if the user is not yet registered (i.e. SASL authentication during auth).
+     * If this is a SASL authentication after registration, the username will be set by the service using AC.
+     */
     if (!IsUser(cli)) {
       /* Parse account information: username:id:flags */
       DupString(account_copy, account_info);
@@ -248,8 +253,8 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
       SetFlag(cli, FLAG_SASL);
       
       /* Check for +x flag (host hiding) */
-      if (extra && strstr(extra, "+x")) {
-        SetHiddenHost(cli);
+      if (extra && strstr(extra, "+x") && feature_bool(FEAT_HOST_HIDING)) {
+        hide_hostmask(cli, FLAG_HIDDENHOST);
       }
 
       MyFree(account_copy);
