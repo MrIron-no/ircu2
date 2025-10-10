@@ -250,31 +250,29 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
       }
       
       SetAccount(cli);
-      SetFlag(cli, FLAG_SASL);
       
       /* Check for +x flag (host hiding) */
       if (extra && strstr(extra, "+x") && feature_bool(FEAT_HOST_HIDING)) {
-        hide_hostmask(cli, FLAG_HIDDENHOST);
+        SetHiddenHost(cli);
       }
 
       MyFree(account_copy);
+    } else {
+      /* For already registered users, we send RPL_LOGGEDIN */
+      send_reply(cli, RPL_LOGGEDIN,
+        cli_name(cli), cli_user(cli)->username,
+        cli_user(cli)->host, cli_user(cli)->account,
+        cli_user(cli)->account);
     }
 
-    /* Stop SASL timeout timer and clear session */
     sasl_stop_timeout(cli);
     cli_sasl(cli) = 0;
     SetFlag(cli, FLAG_SASL);
 
-    send_reply(cli, RPL_LOGGEDIN,
-      cli_name(cli), cli_user(cli)->username,
-      cli_user(cli)->host, cli_user(cli)->account,
-      cli_user(cli)->account);
     send_reply(cli, RPL_SASLSUCCESS);
     
-    /* Increment successful authentication counter */
     sasl_statistics.auth_success++;
-
-      
+     
   } else if (0 == ircd_strncmp(reply, "NO ", 3)) {
     /* Authentication failed, send failure message to client */
     send_reply(cli, ERR_SASLFAIL, reply + 3);
