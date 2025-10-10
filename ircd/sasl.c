@@ -219,7 +219,11 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
     
     const char *account_info = reply + 3; /* Skip "OK " */
     char *account_copy, *username, *id_str, *flags_str, *extra;
-    
+
+    /**
+     * We only parse this information if the user is not yet registered (i.e. SASL authentication during auth).
+     * If this is a SASL authentication after registration, the username will be set by the service using AC.
+     */
     if (!IsUser(cli)) {
       /* Parse account information: username:id:flags */
       DupString(account_copy, account_info);
@@ -245,31 +249,31 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
       }
       
       SetAccount(cli);
-      SetFlag(cli, FLAG_SASL);
       
       /* Check for +x flag (host hiding) */
-      if (extra && strstr(extra, "+x")) {
+      if (extra && strstr(extra, "+x") && feature_bool(FEAT_HOST_HIDING)) {
         SetHiddenHost(cli);
       }
 
       MyFree(account_copy);
+
+    /**
+     * For already registered users, we send RPL_LOGGEDIN. For non-registered users,
+     * we send RPL_LOGGEDIN in check_auth_finished().
+     */
+    } else {
+      send_reply(cli, RPL_LOGGEDIN,
+        cli_name(cli), cli_user(cli)->username,
+        cli_user(cli)->host, cli_user(cli)->account,
+        cli_user(cli)->account);
     }
 
-    /* Stop SASL timeout timer and clear session */
     sasl_stop_timeout(cli);
     cli_sasl(cli) = 0;
     SetFlag(cli, FLAG_SASL);
 
-    send_reply(cli, RPL_LOGGEDIN,
-      cli_name(cli), cli_user(cli)->username,
-      cli_user(cli)->host, cli_user(cli)->account,
-      cli_user(cli)->account);
     send_reply(cli, RPL_SASLSUCCESS);
-    
-    /* Increment successful authentication counter */
     sasl_statistics.auth_success++;
-
-      
   } else if (0 == ircd_strncmp(reply, "NO ", 3)) {
     /* Authentication failed, send failure message to client */
     send_reply(cli, ERR_SASLFAIL, reply + 3);
