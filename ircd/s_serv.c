@@ -36,6 +36,7 @@
 #include "ircd_alloc.h"
 #include "ircd_config.h"
 #include "ircd_log.h"
+#include "ircd_netconf.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "ircd_snprintf.h"
