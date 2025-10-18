@@ -30,10 +30,10 @@
 #include "client.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
-#include "ircd_config.h"
 #include "ircd_events.h"
 #include "ircd_string.h"
 #include "ircd_reply.h"
+#include "ircd_netconf.h"
 #include "send.h"
 #include "msg.h"
 #include "capab.h"
@@ -59,29 +59,12 @@ static struct SaslStats sasl_statistics = { 0, 0 };
  */
 int sasl_available(void)
 {
-  const char* server = config_get("sasl.server");
-  const char* mechanisms = config_get("sasl.mechanisms");
-  
-  if (!server || !mechanisms || !find_match_server((char*)server))
+  if (!*netconf_str(NETCONF_SASL_SERVER)
+      || !*netconf_str(NETCONF_SASL_MECHANISMS)
+      || !find_match_server((char*)netconf_str(NETCONF_SASL_SERVER)))
     return 0;
 
   return 1;
-}
-
-/** Get the current SASL server name
- * @return Server name or NULL if none set
- */
-const char* sasl_get_server(void)
-{
-  return config_get("sasl.server");
-}
-
-/** Get the current SASL mechanisms
- * @return Comma-delimited mechanism list or NULL if none set
- */
-const char* sasl_get_mechanisms(void)
-{
-  return config_get("sasl.mechanisms");
 }
 
 /** Check if a mechanism exists in a mechanism list
@@ -126,7 +109,7 @@ static int mechanism_in_list(const char* mechanism, const char* mechanism_list)
  */
 int sasl_mechanism_supported(const char* mechanism)
 {
-  return mechanism_in_list(mechanism, config_get("sasl.mechanisms"));
+  return mechanism_in_list(mechanism, netconf_str(NETCONF_SASL_MECHANISMS));
 }
 
 /** Check and update SASL capability availability
@@ -220,7 +203,6 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
     
     const char *account_info = reply + 3; /* Skip "OK " */
     char *account_copy, *username, *id_str, *flags_str, *extra;
-    
     /**
      * We only parse this information if the user is not yet registered (i.e. SASL authentication during auth).
      * If this is a SASL authentication after registration, the username will be set by the service using AC.
@@ -257,8 +239,12 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
       }
 
       MyFree(account_copy);
+
+    /**
+     * For already registered users, we send RPL_LOGGEDIN. For non-registered users,
+     * we send RPL_LOGGEDIN in check_auth_finished().
+     */
     } else {
-      /* For already registered users, we send RPL_LOGGEDIN */
       send_reply(cli, RPL_LOGGEDIN,
         cli_name(cli), cli_user(cli)->username,
         cli_user(cli)->host, cli_user(cli)->account,
@@ -270,9 +256,7 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
     SetFlag(cli, FLAG_SASL);
 
     send_reply(cli, RPL_SASLSUCCESS);
-    
     sasl_statistics.auth_success++;
-     
   } else if (0 == ircd_strncmp(reply, "NO ", 3)) {
     /* Authentication failed, send failure message to client */
     send_reply(cli, ERR_SASLFAIL, reply + 3);

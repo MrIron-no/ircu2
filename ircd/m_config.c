@@ -20,15 +20,12 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-/** @file
- * @brief Handler for the CONFIG command.
- */
-
 #include "config.h"
 
 #include "client.h"
 #include "ircd.h"
-#include "ircd_config.h"
+#include "ircd_alloc.h"
+#include "ircd_netconf.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "msg.h"
@@ -62,6 +59,9 @@ int ms_config(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 
   /* Get the old value for comparison */
   old_value = config_get(key);
+  char *old_value_copy = NULL;
+  if (old_value)
+    DupString(old_value_copy, old_value);
   
   /* Try to set the configuration */
   result = config_set(key, value, timestamp);
@@ -73,21 +73,22 @@ int ms_config(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     
     /* Send notification to operators based on what actually happened */
     if (result == CONFIG_CREATED) {
-      /* New configuration option */
       sendto_opmask_butone(0, SNO_NETWORK,
-                          "Server configuration set: %s = %s",
+                          "Network configuration set: %s = %s",
                           key, value);
     } else if (result == CONFIG_CHANGED) {
-      /* Value actually changed */
       sendto_opmask_butone(0, SNO_NETWORK,
-                          "Server configuration updated: %s = %s (was: %s)",
-                          key, value, old_value ? old_value : "(unset)");
+                          "Network configuration updated: %s = %s (was: %s)",
+                          key, value, old_value_copy ? old_value_copy : "(unset)");
     }
-    /* CONFIG_TIMESTAMP (timestamp only update) - no notification */
     
-    Debug((DEBUG_INFO, "CONFIG: %s set %s = %s (timestamp: %Tu)",
+    Debug((DEBUG_DEBUG, "NETCONF: %s set %s = %s (timestamp: %Tu)",
            cli_name(sptr), key, value, timestamp));
   }
+  
+  /* Clean up the copied old value */
+  if (old_value_copy)
+    MyFree(old_value_copy);
   
   return 0;
 }

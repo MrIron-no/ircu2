@@ -1,5 +1,5 @@
 /*
- * IRC - Internet Relay Chat, include/ircd_config.h
+ * IRC - Internet Relay Chat, include/ircd_netconf.h
  * Copyright (C) 2025 MrIron <mriron@undernet.org>
  *
  * See file AUTHORS in IRC package for additional names of
@@ -20,13 +20,8 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-/** @file
- * @brief Generic server configuration system declarations.
- * @version $Id$
- */
-
-#ifndef INCLUDED_ircd_config_h
-#define INCLUDED_ircd_config_h
+#ifndef INCLUDED_ircd_netconf_h
+#define INCLUDED_ircd_netconf_h
 
 #include <time.h>
 
@@ -57,19 +52,28 @@ struct ConfigCallback {
   struct ConfigCallback *next;         /**< Next callback */
 };
 
+/** Network configuration options */
+enum NetConf {
+    /* SASL configuration options */
+    NETCONF_SASL_SERVER,
+    NETCONF_SASL_MECHANISMS,
+    NETCONF_SASL_TIMEOUT,
+    
+    NETCONF_LAST_NC
+};
+
 /*
  * Prototypes
  */
 
-extern void config_cleanup(void);
 extern int config_set(const char *key, const char *value, time_t timestamp);
 extern const char *config_get(const char *key);
-extern time_t config_get_timestamp(const char *key);
-extern void config_remove(const char *key);
-extern int config_count(void);
 extern void config_register_callback(const char *key_prefix, config_callback_f callback);
 extern void config_unregister_callback(const char *key_prefix);
 extern void config_burst(struct Client *cptr);
 extern void config_stats(struct Client *sptr, const struct StatDesc *sd, char *param);
+extern int netconf_int(enum NetConf key);
+extern int netconf_bool(enum NetConf key);
+extern const char *netconf_str(enum NetConf key);
 
-#endif /* INCLUDED_ircd_config_h */
+#endif /* INCLUDED_ircd_netconf_h */
