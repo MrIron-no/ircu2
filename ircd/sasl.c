@@ -281,25 +281,19 @@ void sasl_send_xreply(struct Client* sptr, const char* routing, const char* repl
  */
 void sasl_stats(struct Client* sptr, const struct StatDesc* sd, char* param)
 {
-  const char* server = config_get("sasl.server");
-  const char* mechanisms = config_get("sasl.mechanisms");
-  const char* timeout = config_get("sasl.timeout");
-  
-  if (server && mechanisms) {
+  if (sasl_available()) {
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL server: %s", server);
+               ":SASL server: %s", netconf_str(NETCONF_SASL_SERVER));
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL mechanisms: %s", mechanisms);
+               ":SASL mechanisms: %s", netconf_str(NETCONF_SASL_MECHANISMS));
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL timeout: %s", timeout);
+               ":SASL timeout: %d", netconf_int(NETCONF_SASL_TIMEOUT));
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
                ":SASL successful auths: %lu", sasl_statistics.auth_success);
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
                ":SASL failed auths: %lu", sasl_statistics.auth_failed);
-    send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL available: %s", sasl_available() ? "Yes" : "No");
   } else {
     send_reply(sptr, SND_EXPLICIT | RPL_STATSDEBUG,
-               ":SASL not configured");
+               ":SASL not available");
   }
 }
