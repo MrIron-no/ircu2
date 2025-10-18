@@ -54,12 +54,18 @@ struct ConfigCallback {
 
 /** Network configuration options */
 enum NetConf {
-    /* SASL configuration options */
-    NETCONF_SASL_SERVER,
-    NETCONF_SASL_MECHANISMS,
-    NETCONF_SASL_TIMEOUT,
+  /* SASL configuration options */
+  NETCONF_SASL_SERVER,
+  NETCONF_SASL_MECHANISMS,
+  NETCONF_SASL_TIMEOUT,
     
-    NETCONF_LAST_NC
+  /* S:line related settings */
+  NETCONF_SLINE_SERVER,
+  NETCONF_SLINE_HOLD_TIMEOUT,
+  NETCONF_SLINE_HOLD_TIMEOUT_BLOCK,
+  
+  /* Add more as needed */
+  NETCONF_LAST_NC
 };
 
 /*

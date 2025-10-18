@@ -86,8 +86,9 @@
 #define TOPICLEN        160
 /** Maximum length for away messages.
  */
-#define AWAYLEN		160
-/** Maximum length of S:line patterns. */
+#define AWAYLEN		    160
+/** Maximum length of S:line patterns.
+*/
 #define SLINELEN        470
 /** Exactly long enough to hold one protocol message (RFC 1459)
  * including the line termination (\\r\\n).  DO NOT CHANGE THIS!!!!

@@ -19,30 +19,29 @@
 
 #include "config.h"
 
-#include "sline.h"
 #include "channel.h"
 #include "client.h"
+#include "hash.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
 #include "ircd_events.h"
 #include "ircd_features.h"
 #include "ircd_log.h"
+#include "ircd_netconf.h"
 #include "ircd_reply.h"
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
 #include "match.h"
+#include "msg.h"
 #include "numeric.h"
-#include "s_bsd.h"
+#include "numnicks.h"
 #include "s_debug.h"
-#include "s_misc.h"
 #include "s_stats.h"
 #include "s_user.h"
 #include "send.h"
+#include "sline.h"
 #include "struct.h"
 #include "sys.h"
-#include "msg.h"
-#include "numnicks.h"
-#include "numeric.h"
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <string.h>
@@ -92,6 +91,23 @@ static struct Timer hold_timeout_timer;
 
 /** Forward declaration for timer callback */
 static void sline_hold_timeout_callback(struct Event* ev);
+
+/** Check if S-lines are active based on features and netconf settings.
+ * @return 1 if S-lines are active, 0 if disabled.
+ */
+static int sline_is_enabled(void)
+{
+  /* Check if S-lines are disabled by feature */
+  if (feature_bool(FEAT_DISABLE_SLINES))
+    return 0;
+  
+  /* Check if S-line server is configured */
+  const char *spamfilter_server = netconf_str(NETCONF_SLINE_SERVER);
+  if (!spamfilter_server || *spamfilter_server == '\0')
+    return 0;
+  
+  return 1;
+}
 
 /** Create an Sline structure.
  * @param[in] pattern Regex pattern to match against messages.
@@ -182,35 +198,6 @@ sline_add(struct Client *cptr, struct Client *sptr, char *pattern,
          asline->sl_pattern, asline->sl_msgtype, asline->sl_lastmod, asline->sl_expire, asline->sl_flags));
 
   return 0;
-}
-
-/** Remove an S-line.
- * @param[in] cptr Peer that gave us the message.
- * @param[in] sptr Client that initiated the removal.
- * @param[in] sline S-line to remove.
- * @return Zero.
- */
-int
-sline_deactivate(struct Client *cptr, struct Client *sptr, struct Sline *sline)
-{
-  assert(cptr);
-  assert(sptr);
-  assert(sline);
-
-  /* Inform ops and log it */
-  sendto_opmask_butone(0, SNO_GLINE, "%s removing global SLINE for pattern \"%s\" (%s)",
-		       (feature_bool(FEAT_HIS_SNOTICES) || IsServer(sptr)) ?
-		       cli_name(sptr) : cli_name((cli_user(sptr))->server),
-		       sline->sl_pattern,
-		       sline_flags_to_string(sline->sl_msgtype));
-  log_write(LS_GLINE, L_INFO, LOG_NOSNOTICE,
-	    "%#C removing global SLINE for pattern \"%s\" (%s)", sptr,
-	    sline->sl_pattern,
-	    sline_flags_to_string(sline->sl_msgtype));
-
-  sline->sl_flags &= ~SLINE_ACTIVE;
-
-  return 0; /* convenience return */
 }
 
 void sline_modify(struct Client *sptr, struct Sline *sline, time_t lastmod, time_t expire, sl_msgtype_t msgtype, sl_flagtype_t flags, unsigned int updates)
@@ -378,6 +365,17 @@ sline_stats(struct Client *sptr, const struct StatDesc *sd,
     count++;
   }
   
+  send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE, 
+    "S:line enabled: %s", sline_is_enabled() ? "yes" : "no");
+  if (sline_is_enabled()) {
+    send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE,
+      "spamfilter server configured: %s", netconf_str(NETCONF_SLINE_SERVER));
+    send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE,
+      "hold timeout: %u", netconf_int(NETCONF_SLINE_HOLD_TIMEOUT));
+    send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE,
+      "hold timeout block: %s", netconf_bool(NETCONF_SLINE_HOLD_TIMEOUT_BLOCK) ? "yes" : "no");
+  }
+
   /* Send summary statistics */
   send_reply(sptr, SND_EXPLICIT | RPL_STATSSLINE, 
              "S :--- S-line Summary ---");
@@ -475,7 +473,7 @@ sline_burst(struct Client *cptr)
  * @return Allocated string with captures if match found, NULL otherwise.
  *         Caller is responsible for freeing the returned string.
  */
-char *
+static char *
 sline_check_pattern(const char *text, sl_msgtype_t msg_type)
 {
   struct Sline *sline;
@@ -572,7 +570,7 @@ sline_check_pattern_bool(const char *text, sl_msgtype_t msg_type)
     if (!(sline->sl_msgtype & msg_type)
         || (sline->sl_expire > 0 && sline->sl_expire < TStime())
         || !(sline->sl_flags & SLINE_ACTIVE)
-        || (sline->sl_flags & SLINE_INVALID))
+        || !(sline->sl_flags & SLINE_INVALID))
       continue;
 
     Debug((DEBUG_DEBUG, "sline_check_pattern_bool: testing pattern '%s'", sline->sl_pattern));
@@ -590,11 +588,11 @@ sline_check_pattern_bool(const char *text, sl_msgtype_t msg_type)
   return 0;
 }
 
-/** Send S-line match notification to the nearest spam filter server.
+/** Send S-line match notification to the configured spam filter server.
  * @param[in] entry Hold queue entry containing message and match information.
  */
 static int
-sline_notify_spamfilters(struct HoldQueueEntry *entry)
+sline_notify_spamfilter(struct HoldQueueEntry *entry)
 {
   assert(entry);
   assert(entry->sender);
@@ -615,29 +613,16 @@ sline_notify_spamfilters(struct HoldQueueEntry *entry)
   else
     return 0;
 
-  Debug((DEBUG_DEBUG, "sline_notify_spamfilters: notifying about token %u from %s to %s", 
+  Debug((DEBUG_DEBUG, "sline_notify_spamfilter: notifying about token %u from %s to %s", 
          entry->token, cli_name(entry->sender), target_name));
 
-  /* Find the spamfilter server with lowest lag */
-  struct Client *serv = NULL;
-  unsigned int min_lag = 0; /* valid only when serv != NULL */
-
-  for (acptr = GlobalClientList; acptr; acptr = cli_next(acptr)) {
-    if (IsServer(acptr) && IsSpamfilter(acptr)) {
-      unsigned int lag = cli_serv(acptr)->lag;
-      if (min_lag == 0 || lag < min_lag) {
-        serv = acptr;
-        min_lag = lag;
-      }
-    }
-  }
-
+  struct Client *serv = FindServer(netconf_str(NETCONF_SLINE_SERVER));
   if (!serv) {
-    Debug((DEBUG_DEBUG, "sline_notify_spamfilters: no spamfilter servers available"));
+    Debug((DEBUG_DEBUG, "sline_notify_spamfilter: the spamfilter server is not available"));
     return 0;
   }
 
-  Debug((DEBUG_DEBUG, "sline_notify_spamfilters: sending notification to nearest spamfilter %s (lag=%u)", cli_name(serv), min_lag));
+  Debug((DEBUG_DEBUG, "sline_notify_spamfilter: sending notification to spamfilter %s", cli_name(serv)));
 
   /* Send the S-line match notification to the nearest spam filter server
   * Format: SL spam:<token> :<sender> <target> :<captures>
@@ -871,7 +856,7 @@ sline_check_privmsg(struct Client *sender, struct Client *recipient, const char 
   char *captures;
   struct HoldQueueEntry *entry;
 
-  if (!sender || !recipient || !text || IsAnOper(sender) || feature_bool(FEAT_DISABLE_SLINES))
+  if (!sender || !recipient || !text || IsAnOper(sender) || !sline_is_enabled())
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_check_privmsg: checking %s from %s to %s: '%s'", 
@@ -895,7 +880,7 @@ sline_check_privmsg(struct Client *sender, struct Client *recipient, const char 
   }
 
   /* Notify spam filter servers */
-  sline_notify_spamfilters(entry);
+  sline_notify_spamfilter(entry);
 
   /* Clean up */
   MyFree(captures);
@@ -921,7 +906,7 @@ sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *
   char *captures;
   struct HoldQueueEntry *entry;
   
-  if (!sender || !channel || !text || IsAnOper(sender) || feature_bool(FEAT_DISABLE_SLINES))
+  if (!sender || !channel || !text || IsAnOper(sender) || !sline_is_enabled())
     return 0;
 
   Debug((DEBUG_DEBUG, "sline_check_chanmsg: checking %s from %s to %s: '%s'", 
@@ -945,7 +930,7 @@ sline_check_chanmsg(struct Client *sender, struct Channel *channel, const char *
   }
 
   /* Notify spam filter servers */
-  sline_notify_spamfilters(entry);
+  sline_notify_spamfilter(entry);
 
   /* Clean up */
   MyFree(captures);
@@ -1162,12 +1147,6 @@ sline_xreply_handler(struct Client *sptr, const char *token, const char *reply)
     return 0;
   }
   
-  /* Only accept XREPLY from spam filter servers */
-  if (!IsSpamfilter(sptr)) {
-    Debug((DEBUG_DEBUG, "sline_xreply_handler: XREPLY from non-spamfilter server %s", cli_name(sptr)));
-    return 0;
-  }
-  
   /* Convert token string to number */
   token_num = atoi(token);
   if (token_num == 0 && strcmp(token, "0") != 0) {
@@ -1298,14 +1277,14 @@ sline_hold_timeout_callback(struct Event* ev)
     next_entry = entry->next;
 
     /* Check if entry is expired */
-    if (entry->timestamp + feature_int(FEAT_SLINE_HOLD_TIMEOUT) <= current_time) {
+    if (entry->timestamp + netconf_int(NETCONF_SLINE_HOLD_TIMEOUT) <= current_time) {
       Debug((DEBUG_DEBUG, "sline_hold_timeout_callback: processing expired hold entry token %u", entry->token));
       
       /* Increment timeout counter */
       sline_stats_counters.timeout_expired++;
       
       /* Check if we should block or release expired messages */
-      if (feature_bool(FEAT_SLINE_HOLD_TIMEOUT_BLOCK)) {
+      if (netconf_bool(NETCONF_SLINE_HOLD_TIMEOUT_BLOCK)) {
         /* Block the message (default behavior) - send timeout error to sender */
         Debug((DEBUG_DEBUG, "sline_hold_timeout_callback: blocking expired token %u", entry->token));
         sline_stats_counters.messages_blocked++; /* Increment blocked counter */

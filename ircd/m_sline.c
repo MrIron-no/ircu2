@@ -133,21 +133,6 @@ ms_sline(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   if (*state != '+' && *state != '-')
     return protocol_violation(sptr, "Invalid SLINE action, expected '+' or '-'");
 
-  /* We only accept CMD_SLINE from:
-   * 1. U:lined servers (IsSpamfilter(sptr))
-   * 2. Bursting servers (IsBurst(sptr))
-   * Provided in each case that sptr is on the path from us (cli_from(sptr) == cptr).
-   */
-  if (cli_from(sptr) != cptr) {
-    Debug((DEBUG_DEBUG, "ms_sline: sptr not on path from us, denying SLINE command"));
-    return send_reply(sptr, ERR_NOPRIVILEGES, parv[1]);
-  }
-
-  if (!IsSpamfilter(sptr) && !IsBurst(sptr)) {
-    Debug((DEBUG_DEBUG, "ms_sline: Not a U:lined or bursting server, denying SLINE command"));
-    return send_reply(sptr, ERR_NOPRIVILEGES, parv[1]);
-  }
-
   /* Check if the pattern is valid */
   if (!pattern || strlen(pattern) == 0)
     return protocol_violation(sptr, "Invalid SLINE pattern");
