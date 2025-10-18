@@ -30,10 +30,10 @@
 #include "client.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
-#include "ircd_config.h"
 #include "ircd_events.h"
 #include "ircd_string.h"
 #include "ircd_reply.h"
+#include "ircd_netconf.h"
 #include "send.h"
 #include "msg.h"
 #include "capab.h"
@@ -58,29 +58,12 @@ static struct SaslStats sasl_statistics = { 0, 0 };
  */
 int sasl_available(void)
 {
-  const char* server = config_get("sasl.server");
-  const char* mechanisms = config_get("sasl.mechanisms");
-  
-  if (!server || !mechanisms || !find_match_server((char*)server))
+  if (!*netconf_str(NETCONF_SASL_SERVER)
+      || !*netconf_str(NETCONF_SASL_MECHANISMS)
+      || !find_match_server((char*)netconf_str(NETCONF_SASL_SERVER)))
     return 0;
 
   return 1;
-}
-
-/** Get the current SASL server name
- * @return Server name or NULL if none set
- */
-const char* sasl_get_server(void)
-{
-  return config_get("sasl.server");
-}
-
-/** Get the current SASL mechanisms
- * @return Comma-delimited mechanism list or NULL if none set
- */
-const char* sasl_get_mechanisms(void)
-{
-  return config_get("sasl.mechanisms");
 }
 
 /** Check if a mechanism exists in a mechanism list
@@ -125,7 +108,7 @@ static int mechanism_in_list(const char* mechanism, const char* mechanism_list)
  */
 int sasl_mechanism_supported(const char* mechanism)
 {
-  return mechanism_in_list(mechanism, config_get("sasl.mechanisms"));
+  return mechanism_in_list(mechanism, netconf_str(NETCONF_SASL_MECHANISMS));
 }
 
 /** Check and update SASL capability availability

@@ -34,7 +34,6 @@
 #include "hash.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
-#include "ircd_config.h"
 #include "ircd_log.h"
 #include "ircd_netconf.h"
 #include "ircd_reply.h"

@@ -81,9 +81,9 @@
 
 #include "client.h"
 #include "ircd.h"
-#include "ircd_config.h"
 #include "ircd_events.h"
 #include "ircd_log.h"
+#include "ircd_netconf.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "msg.h"
@@ -138,14 +138,6 @@ static void sasl_start_timeout(struct Client* cptr)
   assert(MyConnect(cptr));
   assert(cli_sasl(cptr) != 0); /* Should have active SASL session */
 
-  /* Get configured timeout */
-  timeout_str = config_get("sasl.timeout");
-  if (timeout_str) {
-    timeout_seconds = atoi(timeout_str);
-    if (timeout_seconds <= 0)
-      timeout_seconds = 60;
-  }
-
   timer = cli_sasl_timer(cptr);
   
   /* Timer should not already be active */
@@ -153,10 +145,10 @@ static void sasl_start_timeout(struct Client* cptr)
 
   /* Start timer */
   timer_add(timer_init(timer), sasl_timeout_callback, (void*) cptr,
-            TT_RELATIVE, timeout_seconds);
+            TT_RELATIVE, netconf_int(NETCONF_SASL_TIMEOUT));
 
   Debug((DEBUG_INFO, "SASL timeout started for client %s (%d seconds)", 
-         cli_name(cptr), timeout_seconds));
+         cli_name(cptr), netconf_int(NETCONF_SASL_TIMEOUT)));
 }
 
 /** Stop the SASL timeout timer for a client
@@ -192,7 +184,7 @@ int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (HasFlag(sptr, FLAG_SASL) || HasFlag(sptr, FLAG_ACCOUNT))
     return send_reply(cptr, ERR_SASLALREADY);
 
-  acptr = find_match_server((char*)sasl_get_server());
+  acptr = find_match_server((char*)netconf_str(NETCONF_SASL_SERVER));
   if (!sasl_available() || !acptr)
     return send_reply(cptr, ERR_SASLFAIL, "The login server is currently disconnected.  Please excuse the inconvenience.");
 
@@ -212,7 +204,7 @@ int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /* Is this the initial authentication challenge? */
   if (!cli_sasl(cptr)) {
     if (!sasl_mechanism_supported(parv[1]))
-      return send_reply(cptr, RPL_SASLMECHS, sasl_get_mechanisms());
+      return send_reply(cptr, RPL_SASLMECHS, netconf_str(NETCONF_SASL_MECHANISMS));
 
     cli_sasl(cptr) = ++routing_ticker;
     
