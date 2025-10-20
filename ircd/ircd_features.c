@@ -385,6 +385,7 @@ static struct FeatureDesc {
   F_B(CAP_UHNAMES, 0, 1, 0),
   F_B(CAP_ACCOUNT_TAG, 0, 1, 0),
   F_B(CAP_SERVER_TIME, 0, 1, 0),
+  F_B(CAP_SASL, 0, 1, 0),
 
   /* HEAD_IN_SAND Features */
   F_B(HIS_SNOTICES, 0, 1, 0),
@@ -415,6 +416,7 @@ static struct FeatureDesc {
   F_B(HIS_STATS_r, 0, 1, 0),
   F_B(HIS_STATS_R, 0, 1, 0),
   F_B(HIS_STATS_s, 0, 1, 0),
+  F_B(HIS_STATS_S, 0, 1, 0),
   F_B(HIS_STATS_t, 0, 1, 0),
   F_B(HIS_STATS_T, 0, 1, 0),
   F_B(HIS_STATS_u, 0, 0, 0),

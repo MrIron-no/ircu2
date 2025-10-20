@@ -75,6 +75,11 @@ static struct NetConfDesc {
   NC_I(SLINE_HOLD_TIMEOUT, "sline.hold_timeout", 60),
   NC_B(SLINE_HOLD_TIMEOUT_BLOCK, "sline.hold_timeout_block", 1),
 
+  /* SASL configuration options */
+  NC_S(SASL_SERVER, "sasl.server", ""),
+  NC_S(SASL_MECHANISMS, "sasl.mechanisms", ""),
+  NC_I(SASL_TIMEOUT, "sasl.timeout", 30),
+
   { NETCONF_LAST_NC, 0, 0, 0, 0, 0, 0 } /* sentinel */
 };
 
