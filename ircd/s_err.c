@@ -2031,7 +2031,6 @@ static Numeric replyTable[] = {
   { 0 },
 /* 999 */
   { 0 }
->>>>>>> feature/capsasl
 };
 
 /** Return a pointer to the Numeric for a particular code.
