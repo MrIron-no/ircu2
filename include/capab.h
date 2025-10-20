@@ -44,6 +44,8 @@
 	_CAP(EXTJOIN, FEAT_CAP_EXTJOIN, 0, "extended-join"), \
 	_CAP(INVITENOTIFY, FEAT_CAP_INVITENOTIFY, 0, "invite-notify"), \
 	_CAP(UHNAMES, FEAT_CAP_UHNAMES, 0, "userhost-in-names")
+	_CAP(ACCOUNT_TAG, FEAT_CAP_ACCOUNT_TAG, 0, "account-tag"), \
+	_CAP(SERVER_TIME, FEAT_CAP_SERVER_TIME, 0, "server-time")
 
 /** Client capabilities, counting by index. */
 enum Capab {
