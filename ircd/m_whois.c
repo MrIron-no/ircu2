@@ -209,7 +209,8 @@ static void do_whois(struct Client* sptr, struct Client *acptr, int parc)
        send_reply(sptr, RPL_AWAY, name, user->away);
 
     if (IsTLS(acptr))
-       send_reply(sptr, RPL_WHOISSECURE, name);
+       send_reply(sptr, RPL_WHOISSECURE, name,
+          is_secure_path(sptr, acptr) ? " (secure network path)" : "");
 
     if (SeeOper(sptr,acptr))
        send_reply(sptr, RPL_WHOISOPERATOR, name);

@@ -1303,6 +1303,130 @@ char *umode_str(struct Client *cptr)
                                    overwritten by send_umode() */
 }
 
+/** Check if the path from one client to another is secure (all TLS).
+ * This function verifies that both clients and all servers in the path
+ * between them are using TLS encryption.
+ * 
+ * The function handles four scenarios:
+ * 1. Both clients are local (same server) - checks if both are TLS
+ * 2. From is local, to is remote - checks from's TLS and all servers in to's path
+ * 3. From is remote, to is local - checks all servers in from's path and to's TLS
+ * 4. Both are remote - dynamically determines max network depth and checks all servers in both paths
+ * 
+ * @param[in] from Source client.
+ * @param[in] to Destination client.
+ * @return Non-zero if the path is secure (all TLS), zero otherwise.
+ *
+ */
+int is_secure_path(struct Client *from, struct Client *to)
+{
+  struct Client *current;
+  
+  /* Validate input parameters */
+  if (!from || !to || !cli_verify(from) || !cli_verify(to))
+    return 0;
+  
+  /* If both clients are on the same server (local), just check if both are TLS */
+  if (MyUser(from) && MyUser(to))
+    return IsTLS(from) && IsTLS(to);
+  
+  /* If from is local and to is remote, check from's TLS and traverse to's path */
+  if (MyUser(from) && !MyUser(to)) {
+    if (!IsTLS(from))
+      return 0;
+    
+    /* Traverse the path from 'to' back to the local server */
+    current = to;
+    while (current && !IsMe(current)) {
+      if (!IsTLS(current))
+        return 0;
+      current = cli_serv(current) ? cli_serv(current)->up : NULL;
+    }
+    return 1;
+  }
+  
+  /* If from is remote and to is local, traverse from's path and check to's TLS */
+  if (!MyUser(from) && MyUser(to)) {
+    if (!IsTLS(to))
+      return 0;
+    
+    /* Traverse the path from 'from' back to the local server */
+    current = from;
+    while (current && !IsMe(current)) {
+      if (!IsTLS(current))
+        return 0;
+      current = cli_serv(current) ? cli_serv(current)->up : NULL;
+    }
+    return 1;
+  }
+  
+  /* If both are remote, we need to find the common path */
+  if (!MyUser(from) && !MyUser(to)) {
+    struct Client *cptr;
+    int max_hops = 0;
+    int from_count = 0, to_count = 0;
+    int i, j;
+    
+    /* Find the maximum hop count in the network by iterating through all clients */
+    for (cptr = GlobalClientList; cptr; cptr = cli_next(cptr)) {
+      if (IsServer(cptr) && cli_hopcount(cptr) > max_hops) {
+        max_hops = cli_hopcount(cptr);
+      }
+    }
+    
+    /* The path between two remote servers could be up to 2 * max_hops long
+     * (from one remote server back to us, then to the other remote server) */
+    int max_path_length = (max_hops * 2) + 1;
+    
+    /* Allocate paths dynamically based on maximum possible path length */
+    struct Client **from_path = MyMalloc((max_path_length + 1) * sizeof(struct Client*));
+    struct Client **to_path = MyMalloc((max_path_length + 1) * sizeof(struct Client*));
+    
+    if (!from_path || !to_path) {
+      MyFree(from_path);
+      MyFree(to_path);
+      return 0;
+    }
+    
+    /* Build path from 'from' back to local server */
+    current = from;
+    while (current && !IsMe(current) && from_count < max_path_length) {
+      from_path[from_count++] = current;
+      current = cli_serv(current) ? cli_serv(current)->up : NULL;
+    }
+    
+    /* Build path from 'to' back to local server */
+    current = to;
+    while (current && !IsMe(current) && to_count < max_path_length) {
+      to_path[to_count++] = current;
+      current = cli_serv(current) ? cli_serv(current)->up : NULL;
+    }
+    
+    /* Check TLS on all servers in both paths */
+    for (i = 0; i < from_count; i++) {
+      if (!IsTLS(from_path[i])) {
+        MyFree(from_path);
+        MyFree(to_path);
+        return 0;
+      }
+    }
+    for (j = 0; j < to_count; j++) {
+      if (!IsTLS(to_path[j])) {
+        MyFree(from_path);
+        MyFree(to_path);
+        return 0;
+      }
+    }
+    
+    /* Free allocated memory and return success */
+    MyFree(from_path);
+    MyFree(to_path);
+    return 1;
+  }
+  
+  return 0;
+}
+
 /** Send a mode change string for \a sptr to \a cptr.
  * @param[in] cptr Destination of mode change message.
  * @param[in] sptr User whose mode has changed.
