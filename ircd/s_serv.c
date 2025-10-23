@@ -234,11 +234,11 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;
       sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
-		    "%s %d 0 %Tu %s%u %s%s +%s%s%s :%s", cli_name(acptr),
+		    "%s %d 0 %Tu %s%u %s%s +%s%s%s%s :%s", cli_name(acptr),
 		    cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
 		    protocol_str, Protocol(acptr), NumServCap(acptr),
 		    IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
-		    IsIPv6(acptr) ? "6" : "", cli_info(acptr));
+		    IsIPv6(acptr) ? "6" : "", IsTLS(acptr) ? "z" : "", cli_info(acptr));
     }
   }
 

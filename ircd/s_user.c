@@ -1335,8 +1335,8 @@ int is_secure_path(struct Client *from, struct Client *to)
     if (!IsTLS(from))
       return 0;
     
-    /* Traverse the path from 'to' back to the local server */
-    current = to;
+    /* Start with the server that 'to' is connected to */
+    current = cli_user(to)->server;
     while (current && !IsMe(current)) {
       if (!IsTLS(current))
         return 0;
@@ -1350,8 +1350,8 @@ int is_secure_path(struct Client *from, struct Client *to)
     if (!IsTLS(to))
       return 0;
     
-    /* Traverse the path from 'from' back to the local server */
-    current = from;
+    /* Start with the server that 'from' is connected to */
+    current = cli_user(from)->server;
     while (current && !IsMe(current)) {
       if (!IsTLS(current))
         return 0;
@@ -1360,67 +1360,58 @@ int is_secure_path(struct Client *from, struct Client *to)
     return 1;
   }
   
-  /* If both are remote, we need to find the common path */
+  /* If both are remote, find the actual path between them */
   if (!MyUser(from) && !MyUser(to)) {
-    struct Client *cptr;
-    int max_hops = 0;
+    struct Client *from_path[64];  /* Reasonable limit for path length */
+    struct Client *to_path[64];
     int from_count = 0, to_count = 0;
     int i, j;
     
-    /* Find the maximum hop count in the network by iterating through all clients */
-    for (cptr = GlobalClientList; cptr; cptr = cli_next(cptr)) {
-      if (IsServer(cptr) && cli_hopcount(cptr) > max_hops) {
-        max_hops = cli_hopcount(cptr);
-      }
-    }
-    
-    /* The path between two remote servers could be up to 2 * max_hops long
-     * (from one remote server back to us, then to the other remote server) */
-    int max_path_length = (max_hops * 2) + 1;
-    
-    /* Allocate paths dynamically based on maximum possible path length */
-    struct Client **from_path = MyMalloc((max_path_length + 1) * sizeof(struct Client*));
-    struct Client **to_path = MyMalloc((max_path_length + 1) * sizeof(struct Client*));
-    
-    if (!from_path || !to_path) {
-      MyFree(from_path);
-      MyFree(to_path);
-      return 0;
-    }
-    
-    /* Build path from 'from' back to local server */
-    current = from;
-    while (current && !IsMe(current) && from_count < max_path_length) {
+    /* Build path from 'from' up to root of spanning tree */
+    current = cli_user(from)->server;
+    while (current && from_count < 64) {
       from_path[from_count++] = current;
       current = cli_serv(current) ? cli_serv(current)->up : NULL;
     }
     
-    /* Build path from 'to' back to local server */
-    current = to;
-    while (current && !IsMe(current) && to_count < max_path_length) {
+    /* Build path from 'to' up to root of spanning tree */
+    current = cli_user(to)->server;
+    while (current && to_count < 64) {
       to_path[to_count++] = current;
       current = cli_serv(current) ? cli_serv(current)->up : NULL;
     }
     
-    /* Check TLS on all servers in both paths */
-    for (i = 0; i < from_count; i++) {
-      if (!IsTLS(from_path[i])) {
-        MyFree(from_path);
-        MyFree(to_path);
-        return 0;
-      }
-    }
-    for (j = 0; j < to_count; j++) {
-      if (!IsTLS(to_path[j])) {
-        MyFree(from_path);
-        MyFree(to_path);
-        return 0;
+    /* Find common ancestor by looking for intersection */
+    struct Client *common_ancestor = NULL;
+    int from_ancestor_index = -1, to_ancestor_index = -1;
+    
+    for (i = 0; i < from_count && !common_ancestor; i++) {
+      for (j = 0; j < to_count; j++) {
+        if (from_path[i] == to_path[j]) {
+          common_ancestor = from_path[i];
+          from_ancestor_index = i;
+          to_ancestor_index = j;
+          break;
+        }
       }
     }
     
-    /* Free allocated memory and return success */
-    MyFree(from_path);
-    MyFree(to_path);
+    /* If no common ancestor found, path is not secure */
+    if (!common_ancestor)
+      return 0;
+    
+    /* Check TLS on path from 'from' to common ancestor */
+    for (i = 0; i <= from_ancestor_index; i++) {
+      if (!IsTLS(from_path[i]))
+        return 0;
+    }
+    
+    /* Check TLS on path from 'to' to common ancestor */
+    for (j = 0; j <= to_ancestor_index; j++) {
+      if (!IsTLS(to_path[j]))
+        return 0;
+    }
+    
     return 1;
   }
   
