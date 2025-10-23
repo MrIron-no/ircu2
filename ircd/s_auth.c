@@ -611,7 +611,7 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
     {
       if (HasFlag(auth->client, FLAG_SASL)) {
         send_reply(auth->client, RPL_LOGGEDIN,
-          cli_name(auth->client), cli_username(auth->client),
+          cli_name(auth->client), cli_user(auth->client)->username,
           cli_user(auth->client)->host, cli_user(auth->client)->account,
           cli_user(auth->client)->account);
       }
