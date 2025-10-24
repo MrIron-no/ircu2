@@ -660,6 +660,8 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 		       cli_name(&me));
   }
 
+  assign_sid(cptr);
+
   return ret;
 }
 
@@ -792,5 +794,8 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                   IsService(acptr) ? "s" : "", IsIPv6(acptr) ? "6" : "",
                   IsTLS(acptr) ? "z" : "", cli_info(acptr));
   }
+  
+  assign_sid(acptr);
+  
   return 0;
 }

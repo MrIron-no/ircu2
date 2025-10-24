@@ -93,6 +93,7 @@
 #include "match.h"
 #include "msg.h"
 #include "numeric.h"
+#include "s_bsd.h"
 #include "s_user.h"
 #include "s_serv.h"
 #include "send.h"
@@ -128,9 +129,18 @@ static void dump_map(struct Client *cptr, struct Client *server, char *mask, int
       chr = "!";
     else
       chr = "";
+#ifdef DEBUGMODE
+    char server_name_with_sid[256];
+    sprintf(server_name_with_sid, "%s [sid=%d]", cli_name(server), 
+              cli_serv(server) ? cli_serv(server)->sid : 0);
+    send_reply(cptr, RPL_MAP, prompt, chr, server_name_with_sid,
+               lag, (server == &me) ? UserStats.local_clients :
+                                      cli_serv(server)->clients);
+#else
     send_reply(cptr, RPL_MAP, prompt, chr, cli_name(server),
                lag, (server == &me) ? UserStats.local_clients :
                                       cli_serv(server)->clients);
+#endif
   }
   if (prompt_length > 0)
   {
@@ -181,7 +191,7 @@ int m_map(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (parc < 2)
     parv[1] = "*";
   dump_map(sptr, &me, parv[1], 0);
-  send_reply(sptr, RPL_MAPEND);
+  send_reply(sptr, RPL_MAPEND, "MAP");
 
   return 0;
 }
@@ -192,7 +202,143 @@ int mo_map(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     parv[1] = "*";
 
   dump_map(sptr, &me, parv[1], 0);
-  send_reply(sptr, RPL_MAPEND);
+  send_reply(sptr, RPL_MAPEND, "MAP");
+
+  return 0;
+}
+
+/** Display secure path groups in a tree format similar to MAP.
+ * Shows servers grouped by their secure path IDs (sid).
+ * @param cptr Client requesting the secure map
+ * @param server Server to start displaying from
+ * @param mask Server name mask to filter by
+ * @param prompt_length Current indentation level
+ * @param current_sid Current secure group ID being displayed
+ */
+static void dump_secure_map(struct Client *cptr, struct Client *server, char *mask, int prompt_length, int current_sid)
+{
+  const char *chr;
+  static char prompt[64];
+  struct DLink *lp;
+  char *p = prompt + prompt_length;
+  int cnt = 0;
+  int server_sid;
+  
+  *p = '\0';
+  
+  server_sid = cli_serv(server)->sid;
+  
+  /* Only display the server if it matches the current secure group */
+  if (server_sid == current_sid) {
+    if (prompt_length > 60)
+      send_reply(cptr, RPL_MAPMORE, prompt, cli_name(server));
+    else
+    {
+      char lag[512];
+      
+      if (cli_serv(server)->lag > 10000)
+        lag[0] = 0;
+      else if (cli_serv(server)->lag < 0)
+        strcpy(lag, "(0s)");
+      else
+        sprintf(lag, "(%is)", cli_serv(server)->lag);
+        
+      if (IsBurst(server))
+        chr = "*";
+      else if (IsBurstAck(server))
+        chr = "!";
+      else
+        chr = "";
+        
+      send_reply(cptr, RPL_MAP, prompt, chr, cli_name(server),
+                 lag, (server == &me) ? UserStats.local_clients :
+                                        cli_serv(server)->clients);
+    }
+  }
+  
+  if (prompt_length > 0)
+  {
+    p[-1] = ' ';
+    if (p[-2] == '`')
+      p[-2] = ' ';
+  }
+  
+  if (prompt_length > 60)
+    return;
+    
+  strcpy(p, "|-");
+  
+  /* Count downlinks in the same secure group */
+  if ((IsServer(server) || IsMe(server)) && cli_serv(server)) {
+    for (lp = cli_serv(server)->down; lp; lp = lp->next) {
+      int down_sid = 0;
+      if ((IsServer(lp->value.cptr) || IsMe(lp->value.cptr)) && cli_serv(lp->value.cptr))
+        down_sid = cli_serv(lp->value.cptr)->sid;
+        
+      if (down_sid == current_sid)
+        cnt++;
+    }
+  }
+  
+  /* Display all downlinks that are in the same secure group */
+  if ((IsServer(server) || IsMe(server)) && cli_serv(server)) {
+    for (lp = cli_serv(server)->down; lp; lp = lp->next) {
+      int down_sid = 0;
+      if ((IsServer(lp->value.cptr) || IsMe(lp->value.cptr)) && cli_serv(lp->value.cptr))
+        down_sid = cli_serv(lp->value.cptr)->sid;
+        
+      /* Only show downlinks that are in the same secure group */
+      if (down_sid == current_sid) {
+        if (--cnt == 0)
+          *p = '`';
+        dump_secure_map(cptr, lp->value.cptr, mask, prompt_length + 2, current_sid);
+      }
+    }
+  }
+  
+  if (prompt_length > 0)
+    p[-1] = '-';
+}
+
+
+/*
+ * m_smap - secure map message handler
+ * Shows network topology grouped by secure paths
+ *
+ * parv[0] = sender prefix
+ * parv[1] = server mask (optional)
+ */
+int m_smap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+ 
+  if (parc < 2)
+    parv[1] = "*";
+    
+  /* Show only the local server's secure group */
+  int local_sid = cli_serv(&me)->sid;
+  if (local_sid > 0) {
+    dump_secure_map(sptr, &me, parv[1], 0, local_sid);
+  }
+  send_reply(sptr, RPL_MAPEND, "SMAP");
+
+  return 0;
+}
+
+int mo_smap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  if (parc < 2)
+    parv[1] = "*";
+
+  /* Show only the local server's secure group */
+  int local_sid = cli_serv(&me)->sid;
+  if (local_sid > 0) {
+    sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :=== Secure Path Group %d (TLS) ===", sptr, local_sid);
+    dump_secure_map(sptr, &me, parv[1], 0, local_sid);
+  } else {
+    sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :=== Non-TLS Servers (sid=0) ===", sptr);
+    dump_secure_map(sptr, &me, parv[1], 0, 0);
+  }
+  send_reply(sptr, RPL_MAPEND, "SMAP");
 
   return 0;
 }

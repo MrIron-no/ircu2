@@ -136,6 +136,10 @@ struct Client;
 #define TOK_MAP                 "MAP"
 #define CMD_MAP			MSG_MAP, TOK_MAP
 
+#define MSG_SMAP                "SMAP"          /* SMAP */
+#define TOK_SMAP                "SMAP"
+#define CMD_SMAP			MSG_SMAP, TOK_SMAP
+
 #define MSG_PING                "PING"          /* PING */
 #define TOK_PING                "G"
 #define CMD_PING		MSG_PING, TOK_PING

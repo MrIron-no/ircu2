@@ -66,7 +66,7 @@ static Numeric replyTable[] = {
 /* 016 */
   { RPL_MAPMORE, ":%s%s --> *more*", "016" },
 /* 017 */
-  { RPL_MAPEND, ":End of /MAP", "017" },
+  { RPL_MAPEND, ":End of /%s", "017" },
 /* 018 */
   { 0 },
 /* 019 */
