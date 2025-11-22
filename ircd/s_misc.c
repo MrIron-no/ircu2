@@ -27,6 +27,8 @@
 #include "config.h"
 
 #include "s_misc.h"
+#include "batch.h"
+#include "msg_tag.h"
 #include "IPcheck.h"
 #include "channel.h"
 #include "client.h"
@@ -213,7 +215,7 @@ const char* get_client_name(const struct Client* sptr, int showip)
  * @param comment The QUIT comment to send.
  */
 /* Rewritten by Run - 24 sept 94 */
-static void exit_one_client(struct Client* bcptr, const char* comment)
+static void exit_one_client(struct Client* bcptr, const char* comment, const char *batch_id)
 {
   struct SLink *lp;
   struct Ban *bp;
@@ -251,7 +253,8 @@ static void exit_one_client(struct Client* bcptr, const char* comment)
      * that the client can show the "**signoff" message).
      * (Note: The notice is to the local clients *only*)
      */
-    sendcmdto_common_channels_butone(bcptr, CMD_QUIT, NULL, ":%s", comment);
+    struct MsgTag *tags = batch_id ? msg_tag_build_batch(batch_id) : NULL;
+    sendcmdto_common_channels_butone(bcptr, CMD_QUIT, NULL, tags, ":%s", comment);
 
     remove_user_from_all_channels(bcptr);
 
@@ -345,7 +348,7 @@ static void exit_one_client(struct Client* bcptr, const char* comment)
  * @param sptr source who thought that this was a good idea
  * @param comment comment sent as sign off message to local clients
  */
-static void exit_downlinks(struct Client *cptr, struct Client *sptr, char *comment)
+static void exit_downlinks(struct Client *cptr, struct Client *sptr, char *comment, const char *batch_id)
 {
   struct Client *acptr;
   struct DLink *next;
@@ -359,15 +362,15 @@ static void exit_downlinks(struct Client *cptr, struct Client *sptr, char *comme
     next = lp->next;
     acptr = lp->value.cptr;
     /* Remove the downlinks and client of the downlink */
-    exit_downlinks(acptr, sptr, comment);
+    exit_downlinks(acptr, sptr, comment, batch_id);
     /* Remove the downlink itself */
-    exit_one_client(acptr, cli_name(&me));
+    exit_one_client(acptr, cli_name(&me), batch_id);
   }
   /* Remove all clients of this server */
   acptrp = cli_serv(cptr)->client_list;
   for (i = 0; i <= cli_serv(cptr)->nn_mask; ++acptrp, ++i) {
     if (*acptrp)
-      exit_one_client(*acptrp, comment);
+      exit_one_client(*acptrp, comment, batch_id);
   }
 }
 
@@ -418,6 +421,9 @@ int exit_client(struct Client *cptr,
   int was_server = IsServer(victim);
 
   char comment1[HOSTLEN + HOSTLEN + 2];
+  char *batch_id = NULL;
+  struct Client *local_user;
+  
   assert(killer);
   if (MyConnect(victim))
   {
@@ -526,6 +532,18 @@ int exit_client(struct Client *cptr,
 			   get_client_name(killer, HIDE_IP));
     sendto_opmask_butone(0, SNO_NETWORK, "Net break: %C %C (%s)",
 			 cli_serv(victim)->up, victim, comment);
+    
+    /* This is a netsplit (server disconnect) - all server disconnects
+     * cause users on that server and its downlinks to quit, so we should
+     * batch the QUIT messages whether it's a local or remote server.
+     */
+    /* Generate batch ID for this netsplit ONCE at the top level */
+    batch_id = batch_generate_id();
+    
+    /* Register batch metadata - send_tags() will automatically send batch start
+     * when it first sees a message with this batch_id
+     */
+    batch_register(batch_id, BATCH_TYPE_NETSPLIT, comment1);
   }
 
   /*
@@ -544,8 +562,17 @@ int exit_client(struct Client *cptr,
   }
   /* Then remove the client structures */
   if (IsServer(victim))
-    exit_downlinks(victim, killer, comment1);
-  exit_one_client(victim, comment);
+    exit_downlinks(victim, killer, comment1, batch_id);
+  exit_one_client(victim, comment, batch_id);
+  
+  /* Send batch end to all affected clients AFTER all quits are processed
+   * We match against the stored batch_id to identify which clients received
+   * batch start. This is more robust than using a sentalong marker and
+   * supports nested batches in the future.
+   */
+  if (IsServer(victim) && batch_id) {
+    batch_complete(batch_id);
+  }
 
   if (was_server)
     compute_secure_path_groups();
