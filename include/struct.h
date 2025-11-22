@@ -66,6 +66,7 @@ struct Server {
   char *last_error_msg;         /**< Allocated memory with last message receive with an ERROR */
   char by[NICKLEN + 1];         /**< Numnick of client who requested the link */
   int  sid;                     /**< Secure group ID - servers with secure paths share same sid */
+  char *batch_id;               /**< Batch ID for IRCv3 batching (NULL if none) */
 };
 
 /** Describes a user on the network. */
