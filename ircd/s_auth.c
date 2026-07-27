@@ -42,6 +42,7 @@
 #include "ircd.h"
 #include "ircd_alloc.h"
 #include "ircd_chattr.h"
+#include "hash.h"
 #include "ircd_events.h"
 #include "ircd_features.h"
 #include "ircd_log.h"
@@ -2078,6 +2079,57 @@ static int iauth_cmd_username_bad(struct IAuth *iauth, struct Client *cli,
   return AR_AUTH_PENDING;
 }
 
+/** Set client's nickname from iauth.
+ * @param[in] iauth Active IAuth session.
+ * @param[in] cli Client referenced by command.
+ * @param[in] parc Number of parameters (1).
+ * @param[in] params New nickname for client.
+ * @return Zero (auth_set_nick() handles registration progress).
+ */
+static int iauth_cmd_nick_forced(struct IAuth *iauth, struct Client *cli,
+				 int parc, char **params)
+{
+  struct AuthRequest *auth;
+  struct Client *acptr;
+  char nick[NICKLEN + 2];
+  char *tilde;
+
+  if (EmptyString(params[0])) {
+    sendto_iauth(cli, "E Missing :Missing nickname parameter");
+    return 0;
+  }
+
+  auth = cli_auth(cli);
+  assert(auth != NULL);
+
+  ircd_strncpy(nick, params[0], NICKLEN);
+  if ((tilde = strchr(nick, '~')))
+    *tilde = '\0';
+  if (!do_nick_name(nick)) {
+    sendto_iauth(cli, "E Invalid :Invalid nickname [%s]", params[0]);
+    return 0;
+  }
+
+  if (isNickJuped(nick)) {
+    sendto_iauth(cli, "E Invalid :Nickname is juped [%s]", nick);
+    return 0;
+  }
+
+  acptr = FindClient(nick);
+  if (acptr && acptr != cli) {
+    sendto_iauth(cli, "E InUse :Nickname in use [%s]", nick);
+    return 0;
+  }
+
+  if (cli_name(cli)[0])
+    hRemClient(cli);
+  strcpy(cli_name(cli), nick);
+  hAddClient(cli);
+
+  auth_set_nick(auth, nick);
+  return 0;
+}
+
 /** Set client's hostname.
  * @param[in] iauth Active IAuth session.
  * @param[in] cli Client referenced by command.
@@ -2441,6 +2493,7 @@ static void iauth_parse(struct IAuth *iauth, char *message)
   case 'o': handler = iauth_cmd_username_forced; has_cli = 1; break;
   case 'U': handler = iauth_cmd_username_good; has_cli = 1; break;
   case 'u': handler = iauth_cmd_username_bad; has_cli = 1; break;
+  case 'f': handler = iauth_cmd_nick_forced; has_cli = 1; break;
   case 'N': handler = iauth_cmd_hostname; has_cli = 1; break;
   case 'I': handler = iauth_cmd_ip_address; has_cli = 1; break;
   case 'M': handler = iauth_cmd_usermode; has_cli = 1; break;
