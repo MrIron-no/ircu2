@@ -383,7 +383,8 @@ badid:
 int auth_set_account(struct AuthRequest *auth, const char *account_info)
 {
   struct Client *sptr;
-  char *account_copy = NULL, *account = NULL, *id_str = NULL, *flags_str = NULL, *extra = NULL;
+  char *account_copy = NULL, *account = NULL, *id_str = NULL, *flags_str = NULL;
+  char *first_word, *rest, *extra = NULL, *p;
 
   assert(auth != NULL);
 
@@ -391,15 +392,38 @@ int auth_set_account(struct AuthRequest *auth, const char *account_info)
   if (!cli_user(sptr) || EmptyString(account_info))
     return 1;
 
-  /* Parse account information: username:id:flags */
+  /*
+   * Payload shape (whitespace-separated):
+   *   <account>[:<id>[:<flags>[:...]]] [+x [...]]
+   *
+   * Only the first three colon fields of the first word are used locally
+   * (account / id / flags). Further colon fields and further words after
+   * the first extra token are ignored for local parsing but the original
+   * string is still forwarded to iauth in full.
+   */
   DupString(account_copy, account_info);
   if (!account_copy)
     return 1;
 
-  account = strtok(account_copy, ":");
+  first_word = account_copy;
+  rest = strchr(account_copy, ' ');
+  if (rest) {
+    *rest++ = '\0';
+    while (*rest == ' ')
+      rest++;
+    if (*rest) {
+      /* First extra token only (e.g. "+x"); ignore friends. */
+      extra = rest;
+      p = strchr(extra, ' ');
+      if (p)
+        *p = '\0';
+    }
+  }
+
+  account = strtok(first_word, ":");
   id_str = strtok(NULL, ":");
-  flags_str = strtok(NULL, " ");
-  extra = strtok(NULL, "");
+  flags_str = strtok(NULL, ":");
+  /* strtok(NULL, ":") would be ":something"; intentionally unused. */
 
   /* A malformed reply may contain no account name at all. */
   if (EmptyString(account)) {
@@ -421,12 +445,15 @@ int auth_set_account(struct AuthRequest *auth, const char *account_info)
 
   SetAccount(sptr);
 
-  /* Check for +x flag (host hiding) */
-  if (extra && strstr(extra, "+x") && feature_bool(FEAT_HOST_HIDING)) {
+  /*
+   * Second word is umode-like if it starts with '+'.  Presence of 'x'
+   * requests host hiding (e.g. "+x", "+xo"); a bare "YRS" is ignored.
+   */
+  if (extra && *extra == '+' && strchr(extra, 'x')
+      && feature_bool(FEAT_HOST_HIDING))
     SetHiddenHost(sptr);
-  }
 
-  sendto_iauth(sptr, "A %s", cli_user(sptr)->account);
+  sendto_iauth(sptr, "A %s", account_info);
   MyFree(account_copy);
   return 0;
 }
