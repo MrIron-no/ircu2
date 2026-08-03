@@ -403,7 +403,9 @@ States: REGISTER, HURRY
 Next State: -
 Comments: Indicates that the iauth instance wants the client to use
   the specified nickname during registration, even if the client
-  requested a different one.
+  requested a different one.  If the nickname is missing, invalid,
+  juped, or already in use, the server reports an E error and does
+  not complete registration until iauth sends a subsequent valid f.
 
 N - Client Hostname
 Syntax: N <id> <remoteip> <remoteport> <hostname>

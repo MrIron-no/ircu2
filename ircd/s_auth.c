@@ -87,6 +87,7 @@ enum AuthRequestFlag {
     AR_NEEDS_NICK,      /**< user must send NICK command */
     AR_LAST_SCAN = AR_NEEDS_NICK, /**< maximum flag to scan through */
     AR_IAUTH_PENDING,   /**< iauth request sent, waiting for response */
+    AR_IAUTH_NEEDS_NICK,/**< iauth f failed; wait for a valid forced nick */
     AR_IAUTH_HURRY,     /**< we told iauth to hurry up */
     AR_IAUTH_USERNAME,  /**< iauth sent a username (preferred or forced) */
     AR_IAUTH_FUSERNAME, /**< iauth sent a forced username */
@@ -447,7 +448,7 @@ int auth_set_account(struct AuthRequest *auth, const char *account_info)
 
   /*
    * Second word is umode-like if it starts with '+'.  Presence of 'x'
-   * requests host hiding (e.g. "+x", "+xo"); a bare "YRS" is ignored.
+   * requests host hiding (e.g. "+x", "+xo").
    */
   if (extra && *extra == '+' && strchr(extra, 'x')
       && feature_bool(FEAT_HOST_HIDING))
@@ -632,6 +633,15 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
   }
   else
     FlagSet(&auth->flags, AR_IAUTH_HURRY);
+
+  /* A failed iauth "f" must be followed by a valid forced nick before
+   * registration can complete (even if iauth already sent D). */
+  if (FlagHas(&auth->flags, AR_IAUTH_NEEDS_NICK))
+  {
+    Debug((DEBUG_INFO, "Auth %p [%d] waiting for iauth forced nick", auth,
+           cli_fd(auth->client)));
+    return 0;
+  }
 
   res = 0;
   if (IsUserPort(auth->client) || IsWebsocketPort(auth->client))
@@ -2121,38 +2131,47 @@ static int iauth_cmd_nick_forced(struct IAuth *iauth, struct Client *cli,
   char nick[NICKLEN + 2];
   char *tilde;
 
+  auth = cli_auth(cli);
+  assert(auth != NULL);
+
   if (EmptyString(params[0])) {
+    FlagSet(&auth->flags, AR_IAUTH_NEEDS_NICK);
     sendto_iauth(cli, "E Missing :Missing nickname parameter");
     return 0;
   }
-
-  auth = cli_auth(cli);
-  assert(auth != NULL);
 
   ircd_strncpy(nick, params[0], NICKLEN);
   if ((tilde = strchr(nick, '~')))
     *tilde = '\0';
   if (!do_nick_name(nick)) {
+    FlagSet(&auth->flags, AR_IAUTH_NEEDS_NICK);
     sendto_iauth(cli, "E Invalid :Invalid nickname [%s]", params[0]);
     return 0;
   }
 
   if (isNickJuped(nick)) {
+    FlagSet(&auth->flags, AR_IAUTH_NEEDS_NICK);
     sendto_iauth(cli, "E Invalid :Nickname is juped [%s]", nick);
     return 0;
   }
 
   acptr = FindClient(nick);
   if (acptr && acptr != cli) {
+    FlagSet(&auth->flags, AR_IAUTH_NEEDS_NICK);
     sendto_iauth(cli, "E InUse :Nickname in use [%s]", nick);
     return 0;
   }
+
+  /* Tell the client about the assignment before renaming locally. */
+  if (cli_name(cli)[0] && 0 != ircd_strcmp(cli_name(cli), nick))
+    sendcmdto_one(cli, CMD_NICK, cli, ":%s", nick);
 
   if (cli_name(cli)[0])
     hRemClient(cli);
   strcpy(cli_name(cli), nick);
   hAddClient(cli);
 
+  FlagClr(&auth->flags, AR_IAUTH_NEEDS_NICK);
   auth_set_nick(auth, nick);
   return 0;
 }
@@ -2574,9 +2593,11 @@ static void iauth_parse(struct IAuth *iauth, char *message)
       sendto_iauth(NULL, "E Gone :[%s %s %s]", params[0], params[1],
 		   params[2]);
     else if ((!(auth = cli_auth(cli)) ||
-	      !FlagHas(&auth->flags, AR_IAUTH_PENDING)) &&
+	      (!FlagHas(&auth->flags, AR_IAUTH_PENDING) &&
+	       !(handler == iauth_cmd_nick_forced &&
+		 FlagHas(&auth->flags, AR_IAUTH_NEEDS_NICK)))) &&
 	     has_cli == 1)
-      /* Client is done with IAuth checks. */
+      /* Client is done with IAuth checks (unless waiting for a valid f). */
       sendto_iauth(cli, "E Done :[%s %s %s]", params[0], params[1], params[2]);
     else {
       struct irc_sockaddr addr;
