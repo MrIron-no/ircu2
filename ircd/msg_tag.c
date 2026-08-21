@@ -339,7 +339,8 @@ msg_tag_key_federated(const char *key)
 {
   if (!key)
     return 0;
-  return !ircd_strcmp(key, "time") || !ircd_strcmp(key, "batch");
+  return !ircd_strcmp(key, "time") || !ircd_strcmp(key, "batch")
+    || !ircd_strcmp(key, "label");
 }
 
 int
@@ -527,6 +528,28 @@ msg_tag_format(char *buf, size_t buflen, struct Client *to,
       if (!msg_tag_client_allowed(tag->key))
         continue;
       pos = msg_tag_append(pos, end, &wrote, tag->key, tag->value);
+      if (!pos)
+        return 0;
+    }
+  }
+
+  /* IRCv3 labeled-response / batch: these are only ever synthesized
+   * server-side (see label_capture_finish() in send.c), never taken
+   * verbatim from client input, so no further validation is needed here. */
+  if (CapHas(cli_active(to), CAP_LABELED_RESPONSE)) {
+    const struct MsgTag *label_tag = msg_tag_find(tags, "label");
+
+    if (label_tag) {
+      pos = msg_tag_append(pos, end, &wrote, "label", label_tag->value);
+      if (!pos)
+        return 0;
+    }
+  }
+  if (CapHas(cli_active(to), CAP_BATCH)) {
+    const struct MsgTag *batch_tag = msg_tag_find(tags, "batch");
+
+    if (batch_tag) {
+      pos = msg_tag_append(pos, end, &wrote, "batch", batch_tag->value);
       if (!pos)
         return 0;
     }

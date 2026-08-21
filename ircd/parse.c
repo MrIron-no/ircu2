@@ -24,6 +24,7 @@
 #include "config.h"
 
 #include "parse.h"
+#include "capab.h"
 #include "client.h"
 #include "channel.h"
 #include "handlers.h"
@@ -136,6 +137,24 @@ struct Message msgtab[] = {
     0, MAXPARA, MFLG_SLOW, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_tagmsg, ms_tagmsg, mo_tagmsg, m_ignore }
+  },
+  {
+    /* BATCH is server-generated (labeled-response flush, see send.c) or
+     * an S2S relay of one (m_batch.c, addressed by target numnick, see
+     * sendcmdto_one_hunted()/parse_server()'s labeled-response wrapper).
+     * Unavailable to clients -- clients never send BATCH. */
+    MSG_BATCH_CMD,
+    TOK_BATCH,
+    0, MAXPARA, 0, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_ignore, m_ignore, ms_batch, m_ignore, m_ignore }
+  },
+  {
+    MSG_ACK,
+    TOK_ACK,
+    0, MAXPARA, 0, 0, NULL,
+    /* UNREG, CLIENT, SERVER, OPER, SERVICE */
+    { m_ignore, m_ignore, ms_ack, m_ignore, m_ignore }
   },
   {
     MSG_WALLCHOPS,
@@ -898,6 +917,7 @@ parse_client(struct Client *cptr, char *buffer, char *bufend)
   int             i;
   int             tag_len = 0;
   int             paramcount;
+  const char     *request_label = NULL;
   struct Message* mptr;
   MessageHandler  handler = 0;
 
@@ -933,8 +953,15 @@ parse_client(struct Client *cptr, char *buffer, char *bufend)
     return -1;
   }
 
-  if (!IsServer(cptr))
+  if (!IsServer(cptr)) {
+    struct MsgTag *label_tag = msg_tag_find(current_tags, "label");
+
+    if (label_tag && label_tag->value && *label_tag->value
+        && strlen(label_tag->value) <= LABEL_VALUE_MAX)
+      request_label = label_tag->value;
+
     current_tags = msg_tag_filter_client(current_tags);
+  }
 
   if (*ch == ':')               /* Is any client doing this ? */
   {
@@ -1050,7 +1077,80 @@ parse_client(struct Client *cptr, char *buffer, char *bufend)
       handler != m_ping && handler != m_ignore)
     cli_user(from)->last = CurrentTime;
 
-  return (*handler) (cptr, from, i, para);
+  {
+    /* IRCv3 labeled-response depends on batch (both caps required, per
+     * spec).  Defer this command's output to cptr and decide ACK / single
+     * tag / BATCH-wrap once the handler returns -- unless the handler
+     * left an async continuation running (LIST), in which case leave the
+     * capture parked for whoever will actually finish it later. */
+    int labeled = request_label
+      && CapHas(cli_active(cptr), CAP_LABELED_RESPONSE)
+      && CapHas(cli_active(cptr), CAP_BATCH);
+    /* A local copy of the ref, not the struct LabelCapture* itself: the
+     * handler may already have finished or aborted this capture on its
+     * own before returning (e.g. LIST overflowing the 500-line/64KB
+     * capture safety valve mid-dispatch, which releases it immediately
+     * and keeps going uncaptured) -- at which point the node is freed.
+     * label_capture_finish()/reopen() below look it up by this string and
+     * no-op harmlessly if it's already gone, but touching the pointer
+     * itself here would be a use-after-free. */
+    char ref[16];
+    /* cli_listing(cptr) is per-connection state that can already be
+     * non-NULL *before* this command even runs -- a LIST from an earlier,
+     * unrelated command may still be parked mid-pagination. Snapshotting
+     * it beforehand lets the check below tell "this handler itself just
+     * started/replaced the listing" (pointer changed) apart from "a
+     * listing merely happened to already be running" (pointer
+     * unchanged): only the former means this capture belongs to the
+     * listing. Getting this wrong misroutes an unrelated labeled
+     * command's capture into someone else's LIST batch, and orphans
+     * whatever ref was already parked there (its capture is never
+     * finished/reopened again). */
+    struct ListingArgs *listing_before = NULL;
+    int rc;
+
+    if (labeled) {
+      struct LabelCapture *lc = label_capture_start(cptr, request_label);
+      ircd_strncpy(ref, lc->ref, sizeof(ref) - 1);
+      ref[sizeof(ref) - 1] = '\0';
+      listing_before = cli_listing(cptr);
+    }
+
+    rc = (*handler) (cptr, from, i, para);
+
+    if (labeled) {
+      /* Always close the window first: safe even if the handler just
+       * freed cptr (CPTR_KILLED), since this touches no Client. Leaving
+       * it open would let a later, unrelated send to a *different* client
+       * that happens to reuse cptr's freed memory get mistakenly
+       * captured here. */
+      label_capture_close_window();
+
+      if (rc == CPTR_KILLED) {
+        /* cptr was freed by its own handler (e.g. a labeled QUIT/KILL/
+         * self-GLINE) -- must not be dereferenced again. Cleanup of any
+         * capture left on it happens in exit_one_client(), while cptr
+         * was still valid memory, before free_client() ran. */
+      } else if (cli_listing(cptr) && cli_listing(cptr) != listing_before) {
+        /* This handler itself left a *new* async continuation running
+         * (e.g. LIST, which resumes later from the event loop via
+         * list_next_channels(), well outside this call). Remember which
+         * capture it's continuing on behalf of; list_next_channels()
+         * (natural completion) or an interrupting LIST/STOP in m_list.c
+         * (superseded early) will finish it later. If the capture
+         * already ended mid-dispatch (overflow, above), this ref no
+         * longer resolves to anything -- reopen()/finish() on it later
+         * are harmless no-ops, and the (now uncaptured) rest of the
+         * listing is correctly left unlabeled. */
+        ircd_strncpy(cli_listing(cptr)->label_ref, ref,
+                     sizeof(cli_listing(cptr)->label_ref) - 1);
+      } else {
+        label_capture_finish(cptr, ref);
+      }
+    }
+
+    return rc;
+  }
 }
 
 /** Parse a line of data from a server.
@@ -1358,5 +1458,75 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
     return (do_numeric(numeric, (*buffer != ':'), cptr, from, i, para));
   mptr->count++;
 
-  return (*mptr->handlers[cli_handler(cptr)]) (cptr, from, i, para);
+  {
+    /* IRCv3 labeled-response over S2S: a peer also running
+     * labeled-response may have propagated @label= on a command it
+     * forwarded to us via hunt_server_cmd() (sendcmdto_one_hunted(),
+     * send.c), because *we* are the one who will actually answer it.
+     * If so, wrap this dispatch the same way parse_client() wraps a
+     * local labeled command -- except the capture belongs to `from`,
+     * the *original* (remote) requester, not a genuine local socket;
+     * label_capture_start()/finish() key off cli_from(from), which
+     * aliases the shared link Connection, so multiple remote users
+     * behind the same link can each have their own outstanding capture
+     * at once, disambiguated by ref as usual.
+     *
+     * Excluded: BATCH/ACK themselves (m_batch.c) are the *relay* for a
+     * capture some other server already decided the shape of, not a
+     * command whose own reply needs capturing here. */
+    const char *inbound_label = NULL;
+    char ref[16];
+    int rc;
+
+    if (feature_bool(FEAT_NETWORK_FEATURES) && mptr->tok
+        && strcmp(mptr->tok, TOK_BATCH) && strcmp(mptr->tok, TOK_ACK)) {
+      struct MsgTag *label_tag = msg_tag_find(current_tags, "label");
+
+      if (label_tag && label_tag->value && *label_tag->value
+          && strlen(label_tag->value) <= LABEL_VALUE_MAX)
+        inbound_label = label_tag->value;
+    }
+
+    if (inbound_label) {
+      struct LabelCapture *lc;
+      /* Strip "label" out of current_tags before the handler runs: it's
+       * ambient for the rest of this dispatch (parse_tags(), read by
+       * every ctx==NULL send along the way, including each captured
+       * line's own snapshot in label_capture_append()) and must not
+       * survive as a *second*, redundant source of "label" once
+       * label_capture_finish() explicitly attaches it to the BATCH open
+       * (or single-line reply) itself -- otherwise the batch=<ref>
+       * body lines wrongly carry label=<value> too, since msg_tag_
+       * format()/_s2s() check for "label" and "batch" independently.
+       * Mirrors parse_client()'s msg_tag_filter_client() call, but
+       * targeted: other tags (e.g. "time") are left alone. */
+      struct MsgTag *stripped = NULL, **tail = &stripped, *t;
+
+      for (t = current_tags; t; t = t->next) {
+        if (!ircd_strcmp(t->key, "label"))
+          continue;
+        *tail = t;
+        tail = &t->next;
+      }
+      *tail = NULL;
+      current_tags = stripped;
+
+      lc = label_capture_start(from, inbound_label);
+      ircd_strncpy(ref, lc->ref, sizeof(ref) - 1);
+      ref[sizeof(ref) - 1] = '\0';
+    }
+
+    rc = (*mptr->handlers[cli_handler(cptr)]) (cptr, from, i, para);
+
+    if (inbound_label) {
+      /* Always close the window first: safe even if the handler freed
+       * `from` (CPTR_KILLED), since this touches no Client. */
+      label_capture_close_window();
+
+      if (rc != CPTR_KILLED)
+        label_capture_finish(from, ref);
+    }
+
+    return rc;
+  }
 }

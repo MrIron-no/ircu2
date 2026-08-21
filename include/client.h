@@ -59,6 +59,39 @@ struct Whowas;
 struct hostent;
 struct Privs;
 struct AuthRequest;
+struct LabelDeferred; /* opaque; defined in send.c */
+
+/** One outstanding labeled-response capture for a connection.
+ *
+ * A connection may have several of these at once (e.g. a parked LIST and
+ * an unrelated command both labeled). Each is independently identified by
+ * \a ref, which -- besides being the eventual client-facing BATCH
+ * reference -- doubles as the S2S correlation key when a capture is
+ * waiting on a remote server's reply.
+ *
+ * Briefly "active" (the current recipient of anything the connection's
+ * owner sends) during a synchronous command dispatch or a single
+ * continuation tick (e.g. one call to list_next_channels()); "parked"
+ * the rest of the time, waiting for whatever will eventually finish it.
+ */
+struct LabelCapture {
+  struct LabelCapture *next;
+  char ref[16];
+  char value[LABEL_VALUE_MAX + 1];
+  struct LabelDeferred *head;
+  struct LabelDeferred **tail;
+  unsigned int count;
+  unsigned int bytes;
+  /** If set, this capture streams: its BATCH open line has already been
+   * emitted, and every line sent while it's active goes straight to the
+   * wire tagged batch=ref instead of being deferred into head/tail (so
+   * count/bytes and the capture-overflow safety valve do not apply to
+   * it). Finishing it only emits the BATCH close. For a response that's
+   * unconditionally multi-line and may span many event-loop ticks (LIST)
+   * rather than one where the eventual line count decides ACK vs.
+   * single-line vs. BATCH. See label_capture_stream_active() in send.c. */
+  int streaming;
+};
 
 /*
  * Structures
@@ -230,6 +263,7 @@ struct Connection
                                         from. */
   struct SLink*       con_confs;     /**< Associated configuration records. */
   struct ListingArgs* con_listing;   /**< Current LIST status. */
+  struct LabelCapture* con_labelcap; /**< Outstanding labeled-response captures. */
   unsigned int        con_max_sendq; /**< cached max send queue for client */
   unsigned int        con_max_flood; /**< cached client flood limit */
   unsigned int        con_ping_freq; /**< cached ping freq */
@@ -393,6 +427,8 @@ struct Client {
 #define cli_handler(cli)	con_handler(cli_connect(cli))
 /** Get LIST status for client. */
 #define cli_listing(cli)	con_listing(cli_connect(cli))
+/** Get outstanding labeled-response captures for client. */
+#define cli_labelcap(cli)	con_labelcap(cli_connect(cli))
 /** Get cached max SendQ for client. */
 #define cli_max_sendq(cli)	con_max_sendq(cli_connect(cli))
 /** Get cached flood limit for client. */
@@ -478,6 +514,8 @@ struct Client {
 #define con_handler(con)	((con)->con_handler)
 /** Get the LIST status for the connection. */
 #define con_listing(con)	((con)->con_listing)
+/** Get the outstanding labeled-response captures for the connection. */
+#define con_labelcap(con)	((con)->con_labelcap)
 /** Get the maximum permitted SendQ size for the connection. */
 #define con_max_sendq(con)	((con)->con_max_sendq)
 /** Get the flood limit for the connection. */

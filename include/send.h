@@ -33,6 +33,66 @@ extern void send_buffer(struct Client* to, struct Client* from, struct MsgBuf* b
                         int prio, const struct MsgTagCtx *ctx,
                         struct TagSendCache *cache);
 
+/* IRCv3 labeled-response: a connection may have several outstanding
+ * captures at once (struct LabelCapture, see client.h), each independently
+ * identified by its ref. At most one is ever "active" (the current
+ * recipient of anything cptr sends) at a time, for the duration of a
+ * synchronous command dispatch or a single continuation tick; the rest
+ * are parked, waiting for whatever will eventually finish them (a later
+ * list_next_channels() tick, or -- once S2S support lands -- a matching
+ * inbound batch=ref close from a remote server). */
+
+/* Create a new capture for \a cptr, push it onto its outstanding list, and
+ * mark it active. Returns the new capture (owned by \a cptr's list; valid
+ * until finished/aborted/dropped by label_capture_client_gone()). */
+extern struct LabelCapture *label_capture_start(struct Client *cptr,
+                                                const char *label);
+/* Convert the capture currently active for \a cptr into a streaming one
+ * and emit its BATCH open line immediately, instead of deferring the
+ * ACK/single-line/BATCH decision to finish() -- for a response that's
+ * unconditionally multi-line and may span many event-loop ticks (LIST).
+ * Must be called with a capture already active for cptr. Returns the ref
+ * to remember (e.g. into ListingArgs.label_ref), or NULL if there was no
+ * active capture (the command wasn't labeled). */
+extern const char *label_capture_stream_active(struct Client *cptr);
+/* Resume an existing parked capture (by ref) as the active one for a new
+ * continuation tick. No-op if not found (e.g. it was already dropped by
+ * label_capture_client_gone()). */
+extern void label_capture_reopen(struct Client *cptr, const char *ref);
+/* End the current dispatch/tick: nothing sent to a client is captured
+ * again until label_capture_start()/reopen() is called anew. Always safe
+ * to call (touches no Client), so it can run unconditionally even when
+ * the handler that just ran may have freed cptr (CPTR_KILLED). */
+extern void label_capture_close_window(void);
+/* Snapshot/restore the active window around a temporary redirect (e.g.
+ * reopening a *different* capture to fold one more line into it before
+ * finishing it) -- unlike finish()/abort(), which only protect their own
+ * internal replay sends, this covers sends the caller makes itself
+ * before invoking finish()/abort(). See m_list.c's superseded-listing
+ * handling for the motivating case. */
+extern void label_capture_save_active(struct Client **client_out,
+				      struct LabelCapture **node_out);
+extern void label_capture_restore_active(struct Client *client,
+					 struct LabelCapture *node);
+
+/* Normal completion: decide ACK / single-tag / BATCH-wrap for the capture
+ * \a ref on \a cptr based on how many lines were produced, release them
+ * labeled, and free the capture. Only valid when the response is known to
+ * be complete. Call label_capture_close_window() first. */
+extern void label_capture_finish(struct Client *cptr, const char *ref);
+/* The response for capture \a ref could not be honestly labeled as
+ * complete (e.g. it yields more output on a later event-loop tick, as
+ * LIST does, or the capture buffer overflowed) -- release whatever was
+ * captured as plain, unlabeled output instead of misrepresenting it with
+ * a closed batch, and free the capture. Call label_capture_close_window()
+ * first. */
+extern void label_capture_abort(struct Client *cptr, const char *ref);
+/* cptr is about to be freed: drop every capture still outstanding for it
+ * (no attempt to send anything -- cptr's socket is already gone). Call
+ * from exit_one_client() while cptr is still valid memory, before
+ * free_client() runs. */
+extern void label_capture_client_gone(struct Client *cptr);
+
 /** Queue raw octets on a sendq (no IRC CRLF, no WebSocket framing). */
 extern void send_raw_buffer(struct Client *to, struct MsgBuf *mb, int prio);
 
@@ -54,6 +114,14 @@ extern void sendcmdto_one(struct Client *from, const char *cmd,
 extern void sendcmdto_prio_one(struct Client *from, const char *cmd,
 			       const char *tok, struct Client *to,
 			       const char *pattern, ...);
+
+/* Like sendcmdto_one(), but for hunt_server_cmd()-style forwarding: propagates
+ * an active labeled-response capture for \a from as @label= on the forwarded
+ * line (when FEAT_NETWORK_FEATURES is on), handing the local capture off
+ * instead of leaving it to close as a premature, empty ACK. See send.c. */
+extern void sendcmdto_one_hunted(struct Client *from, const char *cmd,
+				 const char *tok, struct Client *to,
+				 const char *pattern, ...);
 
 /* Send command to servers by flags except one */
 extern void sendcmdto_flag_serv_butone(struct Client *from, const char *cmd,

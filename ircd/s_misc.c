@@ -197,6 +197,18 @@ static void exit_one_client(struct Client* bcptr, const char* comment)
     cli_sasl(bcptr) = 0;
   }
 
+  /*
+   * Drop any outstanding IRCv3 labeled-response captures (parked LIST
+   * continuations, or -- once S2S support lands -- captures awaiting a
+   * remote reply). bcptr is still valid memory here, before
+   * remove_client_from_list() -> free_client() runs, so this is the safe
+   * place to free them; nothing is sent, since the socket is already
+   * gone. Guarded on MyConnect(): a remote client's cli_connect() aliases
+   * the server link's own Connection, which must not be touched here.
+   */
+  if (MyConnect(bcptr))
+    label_capture_client_gone(bcptr);
+
   if (IsUser(bcptr)) {
     /*
      * clear out uping requests
