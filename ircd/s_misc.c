@@ -198,16 +198,42 @@ static void exit_one_client(struct Client* bcptr, const char* comment)
   }
 
   /*
-   * Drop any outstanding IRCv3 labeled-response captures (parked LIST
-   * continuations, or -- once S2S support lands -- captures awaiting a
-   * remote reply). bcptr is still valid memory here, before
+   * Dispose of any outstanding IRCv3 labeled-response captures for
+   * bcptr. bcptr is still valid memory here, before
    * remove_client_from_list() -> free_client() runs, so this is the safe
-   * place to free them; nothing is sent, since the socket is already
-   * gone. Guarded on MyConnect(): a remote client's cli_connect() aliases
-   * the server link's own Connection, which must not be touched here.
+   * place to do it.
+   *
+   * MyConnect(): a local client's socket is already gone, so there is
+   * nowhere to send a close -- drop them silently.
+   *
+   * !MyConnect(): a remote client's cli_connect() aliases the S2S
+   * link's own Connection, which is *not* going away just because this
+   * one user did -- and parse_server()'s labeled-response wrapper
+   * cannot safely do this itself after its handler call returns: for a
+   * server-origin QUIT, exit_client(cptr, bcptr, bcptr, ...) frees
+   * bcptr but returns CPTR_KILLED only when cptr == bcptr, which is
+   * never true here (cptr is the server link, not the quitting user)
+   * -- so the wrapper's own post-handler code has no safe signal that
+   * bcptr just became a dangling pointer, and must not dereference it.
+   * Finishing here, before the free, is the only safe place: the S2S
+   * link is still alive, so properly finish (not silently drop) --
+   * whatever was captured still deserves its BATCH/ACK close sent back
+   * to the original requester, not silence or a leaked capture node.
    */
   if (MyConnect(bcptr))
     label_capture_client_gone(bcptr);
+  else {
+    struct LabelCapture *lc;
+
+    while ((lc = cli_labelcap(bcptr)) != NULL) {
+      char ref[sizeof(lc->ref)];
+
+      ircd_strncpy(ref, lc->ref, sizeof(ref) - 1);
+      ref[sizeof(ref) - 1] = '\0';
+      label_capture_close_window();
+      label_capture_finish(bcptr, ref);
+    }
+  }
 
   if (IsUser(bcptr)) {
     /*

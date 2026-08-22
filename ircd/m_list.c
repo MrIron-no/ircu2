@@ -397,10 +397,22 @@ int m_list(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       struct LabelCapture *saved_active_node;
 
       label_capture_save_active(&saved_active_client, &saved_active_node);
-      label_capture_reopen(sptr, old_label_ref);
-      send_reply(sptr, RPL_LISTEND);
-      label_capture_close_window();
-      label_capture_finish(sptr, old_label_ref);
+
+      if (label_capture_reopen(sptr, old_label_ref)) {
+        send_reply(sptr, RPL_LISTEND);
+        label_capture_close_window();
+        label_capture_finish(sptr, old_label_ref);
+      } else {
+        /* old_label_ref doesn't resolve to anything: reopen() no-ops
+         * silently, which -- left unchecked -- would leave RPL_LISTEND
+         * landing in whatever capture happens to be active right now
+         * (e.g. this very LIST/STOP command's own, if it's itself
+         * labeled) instead of nowhere. Close the window explicitly
+         * first so it goes out plain; nothing to finish() either. */
+        label_capture_close_window();
+        send_reply(sptr, RPL_LISTEND);
+      }
+
       label_capture_restore_active(saved_active_client, saved_active_node);
     } else {
       send_reply(sptr, RPL_LISTEND);

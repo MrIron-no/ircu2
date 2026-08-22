@@ -36,6 +36,7 @@
 #include "ircd_features.h"
 #include "ircd_log.h"
 #include "ircd_reply.h"
+#include "ircd_snprintf.h"
 #include "ircd_string.h"
 #include "msg.h"
 #include "msg_tag.h"
@@ -1476,6 +1477,11 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
      * command whose own reply needs capturing here. */
     const char *inbound_label = NULL;
     char ref[16];
+    char from_numnick[16];
+    char from_server_numeric[16];
+    /* 0 = unverifiable, 1 = verify via findNUser(), 2 = verify via
+     * FindNServer() -- see the two branches below. */
+    int from_verify_kind = 0;
     int rc;
 
     if (feature_bool(FEAT_NETWORK_FEATURES) && mptr->tok
@@ -1514,6 +1520,30 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
       lc = label_capture_start(from, inbound_label);
       ircd_strncpy(ref, lc->ref, sizeof(ref) - 1);
       ref[sizeof(ref) - 1] = '\0';
+
+      /* Save from's identity (while from is definitely still valid) so
+       * it can be safely re-resolved after the handler returns, instead
+       * of trusting rc == CPTR_KILLED the way parse_client() does.
+       * CPTR_KILLED only fires when cptr == victim (s_misc.c) -- true
+       * for a *local* client killing itself, where cptr and from are
+       * the same object, but never true here: cptr is this server
+       * link, from is the resolved remote requester (almost always a
+       * user; occasionally a bare server, for a server-prefixed or
+       * missing-prefix line), and e.g. a labeled server-origin QUIT for
+       * from's own user (ms_quit() -> exit_client(cptr, from, from,
+       * ...)) frees from while returning 0, since cptr != from.
+       * Outstanding captures for any client about to be freed are
+       * finished by exit_one_client() (s_misc.c) while it's still valid
+       * memory -- this is just the safety check that stops the wrapper
+       * from also dereferencing from afterward. */
+      if (IsUser(from)) {
+        ircd_snprintf(0, from_numnick, sizeof(from_numnick), "%s%s", NumNick(from));
+        from_verify_kind = 1;
+      } else if (IsServer(from)) {
+        ircd_strncpy(from_server_numeric, cli_yxx(from), sizeof(from_server_numeric) - 1);
+        from_server_numeric[sizeof(from_server_numeric) - 1] = '\0';
+        from_verify_kind = 2;
+      }
     }
 
     rc = (*mptr->handlers[cli_handler(cptr)]) (cptr, from, i, para);
@@ -1523,8 +1553,33 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
        * `from` (CPTR_KILLED), since this touches no Client. */
       label_capture_close_window();
 
-      if (rc != CPTR_KILLED)
+      if (rc == CPTR_KILLED) {
+        /* cptr itself died; from's Connection aliased it, so from is
+         * gone too either way -- nothing to finish. */
+      } else if (from_verify_kind == 1 && findNUser(from_numnick) != from) {
+        /* from (a user) was freed by a cascading side effect of its own
+         * handler even though cptr survived. findNUser() does a hash
+         * lookup by the numnick string saved earlier -- it never
+         * dereferences the (possibly now-dangling) from pointer itself,
+         * only compares the returned value against it, which is always
+         * a safe pointer comparison regardless of what from currently
+         * points to. exit_one_client() already finished this capture
+         * properly before from was freed (see s_misc.c); nothing left
+         * to do. */
+      } else if (from_verify_kind == 2 && FindNServer(from_server_numeric) != from) {
+        /* Same reasoning, for the rarer case where from is a server
+         * that got SQUIT out from under this dispatch. FindNServer() is
+         * likewise a safe hash lookup by numeric, not a dereference of
+         * from -- mirrors the prefix-resolution lookup earlier in this
+         * same function (from = FindNServer(numeric_prefix) above). */
+      } else if (from_verify_kind != 0) {
         label_capture_finish(from, ref);
+      }
+      /* else: from was neither IsUser() nor IsServer() at capture-start
+       * time (unexpected for this code path in practice -- labels only
+       * ever originate from hunt_server_cmd()-forwarded user commands)
+       * and so can't be safely re-verified; leave the capture parked
+       * rather than risk touching a pointer with no verification. */
     }
 
     return rc;

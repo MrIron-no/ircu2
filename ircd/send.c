@@ -778,22 +778,23 @@ label_capture_stream_active(struct Client *cptr)
   return lc->ref;
 }
 
-void
+int
 label_capture_reopen(struct Client *cptr, const char *ref)
 {
   struct Client *owner = cli_from(cptr);
   struct LabelCapture *lc;
 
   if (!ref || !*ref)
-    return;
+    return 0;
 
   for (lc = cli_labelcap(owner); lc; lc = lc->next) {
     if (!strcmp(lc->ref, ref)) {
       label_capture_active_client = owner;
       label_capture_active_node = lc;
-      return;
+      return 1;
     }
   }
+  return 0;
 }
 
 void
@@ -1135,8 +1136,13 @@ void sendcmdto_one(struct Client *from, const char *cmd, const char *tok,
  * the inbound label (parse_server()'s wrapper) -- answers *for* this
  * label instead, relayed back through ms_batch()/ms_ack() (m_batch.c).
  * If NETWORK_FEATURES is off, or there is no active capture (an
- * unlabeled command, or one that already produced local output before
- * deciding to forward), this is exactly sendcmdto_one().
+ * unlabeled command), this is exactly sendcmdto_one(). If the capture
+ * already has some locally-produced output buffered (none of today's
+ * hunt_server_cmd() callers do this before forwarding, but this helper
+ * doesn't get to assume that forever), that output is flushed unlabeled
+ * -- via label_capture_abort(), the same "can't honestly call this
+ * labeled anymore" release used elsewhere -- rather than silently
+ * discarded.
  *
  * @param[in] from Client sending the command (the original requester).
  * @param[in] cmd Long name of command (used if \a to is a user).
@@ -1158,15 +1164,15 @@ void sendcmdto_one_hunted(struct Client *from, const char *cmd, const char *tok,
   if (feature_bool(FEAT_NETWORK_FEATURES) && owner == label_capture_active_client
       && label_capture_active_node) {
     struct LabelCapture *lc = label_capture_active_node;
-    struct LabelCapture *unlinked;
 
     ircd_strncpy(label, lc->value, sizeof(label) - 1);
     label[sizeof(label) - 1] = '\0';
 
-    label_capture_active_client = NULL;
-    label_capture_active_node = NULL;
-    if ((unlinked = label_capture_unlink(owner, lc->ref)))
-      label_capture_free_node(unlinked);
+    /* label_capture_abort() closes the active window, unlinks this
+     * capture, flushes anything buffered on it unlabeled (a no-op if
+     * nothing was), and frees the node -- exactly the release this
+     * handoff needs. */
+    label_capture_abort(owner, lc->ref);
 
     labeled = 1;
   }

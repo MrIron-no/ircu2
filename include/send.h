@@ -57,8 +57,13 @@ extern struct LabelCapture *label_capture_start(struct Client *cptr,
 extern const char *label_capture_stream_active(struct Client *cptr);
 /* Resume an existing parked capture (by ref) as the active one for a new
  * continuation tick. No-op if not found (e.g. it was already dropped by
- * label_capture_client_gone()). */
-extern void label_capture_reopen(struct Client *cptr, const char *ref);
+ * label_capture_client_gone()) -- callers that are about to send
+ * something meant specifically for that capture (not just "whatever's
+ * currently active") must check the return value before doing so; a
+ * silent no-op leaves the *previous* active window (if any) unchanged,
+ * which is very likely the wrong destination. Returns 1 if reopened,
+ * 0 if ref didn't resolve to anything. */
+extern int label_capture_reopen(struct Client *cptr, const char *ref);
 /* End the current dispatch/tick: nothing sent to a client is captured
  * again until label_capture_start()/reopen() is called anew. Always safe
  * to call (touches no Client), so it can run unconditionally even when
