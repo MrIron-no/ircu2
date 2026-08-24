@@ -30,15 +30,27 @@
  *
  * This file is the relay for that addressed form as it crosses however
  * many further hops separate the answering server from the original
- * requester: same pattern as do_numeric() in s_numeric.c (resolve the
+ * requester: same basic shape as do_numeric() in s_numeric.c (resolve the
  * target, then either deliver it locally in plain client-facing form, or
  * re-address it one more hop closer). @label=/@batch= tags on the
  * inbound line are preserved for free -- sendcmdto_one() picks up
  * whatever parse_server() already parsed into the current line's tags,
  * exactly like do_numeric()'s numeric relay already does.
+ *
+ * One deliberate difference from do_numeric(): the FEAT_HIS_REWRITE
+ * decision (fold the true origin server into "&me") is made only at the
+ * hop that actually MyConnect()s the target, not at every relaying hop.
+ * do_numeric() rewrites at each hop it passes through, which is fine
+ * when every server in the path agrees on FEAT_HIS_REWRITE, but on a
+ * mixed-config network an earlier hop's rewrite permanently overwrites
+ * sptr in the prefix before a later hop -- one that might have HIS
+ * turned *off* -- ever gets a say, silently discarding the true origin.
+ * Relaying hops here forward sptr untouched instead, so the one hop
+ * that matters (the client's own server) is also the only one deciding.
  */
 #include "config.h"
 
+#include "capab.h"
 #include "client.h"
 #include "ircd.h"
 #include "ircd_features.h"
@@ -59,7 +71,6 @@
 int ms_batch(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 {
   struct Client *acptr;
-  struct Client *emitfrom;
   char rest[BUFSIZE];
   size_t len = 0;
   int i;
@@ -77,12 +88,29 @@ int ms_batch(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     len += ircd_snprintf(0, rest + len, sizeof(rest) - len, "%s", parv[i]);
   }
 
-  emitfrom = (feature_bool(FEAT_HIS_REWRITE) && !IsOper(acptr)) ? &me : sptr;
-
-  if (MyConnect(acptr))
-    sendcmdto_one(emitfrom, CMD_BATCH, acptr, "%s", rest);
-  else
-    sendcmdto_one(emitfrom, CMD_BATCH, acptr, "%C %s", acptr, rest);
+  if (MyConnect(acptr)) {
+    /* CapActive() reads con_active(), which is only meaningful for a
+     * client actually connected here -- a remote peer relaying this on
+     * a stale/mistaken target, or one that never negotiated batch (or
+     * dropped it after the request that caused this reply was sent),
+     * must not have a raw BATCH line sprung on it. */
+    if (!CapActive(acptr, CAP_BATCH) || !CapActive(acptr, CAP_LABELED_RESPONSE))
+      return 0;
+    /* HIS rewrite only makes sense at the hop actually delivering to
+     * the client: it's a per-connection judgement (this server's own
+     * FEAT_HIS_REWRITE setting, this server's own &me), not something
+     * that survives being baked into the prefix mid-relay. Doing it at
+     * every hop (as do_numeric() does) would let an earlier hop's own
+     * HIS setting permanently overwrite sptr before a later hop -- one
+     * that might have a *different* FEAT_HIS_REWRITE setting -- ever
+     * gets a say, silently discarding the true origin along the way. */
+    sendcmdto_one((feature_bool(FEAT_HIS_REWRITE) && !IsOper(acptr)) ? &me : sptr,
+                  CMD_BATCH, acptr, "%s", rest);
+  } else
+    /* Not our target: just forward the line one hop closer, prefix
+     * untouched. Whichever server ends up actually MyConnect()-ing
+     * acptr makes the one HIS-rewrite decision that matters. */
+    sendcmdto_one(sptr, CMD_BATCH, acptr, "%C %s", acptr, rest);
 
   return 0;
 }
@@ -96,7 +124,6 @@ int ms_batch(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 int ms_ack(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 {
   struct Client *acptr;
-  struct Client *emitfrom;
 
   if (parc < 2)
     return protocol_violation(cptr, "ACK with no target");
@@ -104,12 +131,15 @@ int ms_ack(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   if (!(acptr = findNUser(parv[1])))
     return 0;
 
-  emitfrom = (feature_bool(FEAT_HIS_REWRITE) && !IsOper(acptr)) ? &me : sptr;
-
-  if (MyConnect(acptr))
-    sendcmdto_one(emitfrom, CMD_ACK, acptr, "");
-  else
-    sendcmdto_one(emitfrom, CMD_ACK, acptr, "%C", acptr);
+  if (MyConnect(acptr)) {
+    if (!CapActive(acptr, CAP_BATCH) || !CapActive(acptr, CAP_LABELED_RESPONSE))
+      return 0;
+    /* See ms_batch(): HIS rewrite is only meaningful at the delivering
+     * hop, not baked in while relaying. */
+    sendcmdto_one((feature_bool(FEAT_HIS_REWRITE) && !IsOper(acptr)) ? &me : sptr,
+                  CMD_ACK, acptr, "");
+  } else
+    sendcmdto_one(sptr, CMD_ACK, acptr, "%C", acptr);
 
   return 0;
 }
