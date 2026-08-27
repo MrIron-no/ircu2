@@ -173,3 +173,39 @@ async def test_cap_new_waits_for_sasl_server_own_end_of_burst(ircd_hub):
     finally:
         await client.send("QUIT :done")
         await client.disconnect()
+
+
+async def test_directly_linked_sasl_server_available_at_end_of_burst(ircd_hub):
+    """SASL server that is our direct link: hidden while bursting, NEW at its EB.
+
+    sasl.server is set (via CF during the burst) before the link completes,
+    so the transition must come from END_OF_BURST itself, not from the
+    netconf change callback.
+    """
+    client = await _capnotify_client(ircd_hub, "capsplit4")
+    try:
+        srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+        await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
+        await srv.begin_handshake()
+        await srv.send_config("sasl.server", "services.test.net")
+        await srv.send_config("sasl.mechanisms", MECHANISMS)
+
+        # Direct link still bursting: config points at us, but no NEW yet.
+        assert await _collect_cap(client, 1.5) == [], (
+            "sasl advertised while the directly linked SASL server is bursting"
+        )
+
+        await srv.send_end_of_burst()
+        msg = await client.wait_for("CAP", timeout=5.0)
+        assert msg.params[1] == "NEW", f"expected CAP NEW, got {msg.params}"
+        assert msg.params[-1] == f"sasl={MECHANISMS}", msg.params
+
+        await srv.complete_handshake()
+        assert await _collect_cap(client, 1.0) == []
+
+        await srv.disconnect()
+        caps = await _collect_cap(client, 2.0)
+        assert caps == [("DEL", "sasl")], caps
+    finally:
+        await client.send("QUIT :done")
+        await client.disconnect()
