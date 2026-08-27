@@ -72,14 +72,27 @@ static struct SaslSessionEntry* sasl_session_table[SASL_HASH_SIZE];
 static struct SaslStats sasl_statistics = { 0, 0 };
 
 /** Check if SASL is available
- * @return 1 if SASL server is configured, 0 otherwise
+ *
+ * SASL is available when a SASL server and mechanism list are configured,
+ * the SASL server is linked, and no server on the path between us and the
+ * SASL server is still bursting.  A half-completed link may already have
+ * introduced the SASL server, but we must not advertise (or route to) it
+ * until END_OF_BURST has been received from every hop on the way.
+ * @return 1 if the SASL server is reachable, 0 otherwise
  */
 int sasl_available(void)
 {
+  struct Client* acptr;
+
   if (!*netconf_str(NETCONF_SASL_SERVER)
       || !*netconf_str(NETCONF_SASL_MECHANISMS)
-      || !find_match_server((char*)netconf_str(NETCONF_SASL_SERVER)))
+      || !(acptr = find_match_server((char*)netconf_str(NETCONF_SASL_SERVER))))
     return 0;
+
+  for (; acptr && !IsMe(acptr); acptr = cli_serv(acptr)->up) {
+    if (IsBurst(acptr))
+      return 0;
+  }
 
   return 1;
 }

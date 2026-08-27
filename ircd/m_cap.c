@@ -396,7 +396,7 @@ void cap_new(enum Capab cap)
     return;
   
   /* Iterate through all local clients */
-  for (i = 0; i < HighestFd; i++) {
+  for (i = 0; i <= HighestFd; i++) {
     if (!(acptr = LocalClientArray[i]))
       continue;
       
@@ -406,9 +406,9 @@ void cap_new(enum Capab cap)
       
     /* Send CAP NEW message */
     if (cap_value && *cap_value && HasFlag(acptr, FLAG_CAP302)) {
-      sendcmdto_one(&me, CMD_CAP, acptr, "%C NEW %s=%s", acptr, cap_name, cap_value);
+      sendcmdto_one(&me, CMD_CAP, acptr, "%C NEW :%s=%s", acptr, cap_name, cap_value);
     } else {
-      sendcmdto_one(&me, CMD_CAP, acptr, "%C NEW %s", acptr, cap_name);
+      sendcmdto_one(&me, CMD_CAP, acptr, "%C NEW :%s", acptr, cap_name);
     }
   }
 }
@@ -438,7 +438,7 @@ void cap_del(enum Capab cap)
   }
   
   /* Iterate through all local clients */
-  for (i = 0; i < HighestFd; i++) {
+  for (i = 0; i <= HighestFd; i++) {
     if (!(acptr = LocalClientArray[i]))
       continue;
       
