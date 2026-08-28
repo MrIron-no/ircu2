@@ -25,6 +25,7 @@
 #include "ircd_tls.h"
 #include "ircd.h"
 #include "ircd_log.h"
+#include "ircd_snprintf.h"
 #include "ircd_string.h"
 #include "client.h"
 #include "s_auth.h"
@@ -37,10 +38,23 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
 #include <gnutls/crypto.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+
+/** Fill \a reason (if non-NULL) with a formatted TLS failure description. */
+static void tls_reason(char *reason, size_t reasonlen, const char *fmt, ...)
+{
+  va_list vl;
+
+  if (!reason || reasonlen == 0)
+    return;
+  va_start(vl, fmt);
+  ircd_vsnprintf(0, reason, reasonlen, fmt, vl);
+  va_end(vl);
+}
 
 #if defined(GNUTLS_AUTO_REAUTH) /* 3.6.4 */
 # define TLS_SESSION_FLAGS GNUTLS_NONBLOCK | GNUTLS_NO_SIGNAL \
@@ -375,7 +389,13 @@ int ircd_tls_check_peer_hostname(struct Client *cptr, const char *name)
 
 void ircd_tls_close(void *ctx, const char *message)
 {
-  gnutls_bye(ctx, GNUTLS_SHUT_RDWR);
+  /* Match OpenSSL SSL_is_init_finished() / libtls tls_close(): only send
+   * close_notify after a completed handshake.  ircd_tls_negotiate() marks
+   * success via the session pointer; gnutls_protocol_get_version() is not
+   * usable for this (it is already set before any ClientHello arrives), so
+   * a stalled handshake would otherwise get a TLS alert instead of TCP EOF. */
+  if (gnutls_session_get_ptr(ctx))
+    gnutls_bye(ctx, GNUTLS_SHUT_WR);
   gnutls_deinit(ctx);
 }
 
@@ -417,7 +437,7 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-int ircd_tls_negotiate(struct Client *cptr)
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
 {
   gnutls_session_t tls;
   gnutls_x509_crt_t crt;
@@ -425,15 +445,26 @@ int ircd_tls_negotiate(struct Client *cptr)
   size_t len;
   int res;
   unsigned char buf[32];
+  const char* const err_certreq   = "ERROR :TLS certificate required\r\n";
+  const char* const err_certrej   = "ERROR :TLS certificate rejected\r\n";
+  const char* const err_handshake = "ERROR :TLS handshake failed\r\n";
+
+  if (reason && reasonlen)
+    reason[0] = '\0';
 
   tls = s_tls(&cli_socket(cptr));
 
-  if (!tls)
-    return 1;
+  if (!tls) {
+    tls_reason(reason, reasonlen, "TLS setup failed (no session)");
+    ClearNegotiatingTLS(cptr);
+    return -1;
+  }
 
   /* Check for handshake timeout - use the constant from header */
   if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
     Debug((DEBUG_DEBUG, "GnuTLS handshake timeout for %s", cli_name(cptr)));
+    /* No peer write: a stalled handshake must close with a plain EOF. */
+    tls_reason(reason, reasonlen, "TLS handshake timed out");
     return -1;
   }
 
@@ -453,6 +484,9 @@ int ircd_tls_negotiate(struct Client *cptr)
       Debug((DEBUG_DEBUG,
              "TLS peer certificate required but not presented for %s",
              cli_name(cptr)));
+      tls_reason(reason, reasonlen,
+                 "no peer certificate presented (certificate required)");
+      write(cli_fd(cptr), err_certreq, strlen(err_certreq));
       return -1;
     }
 
@@ -473,19 +507,36 @@ int ircd_tls_negotiate(struct Client *cptr)
         Debug((DEBUG_DEBUG,
                "TLS peer certificate verification failed for %s: %s",
                cli_name(cptr), gnutls_strerror(res)));
+        tls_reason(reason, reasonlen, "certificate verification error: %s",
+                   gnutls_strerror(res));
+        write(cli_fd(cptr), err_certrej, strlen(err_certrej));
         return -1;
       }
       if (vstatus != 0)
       {
+        gnutls_datum_t out;
+
         Debug((DEBUG_DEBUG,
                "TLS peer certificate verification failed for %s (0x%x)",
                cli_name(cptr), vstatus));
+        if (gnutls_certificate_verification_status_print(vstatus, GNUTLS_CRT_X509,
+                                                         &out, 0) >= 0)
+        {
+          tls_reason(reason, reasonlen, "certificate verification failed: %s",
+                     out.data);
+          gnutls_free(out.data);
+        }
+        else
+          tls_reason(reason, reasonlen,
+                     "certificate verification failed (0x%x)", vstatus);
+        write(cli_fd(cptr), err_certrej, strlen(err_certrej));
         return -1;
       }
     }
 
     if (!datum)
     {
+      gnutls_session_set_ptr(tls, (void *)1); /* handshake complete: see ircd_tls_close() */
       ClearNegotiatingTLS(cptr);
       return 1;
     }
@@ -498,26 +549,31 @@ int ircd_tls_negotiate(struct Client *cptr)
         return -1;
     }
 
-    /* Complete the fingerprint extraction - convert buf to hex */
+    /* Extract the SHA-256 fingerprint.  If the certificate cannot be
+     * re-parsed or hashed, treat it like "no fingerprint" (len = 0 takes the
+     * empty-fingerprint branch below) and still complete the handshake, as the
+     * OpenSSL and libtls backends do.  Returning early here would leave
+     * FLAG_NEGOTIATING_TLS set and wedge the connection. */
     res = gnutls_x509_crt_import(crt, datum, GNUTLS_X509_FMT_DER);
     if (res)
     {
       log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_import failed for %s: %d",
         cli_name(cptr), res);
-      gnutls_x509_crt_deinit(crt);
-      return 1;
+      len = 0;
     }
-
-    len = sizeof(buf);
-    res = gnutls_x509_crt_get_fingerprint(crt, GNUTLS_DIG_SHA256, buf, &len);
-    gnutls_x509_crt_deinit(crt);
-    if (res)
+    else
     {
-      log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_get_fingerprint failed for %s: %d",
-        cli_name(cptr), res);
-      return 1;
+      len = sizeof(buf);
+      res = gnutls_x509_crt_get_fingerprint(crt, GNUTLS_DIG_SHA256, buf, &len);
+      if (res)
+      {
+        log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_get_fingerprint failed for %s: %d",
+          cli_name(cptr), res);
+        len = 0;
+      }
     }
-    
+    gnutls_x509_crt_deinit(crt);
+
     /* Convert buf to hex like OpenSSL version */
     if (len == 32 && !IsCloudflarePort(cptr)) {
       char *p = cli_tls_fingerprint(cptr);
@@ -535,6 +591,7 @@ int ircd_tls_negotiate(struct Client *cptr)
         Debug((DEBUG_DEBUG, "Invalid fingerprint length: %zu", len));
     }
 
+    gnutls_session_set_ptr(tls, (void *)1); /* handshake complete: see ircd_tls_close() */
     ClearNegotiatingTLS(cptr);
     return 1;
 
@@ -542,9 +599,9 @@ int ircd_tls_negotiate(struct Client *cptr)
     Debug((DEBUG_DEBUG, " ... gnutls_handshake() failed -> %s (%d)",
            gnutls_strerror(res), res));
     if (gnutls_error_is_fatal(res)) {
-      const char* const error_tls = "ERROR :TLS connection error\r\n";
       Debug((DEBUG_DEBUG, "GnuTLS handshake failed for %s: %s", cli_name(cptr), gnutls_strerror(res)));
-      write(cli_fd(cptr), error_tls, strlen(error_tls));
+      tls_reason(reason, reasonlen, "%s", gnutls_strerror(res));
+      write(cli_fd(cptr), err_handshake, strlen(err_handshake));
       return -1;
     }
     return 0;
@@ -568,6 +625,14 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
     *count_out = res;
     return IO_SUCCESS;
   }
+  /*
+   * Peer cleanly closed (close_notify) or EOF.  gnutls_error_is_fatal(0) is
+   * false, so treating this as IO_BLOCKED leaves the socket open while the
+   * client waits for our close_notify (asyncio SSL_SHUTDOWN_TIMEOUT = 30s).
+   * Match OpenSSL SSL_ERROR_ZERO_RETURN → IO_FAILURE.
+   */
+  if (res == 0)
+    return IO_FAILURE;
   if (res == GNUTLS_E_REHANDSHAKE)
   {
     res = gnutls_handshake(tls);
@@ -585,9 +650,10 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
   struct iovec iov[512];
   gnutls_session_t tls;
   struct Connection *con;
-  IOResult result = IO_BLOCKED;
   ssize_t res;
   int ii, count;
+  int made_progress = 0;
+  IOResult result;
 
   con = cli_connect(cptr);
   tls = s_tls(&con_socket(con));
@@ -600,28 +666,36 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
    * has been accepted or must be provided to a future call to
    * gnutls_record_send()?
    */
+  *count_in = 0;
   *count_out = 0;
   if (con->con_rexmit)
   {
-    res = gnutls_record_send(tls, con->con_rexmit, con->con_rexmit_len);
-    if (res <= 0) {
-      if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
-        return IO_BLOCKED;
-      return gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
-    }
+    /* Drain the unfinished head message, then remove it by identity with
+     * msgq_excise().  Its bytes are NOT added to *count_out — see the OpenSSL
+     * backend for why (msgq_delete() would misattribute them to a priority
+     * message enqueued while we were blocked). */
+    const char *rexmit_base = con->con_rexmit;
 
-    // Only excise the message if the full message was sent
-    if (res == (int)con->con_rexmit_len) {
-      msgq_excise(buf, con->con_rexmit, con->con_rexmit_len);
-      con->con_rexmit_len = 0;
-      con->con_rexmit = NULL;
-      result = IO_SUCCESS;
-    } else {
-      // Partial send, update pointer and length for next retry
-      con->con_rexmit = (char *)con->con_rexmit + res;
-      con->con_rexmit_len -= res;
-      return IO_BLOCKED;
+    while (con->con_rexmit)
+    {
+      res = gnutls_record_send(tls, con->con_rexmit, con->con_rexmit_len);
+      if (res <= 0) {
+        if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
+          return IO_BLOCKED;
+        *count_out = 0;
+        return gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
+      }
+      if (res == (int)con->con_rexmit_len) {
+        con->con_rexmit_len = 0;
+        con->con_rexmit = NULL;
+      } else {
+        con->con_rexmit = (char *)con->con_rexmit + res;
+        con->con_rexmit_len -= (size_t)res;
+      }
     }
+    msgq_excise(buf, rexmit_base);
+    made_progress = 1;
+    /* fall through to send more from the now-shorter queue */
   }
 
   // Process remaining messages in the queue
@@ -632,12 +706,29 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
     if (res > 0)
     {
       *count_out += res;
-      result = IO_SUCCESS;
       if (res < (int)iov[ii].iov_len) {
-        // Partial send, store for retransmission
-        cli_connect(cptr)->con_rexmit = (char *)iov[ii].iov_base + res;
-        cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len - res;
-        return IO_BLOCKED;
+        con->con_rexmit = (char *)iov[ii].iov_base + res;
+        con->con_rexmit_len = iov[ii].iov_len - (size_t)res;
+        while (con->con_rexmit)
+        {
+          res = gnutls_record_send(tls, con->con_rexmit, con->con_rexmit_len);
+          if (res <= 0) {
+            if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
+              return IO_BLOCKED;
+            result = gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
+            if (result == IO_FAILURE)
+              *count_out = 0;
+            return result;
+          }
+          *count_out += (unsigned int)res;
+          if (res == (int)con->con_rexmit_len) {
+            con->con_rexmit_len = 0;
+            con->con_rexmit = NULL;
+          } else {
+            con->con_rexmit = (char *)con->con_rexmit + res;
+            con->con_rexmit_len -= (size_t)res;
+          }
+        }
       }
       // else, full message sent, continue to next
       continue;
@@ -645,14 +736,17 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
 
     /* We only reach this if the gnutls_record_send failed. */
     if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN) {
-      cli_connect(cptr)->con_rexmit = iov[ii].iov_base;
-      cli_connect(cptr)->con_rexmit_len = iov[ii].iov_len;
+      con->con_rexmit = iov[ii].iov_base;
+      con->con_rexmit_len = iov[ii].iov_len;
+      return IO_BLOCKED;
     }
     result = gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
-    break;
+    if (result == IO_FAILURE)
+      *count_out = 0;
+    return result;
   }
 
-  return result;
+  return (*count_out || made_progress) ? IO_SUCCESS : IO_BLOCKED;
 }
 
 int ircd_tls_sha1_base64(const void *data, size_t len, char *out, size_t outlen)

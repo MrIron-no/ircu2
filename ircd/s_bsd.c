@@ -297,12 +297,23 @@ unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf)
 
     cli_sendB(cptr) += bytes_written;
     cli_sendB(&me)  += bytes_written;
-    /* A partial write implies that future writes will block. */
-    if (bytes_written < bytes_count)
+    /*
+     * Plain sockets: a short writev means the kernel send buffer is full.
+     * TLS (SSL_MODE_ENABLE_PARTIAL_WRITE) can return a short success without
+     * the socket being full — those backends must return IO_BLOCKED only when
+     * actually blocked (WANT_WRITE/EAGAIN). Treating TLS short writes as
+     * FLAG_BLOCKED busy-loops on ET_WRITE while POLLOUT stays ready.
+     */
+    if (!IsTLS(cptr) && bytes_written < bytes_count)
       SetFlag(cptr, FLAG_BLOCKED);
     break;
   case IO_BLOCKED:
     SetFlag(cptr, FLAG_BLOCKED);
+    /* TLS may have written earlier iovs then hit WANT_WRITE. */
+    if (bytes_written) {
+      cli_sendB(cptr) += bytes_written;
+      cli_sendB(&me)  += bytes_written;
+    }
     break;
   case IO_FAILURE:
     cli_error(cptr) = errno;
@@ -362,11 +373,30 @@ static int completed_connection(struct Client* cptr)
       SetTLS(cptr);
     }
 
-    /* Are we making progress? */
+    /* Are we making progress?  Handle the result like tls_negotiate_client():
+     * a negative result (timeout, fatal handshake error, missing session) must
+     * fail the link now rather than wait for the ping timeout or fall through
+     * to sending PASS/SERVER on a socket without a TLS session. */
     if (IsNegotiatingTLS(cptr)) {
-      ircd_tls_negotiate(cptr);
-      if (IsNegotiatingTLS(cptr))
-        return 1;
+      char reason[TLS_REASON_LEN];
+      int res = ircd_tls_negotiate(cptr, reason, sizeof(reason));
+
+      if (res < 0) {
+        sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s%s%s",
+                             cli_name(cptr), reason[0] ? ": " : "", reason);
+        /* Mark dead before returning so exit_client() does not flush an
+         * ERROR line as plaintext into the half-open handshake stream
+         * (can_send() rejects a dead socket).  Mirrors tls_negotiate_client(). */
+        SetFlag(cptr, FLAG_DEADSOCKET);
+        ClearNegotiatingTLS(cptr);
+        if (s_tls(&cli_socket(cptr))) {
+          ircd_tls_close(s_tls(&cli_socket(cptr)), NULL);
+          s_tls(&cli_socket(cptr)) = NULL;
+        }
+        return 0;
+      }
+      if (res == 0)
+        return 1; /* still negotiating */
     }
   }
 
@@ -463,6 +493,9 @@ void close_connection(struct Client *cptr)
   SetFlag(cptr, FLAG_DEADSOCKET);
 
   MsgQClear(&(cli_sendQ(cptr)));
+  /* MsgQClear frees MsgBufs; drop TLS mid-message rexmit into them. */
+  cli_connect(cptr)->con_rexmit = NULL;
+  cli_connect(cptr)->con_rexmit_len = 0;
   client_drop_sendq(cli_connect(cptr));
   DBufClear(&(cli_recvQ(cptr)));
   memset(cli_passwd(cptr), 0, sizeof(cli_passwd(cptr)));
@@ -1067,21 +1100,26 @@ void init_server_identity(void)
 }
 
 /** Notify operators of inbound TLS failures on server ports. */
-static void tls_negotiation_failed(struct Client *cptr)
+static void tls_negotiation_failed(struct Client *cptr, const char *reason)
 {
   if (IsServerPort(cptr))
     sendto_opmask_butone(0, SNO_OLDSNO,
-                         "TLS negotiation failed from unknown server");
+                         "TLS negotiation failed from unknown server%s%s",
+                         (reason && reason[0]) ? ": " : "",
+                         reason ? reason : "");
 }
 
 /** Run ircd_tls_negotiate() and handle a fatal result. */
 static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback)
 {
-  int res = ircd_tls_negotiate(cptr);
+  /* static: *fallback is read by the caller after we return, still within the
+   * same (synchronous) socket callback, so a stack buffer would dangle. */
+  static char reason[TLS_REASON_LEN];
+  int res = ircd_tls_negotiate(cptr, reason, sizeof(reason));
 
   if (res < 0)
   {
-    tls_negotiation_failed(cptr);
+    tls_negotiation_failed(cptr, reason);
     SetFlag(cptr, FLAG_DEADSOCKET);
     ClrFlag(cptr, FLAG_NEGOTIATING_TLS);
     if (s_tls(&cli_socket(cptr)))
@@ -1089,8 +1127,8 @@ static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback
       ircd_tls_close(s_tls(&cli_socket(cptr)), "TLS negotiation failed");
       s_tls(&cli_socket(cptr)) = NULL;
     }
-    *fmt = "TLS negotiation failed: %s";
-    *fallback = "TLS negotiation failed";
+    *fmt = "%s";
+    *fallback = reason[0] ? reason : "TLS negotiation failed";
   }
 
   return res;
@@ -1099,8 +1137,14 @@ static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback
 /** Continue client setup after an inbound or outbound TLS handshake completes. */
 static void tls_handshake_succeeded(struct Client *cptr)
 {
-  if (IsConnecting(cptr))
-    completed_connection(cptr);
+  if (IsConnecting(cptr)) {
+    /* completed_connection() returns 0 when the link can no longer be set up
+     * (e.g. the Connect block vanished on a rehash mid-handshake).  Exit the
+     * client instead of leaving it half-initialized until the ping timeout,
+     * matching the ET_CONNECT path. */
+    if (!completed_connection(cptr) && !IsDead(cptr))
+      exit_client(cptr, cptr, &me, "Connection setup failed");
+  }
   else if (!cli_auth(cptr))
     start_auth(cptr);
 }
@@ -1185,9 +1229,9 @@ static void client_sock_callback(struct Event* ev)
         /* Still negotiating */
         break;
       }
-       /* TLS negotiation succeeded */
-       tls_handshake_succeeded(cptr);
-       return;
+      /* TLS negotiation succeeded */
+      tls_handshake_succeeded(cptr);
+      return;
     }
     ClrFlag(cptr, FLAG_BLOCKED);
     if (cli_listing(cptr) && MsgQLength(&(cli_sendQ(cptr))) < 2048)
