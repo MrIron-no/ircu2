@@ -527,7 +527,8 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       int *wants_write)
 {
   const char *hash;
   struct tls *tls;
@@ -538,6 +539,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
 
   if (reason && reasonlen)
     reason[0] = '\0';
+  if (wants_write)
+    *wants_write = 0;
 
   tls = s_tls(&cli_socket(cptr));
   if (!tls) {
@@ -605,6 +608,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
   }
   
   if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT) {
+    if (wants_write)
+      *wants_write = (res == TLS_WANT_POLLOUT);
     return 0; /* Handshake in progress */
   }
   

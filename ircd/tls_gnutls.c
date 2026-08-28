@@ -437,7 +437,8 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       int *wants_write)
 {
   gnutls_session_t tls;
   gnutls_x509_crt_t crt;
@@ -451,6 +452,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
 
   if (reason && reasonlen)
     reason[0] = '\0';
+  if (wants_write)
+    *wants_write = 0;
 
   tls = s_tls(&cli_socket(cptr));
 
@@ -473,8 +476,17 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
   {
   case GNUTLS_E_INTERRUPTED:
   case GNUTLS_E_AGAIN:
+    if (wants_write)
+      *wants_write = (gnutls_record_get_direction(tls) == 1);
+    return 0;
+
   case GNUTLS_E_WARNING_ALERT_RECEIVED:
   case GNUTLS_E_GOT_APPLICATION_DATA:
+    /* "Call gnutls_handshake() again": the record is already consumed, so
+     * no read event will follow.  Ask for WRITABLE, which is always ready,
+     * to get called back on the next loop pass. */
+    if (wants_write)
+      *wants_write = 1;
     return 0;
 
   case GNUTLS_E_SUCCESS:
@@ -604,6 +616,9 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
       write(cli_fd(cptr), err_handshake, strlen(err_handshake));
       return -1;
     }
+    /* Non-fatal: retry immediately (see the warning-alert case above). */
+    if (wants_write)
+      *wants_write = 1;
     return 0;
   }
 }

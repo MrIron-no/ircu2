@@ -107,6 +107,7 @@ const char* const TOS_ERROR_MSG	      = "error setting TOS for %s: %s";
 
 static void client_sock_callback(struct Event* ev);
 static void client_timer_callback(struct Event* ev);
+static void tls_negotiation_events(struct Client *cptr, int wants_write);
 
 
 /*
@@ -379,7 +380,8 @@ static int completed_connection(struct Client* cptr)
      * to sending PASS/SERVER on a socket without a TLS session. */
     if (IsNegotiatingTLS(cptr)) {
       char reason[TLS_REASON_LEN];
-      int res = ircd_tls_negotiate(cptr, reason, sizeof(reason));
+      int wants_write = 0;
+      int res = ircd_tls_negotiate(cptr, reason, sizeof(reason), &wants_write);
 
       if (res < 0) {
         sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s%s%s",
@@ -395,8 +397,10 @@ static int completed_connection(struct Client* cptr)
         }
         return 0;
       }
-      if (res == 0)
+      if (res == 0) {
+        tls_negotiation_events(cptr, wants_write);
         return 1; /* still negotiating */
+      }
     }
   }
 
@@ -652,7 +656,19 @@ void add_connection(struct Listener* listener, int fd) {
   {
     SetTLS(new_client);
     SetNegotiatingTLS(new_client);
-    socket_events(&cli_socket(new_client), SOCK_EVENT_WRITABLE);
+    /* Wait for the ClientHello.  The handshake is driven by ET_READ /
+     * ET_WRITE in client_sock_callback(); tls_negotiation_events() adds
+     * WRITABLE only while the backend is blocked on a write.  Registering
+     * WRITABLE here would busy-loop on a level-triggered writable socket
+     * until the peer's first flight arrived. */
+    socket_events(&cli_socket(new_client), SOCK_EVENT_READABLE);
+    /* A peer that never speaks generates no events, so enforce
+     * TLS_HANDSHAKE_TIMEOUT from a timer.  con_proc is otherwise unused until
+     * read_packet() runs, which cannot happen before the handshake is done;
+     * tls_handshake_succeeded() cancels it. */
+    cli_freeflag(new_client) |= FREEFLAG_TIMER;
+    timer_add(&cli_proc(new_client), client_timer_callback,
+              cli_connect(new_client), TT_RELATIVE, TLS_HANDSHAKE_TIMEOUT + 1);
   }
 
   Count_newunknown(UserStats);
@@ -1109,13 +1125,32 @@ static void tls_negotiation_failed(struct Client *cptr, const char *reason)
                          reason ? reason : "");
 }
 
+/** Adjust socket event interest for a handshake still in progress.
+ * The backend reports which direction it is blocked on; keep READABLE
+ * (set at accept / connect time) and only hold WRITABLE while a write is
+ * pending.  Leaving WRITABLE set would busy-loop, since a writable socket
+ * is level-triggered and almost always ready.
+ * @param[in] cptr Client whose TLS handshake returned "in progress".
+ * @param[in] wants_write Non-zero if the backend is waiting to write.
+ */
+static void tls_negotiation_events(struct Client *cptr, int wants_write)
+{
+  socket_events(&cli_socket(cptr),
+                (wants_write ? SOCK_ACTION_ADD : SOCK_ACTION_DEL)
+                | SOCK_EVENT_WRITABLE);
+}
+
 /** Run ircd_tls_negotiate() and handle a fatal result. */
 static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback)
 {
   /* static: *fallback is read by the caller after we return, still within the
    * same (synchronous) socket callback, so a stack buffer would dangle. */
   static char reason[TLS_REASON_LEN];
-  int res = ircd_tls_negotiate(cptr, reason, sizeof(reason));
+  int wants_write = 0;
+  int res = ircd_tls_negotiate(cptr, reason, sizeof(reason), &wants_write);
+
+  if (res == 0)
+    tls_negotiation_events(cptr, wants_write);
 
   if (res < 0)
   {
@@ -1137,6 +1172,12 @@ static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback
 /** Continue client setup after an inbound or outbound TLS handshake completes. */
 static void tls_handshake_succeeded(struct Client *cptr)
 {
+  /* Drop the handshake timeout armed by add_connection().  A no-op if this
+   * runs from inside that timer's own callback (GEN_MARKED); timer_run()
+   * then destroys the one-shot timer itself. */
+  if (t_onqueue(&cli_proc(cptr)))
+    timer_del(&cli_proc(cptr));
+
   if (IsConnecting(cptr)) {
     /* completed_connection() returns 0 when the link can no longer be set up
      * (e.g. the Connect block vanished on a rehash mid-handshake).  Exit the
@@ -1306,6 +1347,20 @@ static void client_timer_callback(struct Event* ev)
 
     if (!con_freeflag(con) && !cptr)
       free_connection(con); /* client is being destroyed */
+  } else if (IsNegotiatingTLS(cptr)) {
+    /* Handshake timeout armed by add_connection().  The timer fires past
+     * TLS_HANDSHAKE_TIMEOUT, so ircd_tls_negotiate() fails with "TLS
+     * handshake timed out" (it checks the deadline before touching the
+     * session); a completed handshake is handled for safety. */
+    char *fmt = "%s";
+    char *fallback = 0;
+    int res = tls_negotiate_client(cptr, &fmt, &fallback);
+
+    if (res > 0)
+      tls_handshake_succeeded(cptr);
+    else
+      exit_client_msg(cptr, cptr, &me, fmt,
+                      fallback ? fallback : "TLS handshake timed out");
   } else {
     Debug((DEBUG_LIST, "Client process timer for %C expired; processing",
 	   cptr));

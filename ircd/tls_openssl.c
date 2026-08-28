@@ -733,7 +733,8 @@ static IOResult ssl_handle_error(struct Client *cptr, SSL *tls, int res, int ori
   return IO_FAILURE;
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       int *wants_write)
 {
   SSL *tls;
   X509 *cert;
@@ -746,6 +747,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
 
   if (reason && reasonlen)
     reason[0] = '\0';
+  if (wants_write)
+    *wants_write = 0;
 
   tls = s_tls(&cli_socket(cptr));
   if (!tls) {
@@ -862,7 +865,10 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
       write(cli_fd(cptr), err_handshake, strlen(err_handshake));
       return -1;
     }
-    /* ssl_result == IO_BLOCKED - handshake still in progress */
+    /* ssl_result == IO_BLOCKED - handshake still in progress.  Tell the
+     * caller which direction to wait for so it does not have to poll. */
+    if (wants_write)
+      *wants_write = (sslerr == SSL_ERROR_WANT_WRITE);
     return 0;
   }
 }
