@@ -1011,6 +1011,7 @@ int read_configuration_file(void)
   conf_error = 0;
   feature_unmark(); /* unmark all features for resetting later */
   clear_nameservers(); /* clear previous list of DNS servers */
+  IPcheck_clear_config(); /* IPCheck exemptions, in case the block is gone */
   if (!init_lexer())
     return 0;
   yyparse();

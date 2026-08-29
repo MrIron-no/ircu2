@@ -69,8 +69,12 @@ struct IPRegistry48 {
 #define IP_REGISTRY_TABLE_SIZE 0x10000
 /** Report current time for tracking in IPRegistryEntry::last_connect. */
 #define NOW ((unsigned short)(CurrentTime & 0xffff))
-/** Time from \a x until now, in seconds. */
-#define CONNECTED_SINCE(x) (NOW - (x))
+/** Time from \a x until now, in seconds.  Both operands are 16-bit
+ * timestamps, so reduce the difference modulo 2^16 as well: a plain
+ * subtraction goes negative once CurrentTime crosses a multiple of 65536
+ * (every 18.2 hours) and the period, expiry and free-target arithmetic
+ * misbehave until the entry is next stamped. */
+#define CONNECTED_SINCE(x) ((unsigned short)(NOW - (x)))
 
 /** Macro for easy access to configured IPcheck clone limit. */
 #define IPCHECK_CLONE_LIMIT feature_int(FEAT_IPCHECK_CLONE_LIMIT)
@@ -433,7 +437,11 @@ static int ip_registry_is_exempt(const struct irc_in_addr *addr)
  * separated by no more than IPCHECK_CLONE_PERIOD seconds.
  * @param[in] addr Address of client.
  * @param[out] next_target_out Receives time to grant another free target.
- * @return Non-zero if the connection is permitted, zero if denied.
+ * @return IPCHECK_REFUSED if denied, IPCHECK_COUNTED if permitted and
+ *   recorded in the registry, IPCHECK_EXEMPT if permitted because the
+ *   address is exempt (nothing recorded; the caller must not mark the
+ *   client IPChecked, or its disconnect would decrement a count it never
+ *   incremented).
  */
 static int ip_registry_check_local(const struct irc_in_addr *addr, time_t* next_target_out)
 {
@@ -441,7 +449,7 @@ static int ip_registry_check_local(const struct irc_in_addr *addr, time_t* next_
   unsigned int free_targets = STARTTARGETS;
 
   if (ip_registry_is_exempt(addr)) {
-    return 1;
+    return IPCHECK_EXEMPT;
   }
 
   entry = ip_registry_find(addr);
@@ -502,7 +510,9 @@ static int ip_registry_check_local(const struct irc_in_addr *addr, time_t* next_
 
   if (entry->attempts < IPCHECK_CLONE_LIMIT) {
     if (next_target_out)
-      *next_target_out = CurrentTime - (TARGET_DELAY * free_targets - 1);
+      /* free_targets is unsigned: with none left, TARGET_DELAY * 0 - 1
+       * must be -1 (next target in one second), not UINT_MAX. */
+      *next_target_out = CurrentTime - ((time_t)TARGET_DELAY * free_targets - 1);
   }
 #ifndef NOTHROTTLE
   else if ((CurrentTime - cli_since(&me)) > IPCHECK_CLONE_DELAY) {
@@ -535,10 +545,6 @@ static int ip_registry_check_remote(struct Client* cptr, int is_burst)
 {
   struct IPRegistryEntry* entry;
 
-  /*
-   * Mark that we did add/update an IPregistry entry
-   */
-  SetIPChecked(cptr);
   if (!irc_in_addr_valid(&cli_ip(cptr))) {
     Debug((DEBUG_DNS, "IPcheck accepting remote connection from invalid %s.", ircd_ntoa(&cli_ip(cptr))));
     return 1;
@@ -547,6 +553,13 @@ static int ip_registry_check_remote(struct Client* cptr, int is_burst)
   if (ip_registry_is_exempt(&cli_ip(cptr))) {
     return 1;
   }
+
+  /*
+   * Mark that we did add/update an IPregistry entry.  Only now: an exempt
+   * or unroutable address is not counted, and IPcheck_disconnect() must not
+   * decrement a count that was never incremented.
+   */
+  SetIPChecked(cptr);
 
   if (!irc_in_addr_is_ipv4(&cli_ip(cptr))) {
     struct IPRegistry48* entry_48 = ip_48_find(&cli_ip(cptr));
@@ -569,6 +582,7 @@ static int ip_registry_check_remote(struct Client* cptr, int is_burst)
   }
   /* Avoid overflowing the connection counter. */
   if (0 == ++entry->connected) {
+    entry->connected--;
     Debug((DEBUG_DNS, "IPcheck refusing remote connection from %s: counter overflow.", ircd_ntoa(&entry->addr)));
     return 0;
   }
@@ -732,7 +746,9 @@ static int ip_registry_count(const struct irc_in_addr *addr)
 /** Check whether a client is allowed to connect locally.
  * @param[in] a Address of client.
  * @param[out] next_target_out Receives time to grant another free target.
- * @return Non-zero if the connection is permitted, zero if denied.
+ * @return IPCHECK_REFUSED (zero) if denied; IPCHECK_COUNTED if permitted
+ *   and recorded (the caller marks the client IPChecked); IPCHECK_EXEMPT
+ *   if permitted without being recorded (do not mark it).
  */
 int IPcheck_local_connect(const struct irc_in_addr *a, time_t* next_target_out)
 {
