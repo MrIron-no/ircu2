@@ -463,14 +463,6 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
     return -1;
   }
 
-  /* Check for handshake timeout - use the constant from header */
-  if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
-    Debug((DEBUG_DEBUG, "GnuTLS handshake timeout for %s", cli_name(cptr)));
-    /* No peer write: a stalled handshake must close with a plain EOF. */
-    tls_reason(reason, reasonlen, "TLS handshake timed out");
-    return -1;
-  }
-
   res = gnutls_handshake(tls);
   switch (res)
   {

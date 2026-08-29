@@ -93,7 +93,8 @@ static inline int ircd_tls_trust_verifies_ca(ircd_tls_trust_policy policy)
   return policy == TLS_TRUST_REQUIRE_CA;
 }
 
-/** Timeout for TLS handshake in seconds */
+/** Timeout for a TLS handshake in seconds, measured from when the handshake
+ * starts (enforced by the connection timer in s_bsd.c, not by the backends). */
 #define TLS_HANDSHAKE_TIMEOUT 5
 
 /** Size of the human-readable reason buffer filled by ircd_tls_negotiate(). */

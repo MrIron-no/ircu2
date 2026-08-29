@@ -760,15 +760,6 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
     return -1;
   }
 
-  /* Check for handshake timeout */
-  if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
-    Debug((DEBUG_DEBUG, "SSL handshake timeout for fd=%d", cli_fd(cptr)));
-    /* No peer write: a stalled handshake must close with a plain EOF, not a
-     * plaintext line (which would corrupt a mid-handshake peer's TLS stream). */
-    tls_reason(reason, reasonlen, "TLS handshake timed out");
-    return -1;
-  }
-
   /* For client connections, use SSL_connect; for server, SSL_accept. */
   if (SSL_is_server(tls))
     res = SSL_accept(tls);
