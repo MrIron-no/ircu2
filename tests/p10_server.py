@@ -241,7 +241,7 @@ class P10Server:
         await self.begin_handshake(timeout=timeout)
         await self.send_end_of_burst()
         remaining = deadline - asyncio.get_event_loop().time()
-        await self.complete_handshake(timeout=max(remaining, 0.1))
+        await self.complete_handshake(timeout=remaining)
 
     async def begin_handshake(self, timeout: float = 15.0):
         """Send PASS + SERVER and read the hub's burst up to its EB.
