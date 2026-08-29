@@ -444,7 +444,7 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   gnutls_x509_crt_t crt;
   const gnutls_datum_t *datum;
   size_t len;
-  int res;
+  int res, i;
   unsigned char buf[32];
   const char* const err_certreq   = "ERROR :TLS certificate required\r\n";
   const char* const err_certrej   = "ERROR :TLS certificate rejected\r\n";
@@ -463,22 +463,23 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
     return -1;
   }
 
-  res = gnutls_handshake(tls);
+  /* Non-fatal results other than E_AGAIN/E_INTERRUPTED (e.g. a warning
+   * alert) mean "call gnutls_handshake() again now"; no socket event will
+   * follow, so retry here.  Each pass consumes at least one record, and the
+   * bound only guards against a misbehaving peer. */
+  for (i = 0; i < 16; ++i)
+  {
+    res = gnutls_handshake(tls);
+    if (res >= 0 || res == GNUTLS_E_AGAIN || res == GNUTLS_E_INTERRUPTED
+        || gnutls_error_is_fatal(res))
+      break;
+  }
   switch (res)
   {
   case GNUTLS_E_INTERRUPTED:
   case GNUTLS_E_AGAIN:
     if (wants_write)
       *wants_write = (gnutls_record_get_direction(tls) == 1);
-    return 0;
-
-  case GNUTLS_E_WARNING_ALERT_RECEIVED:
-  case GNUTLS_E_GOT_APPLICATION_DATA:
-    /* "Call gnutls_handshake() again": the record is already consumed, so
-     * no read event will follow.  Ask for WRITABLE, which is always ready,
-     * to get called back on the next loop pass. */
-    if (wants_write)
-      *wants_write = 1;
     return 0;
 
   case GNUTLS_E_SUCCESS:
@@ -608,7 +609,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
       write(cli_fd(cptr), err_handshake, strlen(err_handshake));
       return -1;
     }
-    /* Non-fatal: retry immediately (see the warning-alert case above). */
+    /* Still non-fatal after the retry bound above: come back on the next
+     * loop pass via the always-ready writable event. */
     if (wants_write)
       *wants_write = 1;
     return 0;

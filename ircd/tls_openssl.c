@@ -857,9 +857,11 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
       return -1;
     }
     /* ssl_result == IO_BLOCKED - handshake still in progress.  Tell the
-     * caller which direction to wait for so it does not have to poll. */
+     * caller which direction to wait for.  Anything other than WANT_READ
+     * is reported as a write: a wrong "write" costs one loop pass on the
+     * always-ready writable event, a wrong "read" costs the deadline. */
     if (wants_write)
-      *wants_write = (sslerr == SSL_ERROR_WANT_WRITE);
+      *wants_write = (sslerr != SSL_ERROR_WANT_READ);
     return 0;
   }
 }

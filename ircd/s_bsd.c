@@ -109,6 +109,7 @@ static void client_sock_callback(struct Event* ev);
 static void client_timer_callback(struct Event* ev);
 static void tls_negotiation_events(struct Client *cptr, int wants_write);
 static void tls_handshake_timer_arm(struct Client *cptr);
+static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback);
 
 
 /*
@@ -376,33 +377,23 @@ static int completed_connection(struct Client* cptr)
       tls_handshake_timer_arm(cptr);
     }
 
-    /* Are we making progress?  Handle the result like tls_negotiate_client():
-     * a negative result (timeout, fatal handshake error, missing session) must
-     * fail the link now rather than wait for the ping timeout or fall through
-     * to sending PASS/SERVER on a socket without a TLS session. */
+    /* Are we making progress?  A failure (fatal handshake error, missing
+     * session) must fail the link now rather than fall through to sending
+     * PASS/SERVER on a socket without a TLS session; tls_negotiate_client()
+     * has already marked the socket dead and dropped the session, so the
+     * caller's exit cannot leak plaintext into the handshake stream. */
     if (IsNegotiatingTLS(cptr)) {
-      char reason[TLS_REASON_LEN];
-      int wants_write = 0;
-      int res = ircd_tls_negotiate(cptr, reason, sizeof(reason), &wants_write);
+      char *fmt = "%s";
+      char *fallback = 0;
+      int res = tls_negotiate_client(cptr, &fmt, &fallback);
 
       if (res < 0) {
-        sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s%s%s",
-                             cli_name(cptr), reason[0] ? ": " : "", reason);
-        /* Mark dead before returning so exit_client() does not flush an
-         * ERROR line as plaintext into the half-open handshake stream
-         * (can_send() rejects a dead socket).  Mirrors tls_negotiate_client(). */
-        SetFlag(cptr, FLAG_DEADSOCKET);
-        ClearNegotiatingTLS(cptr);
-        if (s_tls(&cli_socket(cptr))) {
-          ircd_tls_close(s_tls(&cli_socket(cptr)), NULL);
-          s_tls(&cli_socket(cptr)) = NULL;
-        }
+        sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s: %s",
+                             cli_name(cptr), fallback);
         return 0;
       }
-      if (res == 0) {
-        tls_negotiation_events(cptr, wants_write);
+      if (res == 0)
         return 1; /* still negotiating */
-      }
     }
   }
 
