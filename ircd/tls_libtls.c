@@ -617,6 +617,18 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   }
 }
 
+void tls_backend_drop(struct Client *cptr)
+{
+  struct tls *tls = s_tls(&cli_socket(cptr));
+
+  if (tls)
+  {
+    s_tls(&cli_socket(cptr)) = NULL;
+    tls_free(tls);
+  }
+}
+
+
 IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
                           unsigned int *count_out, enum ircd_tls_want *want)
 {
@@ -646,7 +658,7 @@ IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
     *want = IRCD_TLS_WANT_WRITE;
     return IO_BLOCKED;
   }
-  return tls_handle_error(cptr, tls, (int)res);
+  return IO_FAILURE;  /* core (tls_io_fatal) drops the session */
 }
 
 IOResult tls_backend_write(struct Client *cptr, const char *buf,
@@ -679,7 +691,7 @@ IOResult tls_backend_write(struct Client *cptr, const char *buf,
     *want = IRCD_TLS_WANT_WRITE;
     return IO_BLOCKED;
   }
-  return tls_handle_error(cptr, tls, (int)res);
+  return IO_FAILURE;  /* core (tls_io_fatal) drops the session */
 }
 
 

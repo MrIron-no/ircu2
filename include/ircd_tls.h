@@ -273,6 +273,12 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
  * \returns IO_FAILURE on a fatal error (session torn down), IO_BLOCKED if no
  *   data is available (with \a want set), or IO_SUCCESS if data was read.
  */
+/** tls_backend_drop() hard-frees \a cptr's TLS session after a fatal error and
+ * NULLs the socket's session pointer.  Unlike ircd_tls_close() it sends no
+ * close_notify (the session is unusable).  The core teardown (tls_io.c) calls
+ * this; the backend touches no client flags or connection state itself. */
+void tls_backend_drop(struct Client *cptr);
+
 IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
                           unsigned int *count_out, enum ircd_tls_want *want);
 

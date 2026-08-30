@@ -606,6 +606,18 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   }
 }
 
+void tls_backend_drop(struct Client *cptr)
+{
+  gnutls_session_t tls = s_tls(&cli_socket(cptr));
+
+  if (tls)
+  {
+    s_tls(&cli_socket(cptr)) = NULL;
+    gnutls_deinit(tls);  /* no gnutls_bye() after a fatal error */
+  }
+}
+
+
 IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
                           unsigned int *count_out, enum ircd_tls_want *want)
 {
@@ -670,10 +682,7 @@ IOResult tls_backend_write(struct Client *cptr, const char *buf,
     return IO_BLOCKED;
   }
   if (gnutls_error_is_fatal(res))
-  {
-    SetFlag(cptr, FLAG_DEADSOCKET);
-    return IO_FAILURE;
-  }
+    return IO_FAILURE;  /* core (tls_io_fatal) drops the session */
   return IO_BLOCKED;
 }
 

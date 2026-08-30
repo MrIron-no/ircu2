@@ -95,6 +95,12 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   return 1;
 }
 
+void tls_backend_drop(struct Client *cptr)
+{
+  (void)cptr;
+}
+
+
 IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
                           unsigned int *count_out, enum ircd_tls_want *want)
 {

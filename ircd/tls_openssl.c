@@ -881,6 +881,35 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   }
 }
 
+void tls_backend_drop(struct Client *cptr)
+{
+  SSL *tls = s_tls(&cli_socket(cptr));
+
+  if (tls)
+  {
+    s_tls(&cli_socket(cptr)) = NULL;
+    /* Do not SSL_shutdown() after a fatal error. */
+    SSL_free(tls);
+  }
+}
+
+/** Classify a non-WANT SSL error for the read/write paths, without tearing the
+ * session down (the core owns teardown via tls_io_fatal()/tls_backend_drop()).
+ * SYSCALL EINTR/EAGAIN is a normal block; ZERO_RETURN and everything else are
+ * fatal. */
+static IOResult ssl_io_result(SSL *tls, int err, int orig_errno)
+{
+  if (err == SSL_ERROR_SYSCALL &&
+      (orig_errno == EINTR || orig_errno == EAGAIN || orig_errno == EWOULDBLOCK))
+    return IO_BLOCKED;
+  if (err == SSL_ERROR_ZERO_RETURN)
+  {
+    if (SSL_shutdown(tls) == 0)
+      SSL_shutdown(tls);
+  }
+  return IO_FAILURE;
+}
+
 IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
                           unsigned int *count_out, enum ircd_tls_want *want)
 {
@@ -914,7 +943,7 @@ IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
     *want = IRCD_TLS_WANT_READ;
     return IO_BLOCKED;
   }
-  return ssl_handle_error(cptr, tls, res, orig_errno);
+  return ssl_io_result(tls, err, orig_errno);
 }
 
 IOResult tls_backend_write(struct Client *cptr, const char *buf,
@@ -951,9 +980,7 @@ IOResult tls_backend_write(struct Client *cptr, const char *buf,
     *want = IRCD_TLS_WANT_WRITE;
     return IO_BLOCKED;
   }
-  /* SYSCALL EINTR/EAGAIN maps to IO_BLOCKED (want stays NONE, a normal socket
-   * block); anything else is fatal and tears the session down. */
-  return ssl_handle_error(cptr, tls, res, orig_errno);
+  return ssl_io_result(tls, err, orig_errno);
 }
 
 

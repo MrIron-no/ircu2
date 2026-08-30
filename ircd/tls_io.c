@@ -62,12 +62,30 @@ unsigned int tls_desired_events(struct Client *cptr)
   return ev;
 }
 
-/** Record the direction a blocked/failed write is waiting on, in one place. */
+/** Core-owned teardown after a fatal backend I/O error: hard-drop the session
+ * and mark the socket dead, so deliver_it()/read_packet() never fall back to
+ * the plaintext path and the connection is reaped.  Backends do no teardown of
+ * their own for the read/write paths. */
+static void tls_io_fatal(struct Client *cptr)
+{
+  struct Connection *con = cli_connect(cptr);
+
+  tls_backend_drop(cptr);
+  SetFlag(cptr, FLAG_DEADSOCKET);
+  con_tls_want_rd(con) = IRCD_TLS_WANT_NONE;
+  con_tls_want_wr(con) = IRCD_TLS_WANT_NONE;
+}
+
+/** Record the direction a blocked write is waiting on, or tear the session
+ * down on a fatal error — in one place. */
 static void tls_io_note_write(struct Client *cptr, IOResult io,
                               enum ircd_tls_want want)
 {
-  con_tls_want_wr(cli_connect(cptr)) =
-    (io == IO_BLOCKED) ? want : IRCD_TLS_WANT_NONE;
+  if (io == IO_FAILURE)
+    tls_io_fatal(cptr);
+  else
+    con_tls_want_wr(cli_connect(cptr)) =
+      (io == IO_BLOCKED) ? want : IRCD_TLS_WANT_NONE;
 }
 
 IOResult tls_io_sendv(struct Client *cptr, struct MsgQ *buf,
@@ -185,10 +203,13 @@ IOResult tls_io_recv(struct Client *cptr, char *buf, unsigned int length,
   enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
   IOResult io = tls_backend_read(cptr, buf, length, count_out, &want);
 
-  /* A read blocked waiting to write the socket must ask the event loop for a
-   * writable event; read_packet()'s IO_BLOCKED path asserts it. */
-  con_tls_want_rd(cli_connect(cptr)) =
-    (io == IO_BLOCKED) ? want : IRCD_TLS_WANT_NONE;
+  if (io == IO_FAILURE)
+    tls_io_fatal(cptr);
+  else
+    /* A read blocked waiting to write the socket must ask the event loop for a
+     * writable event; read_packet()'s IO_BLOCKED path asserts it. */
+    con_tls_want_rd(cli_connect(cptr)) =
+      (io == IO_BLOCKED) ? want : IRCD_TLS_WANT_NONE;
   return io;
 }
 
