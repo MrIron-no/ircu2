@@ -1,17 +1,17 @@
 """TLS certificate rotation via REHASH under a live connection.
 
 `REHASH s` -> ircd_tls_rehash() -> ircd_tls_init() rebuilds the server SSL
-context from the on-disk cert/key and frees the old one; existing sessions keep
-the old context alive by refcount, so live connections must survive while new
-connections pick up the rotated certificate.  This is the routine ops path
-(cert renewal) and was previously untested.
+context from the on-disk cert/key and drops the daemon's reference to the old
+one; an already-negotiated session must keep the context it handshaked on alive
+on its own, so live connections must survive while new connections pick up the
+rotated certificate.  This is the routine ops path (cert renewal) and is
+verified across all three backends.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 import socket
 import ssl
 
@@ -25,14 +25,12 @@ from tls.helpers import oper_up
 pytestmark = [
     pytest.mark.tls,
     pytest.mark.asyncio,
-    # New connections pick up the rotated cert on every backend, but whether a
-    # *live* session survives the context swap is backend-lifecycle-specific;
-    # only OpenSSL's refcount behaviour is verified here.  gnutls/libtls rehash
-    # under a live connection is a separate follow-up.
-    pytest.mark.skipif(
-        os.environ.get("TLS_BACKEND", "openssl") != "openssl",
-        reason="live-session survival across REHASH verified for OpenSSL only",
-    ),
+    # New connections pick up the rotated cert, and the live session must
+    # survive the context swap, on every backend.  ircd_tls_rehash() rebuilds
+    # the global context via ircd_tls_init(); an already-negotiated session
+    # must keep the context it handshaked on alive on its own (OpenSSL by
+    # SSL_CTX refcount, gnutls/libtls by their per-session credential/keypair
+    # ownership).  Verified for all three backends.
 ]
 
 HUB = "ircu-tls-hub"
