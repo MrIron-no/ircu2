@@ -1,9 +1,11 @@
 """Joining many channels at once (commits 5ffe0a1, 54cfd56).
 
 With FEAT_JOIN_TARGET=FALSE (default) a JOIN never fails because of the
-target-change limit: the membership is flagged "delayed target" instead.
-With FEAT_JOIN_TARGET=TRUE the historical behaviour applies and joins
-beyond the free-target budget are refused with ERR_TARGETTOOFAST.
+target-change limit: the membership is flagged "delayed target" instead,
+and -- since the join is allowed -- no ERR_TARGETTOOFAST is sent and no
+penalty is applied.  With FEAT_JOIN_TARGET=TRUE the historical behaviour
+applies and joins beyond the free-target budget are refused with
+ERR_TARGETTOOFAST.
 """
 
 from __future__ import annotations
@@ -36,11 +38,13 @@ async def _burst_join(client, prefix):
 
 async def test_join_burst_not_limited_by_default(make_client):
     client = await make_client("jtburst1")
-    chans, joined, _ = await _burst_join(client, "jt_free")
+    chans, joined, tfast = await _burst_join(client, "jt_free")
     assert joined == {c.lower() for c in chans}, (
         f"only {len(joined)}/{CHANNELS} channels joined: missing "
         f"{sorted(set(c.lower() for c in chans) - joined)}"
     )
+    # An allowed join must not be reported as "too fast".
+    assert tfast == 0, f"got {tfast} ERR_TARGETTOOFAST for joins that succeeded"
 
 
 async def test_join_burst_limited_with_JOIN_TARGET(make_client, oper):
