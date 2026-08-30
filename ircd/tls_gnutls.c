@@ -444,7 +444,7 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   gnutls_x509_crt_t crt;
   const gnutls_datum_t *datum;
   size_t len;
-  int res;
+  int res, i;
   unsigned char buf[32];
   const char* const err_certreq   = "ERROR :TLS certificate required\r\n";
   const char* const err_certrej   = "ERROR :TLS certificate rejected\r\n";
@@ -465,13 +465,21 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
 
   /* The handshake deadline is enforced by a core timer (s_bsd.c), not here. */
 
-  res = gnutls_handshake(tls);
+  /* Non-fatal results other than E_AGAIN/E_INTERRUPTED (e.g. a warning alert)
+   * mean "call gnutls_handshake() again now"; no socket event will follow, so
+   * retry here rather than fabricating a socket direction.  Each pass consumes
+   * at least one record; the bound only guards against a misbehaving peer. */
+  for (i = 0; i < 16; ++i)
+  {
+    res = gnutls_handshake(tls);
+    if (res >= 0 || res == GNUTLS_E_AGAIN || res == GNUTLS_E_INTERRUPTED
+        || gnutls_error_is_fatal(res))
+      break;
+  }
   switch (res)
   {
   case GNUTLS_E_INTERRUPTED:
   case GNUTLS_E_AGAIN:
-  case GNUTLS_E_WARNING_ALERT_RECEIVED:
-  case GNUTLS_E_GOT_APPLICATION_DATA:
     if (want)
       *want = (gnutls_record_get_direction(tls) == 1) ? IRCD_TLS_WANT_WRITE
                                                       : IRCD_TLS_WANT_READ;
