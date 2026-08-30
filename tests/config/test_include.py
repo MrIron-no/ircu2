@@ -99,14 +99,21 @@ async def test_missing_include_file_is_reported(ircd_hub):
     assert "error opening file" in result.stderr, result.stderr
 
 
-@pytest.mark.xfail(
-    reason="ircd never exits after failing to open an Include file (killed by timeout)",
-    strict=True,
-)
 async def test_missing_include_file_exits_promptly(ircd_hub):
     files = {"miss2_main.conf": BASE % {"extra": 'Include "does_not_exist.conf";'}}
     result = _check(ircd_hub["container"], "miss2_main.conf", files)
-    assert result.returncode != 137, "ircd hung and was killed by timeout"
+    assert result.returncode == 7, f"expected a configuration error exit, got {result}"
+    assert "error opening file" in result.stderr, result.stderr
+
+
+async def test_missing_include_in_the_middle_still_parses_rest(ircd_hub):
+    """The blocks after a missing include are still parsed (and the check fails)."""
+    files = {
+        "miss3_main.conf": BASE % {"extra": 'Include "does_not_exist.conf";\nClient { ip = "*"; class = "Local"; };'},
+    }
+    result = _check(ircd_hub["container"], "miss3_main.conf", files, client="probe@10.55.0.1")
+    assert result.returncode == 7, result
+    assert "error opening file" in result.stderr, result.stderr
 
 
 async def test_include_restricted_to_block_types(ircd_hub):
