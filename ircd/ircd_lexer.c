@@ -316,8 +316,14 @@ int yylex(void)
   if (!yy_in)
     return YYEOF;
 
-  if (yy_in->fd < 0)
-    return TOKERR;
+  if (yy_in->fd < 0) {
+    /* The file could not be opened (lexer_open() already reported it).
+     * Treat it as an empty file: pop it and end the include, instead of
+     * returning TOKERR forever and hanging the parser's error recovery.
+     */
+    lexer_pop();
+    return yy_in ? TEOF : YYEOF;
+  }
 
   for (;;) {
     pos = yy_in->buf + yy_in->tok_ofs;
