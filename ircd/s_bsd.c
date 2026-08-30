@@ -786,6 +786,13 @@ static int read_packet(struct Client *cptr, int socket_ready)
       }
       break;
     case IO_BLOCKED:
+      /* A TLS read blocked waiting to *write* the socket (con_tls_want_rd ==
+       * WANT_WRITE) must assert writable interest, or it is never retried when
+       * the socket drains (the ET_WRITE arm drives that retry).  With a
+       * non-empty send queue update_write() already keeps WRITABLE, but with
+       * an empty one nothing else would, so recompute here. */
+      if (IsTLS(cptr))
+        update_write(cptr);
       break;
     case IO_FAILURE:
       cli_error(cptr) = errno;
