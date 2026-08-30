@@ -209,6 +209,11 @@ void send_queued(struct Client *to)
         sprintf(tmp,"Write error: %s",(strerror(cli_error(to))) ? (strerror(cli_error(to))) : "Unknown error" );
         dead_link(to, tmp);
       }
+      else
+        /* Blocked with no bytes sent.  Recompute event interest: a TLS write
+         * waiting to read must drop writable interest here (the backend set
+         * that state) so the level-triggered writable event does not spin. */
+        update_write(to);
       return;
     }
   }

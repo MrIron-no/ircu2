@@ -38,6 +38,7 @@
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
 #include "ircd_tls.h"
+#include "tls_io.h"
 #include "ircd.h"
 #include "list.h"
 #include "listener.h"
@@ -288,7 +289,16 @@ unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf)
 
   assert(0 != cptr);
 
-  io_result = IsTLS(cptr) && s_tls(&cli_socket(cptr))
+  /* A TLS client whose session was torn down (a fatal error already freed it)
+   * must never fall through to the plaintext os_sendv_nonb path, or queued
+   * data would leak in the clear.  The backend marks such a client dead; keep
+   * the invariant here too. */
+  if (IsTLS(cptr) && !s_tls(&cli_socket(cptr))) {
+    SetFlag(cptr, FLAG_DEADSOCKET);
+    return 0;
+  }
+
+  io_result = IsTLS(cptr)
     ? ircd_tls_sendv(cptr, buf, &bytes_count, &bytes_written)
     : os_sendv_nonb(cli_fd(cptr), buf, &bytes_count, &bytes_written);
   switch (io_result) {
@@ -667,14 +677,20 @@ void add_connection(struct Listener* listener, int fd) {
  */
 void update_write(struct Client* cptr)
 {
-  /* If there are messages that need to be sent along, or if the client
-   * is in the middle of a /list, then we need to tell the engine that
-   * we're interested in writable events--otherwise, we need to drop
-   * that interest.
+  /* Whether we want writable events: for a plaintext connection this is simply
+   * "there is queued output or an active /LIST".  TLS connections can also be
+   * blocked cross-direction (a write waiting to read, a read waiting to
+   * write), so that decision is delegated to tls_io.c, which owns the single
+   * TLS-aware interest rule.  Plaintext connections never consult the TLS
+   * module.  Readable interest is managed separately.
    */
+  int want_write = IsTLS(cptr)
+    ? tls_want_writable(cptr)
+    : (MsgQLength(&cli_sendQ(cptr)) != 0 || cli_listing(cptr));
+
   socket_events(&(cli_socket(cptr)),
-		((MsgQLength(&cli_sendQ(cptr)) || cli_listing(cptr)) ?
-		 SOCK_ACTION_ADD : SOCK_ACTION_DEL) | SOCK_EVENT_WRITABLE);
+		(want_write ? SOCK_ACTION_ADD : SOCK_ACTION_DEL)
+		| SOCK_EVENT_WRITABLE);
 }
 
 /** Non-zero if recvQ exceeds body (maxflood) or tag (CLIENT_TAG_FLOOD) limits. */
@@ -725,10 +741,15 @@ static int read_packet(struct Client *cptr, int socket_ready)
       ClearExemptThrottle(cptr);
   }
 
+  /* A TLS client whose session was torn down must not read plaintext off the
+   * socket; treat it as a fatal read (its FLAG_DEADSOCKET is already set). */
+  if (IsTLS(cptr) && !s_tls(&cli_socket(cptr)))
+    return 0;
+
   if (socket_ready &&
       !(IsUser(cptr) &&
 	recvq_over_flood(cptr, flood_limit))) {
-    IOResult io_result = IsTLS(cptr) && s_tls(&cli_socket(cptr))
+    IOResult io_result = IsTLS(cptr)
       ? ircd_tls_recv(cptr, readbuf, sizeof(readbuf), &length)
       : os_recv_nonb(cli_fd(cptr), readbuf, sizeof(readbuf), &length);
     switch (io_result) {
@@ -1234,6 +1255,17 @@ static void client_sock_callback(struct Event* ev)
       return;
     }
     ClrFlag(cptr, FLAG_BLOCKED);
+    /* A TLS read blocked waiting to write asked for this writable event (see
+     * update_write()).  Retry the read now the socket can flush whatever the
+     * TLS layer owed (e.g. a KeyUpdate response). */
+    if (con_tls_want_rd(con) == IRCD_TLS_WANT_WRITE) {
+      if (read_packet(cptr, 1) == 0) {
+        fallback = "EOF from client";
+        break;
+      }
+      if (IsDead(cptr))
+        break;
+    }
     if (cli_listing(cptr) && MsgQLength(&(cli_sendQ(cptr))) < 2048)
       list_next_channels(cptr);
     Debug((DEBUG_SEND, "Sending queued data to %C", cptr));
@@ -1256,6 +1288,13 @@ static void client_sock_callback(struct Event* ev)
       }
       if (read_packet(cptr, 1) == 0) /* error while reading packet */
         fallback = "EOF from client";
+      /* A TLS write blocked waiting to read parked its send queue with
+       * writable interest dropped (see update_write()).  The data we just
+       * read may have unblocked it, so retry the send now. */
+      else if (!IsDead(cptr) && con_tls_want_wr(con) == IRCD_TLS_WANT_READ) {
+        ClrFlag(cptr, FLAG_BLOCKED);
+        send_queued(cptr);
+      }
     }
     break;
 

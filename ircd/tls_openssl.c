@@ -726,11 +726,35 @@ static IOResult ssl_handle_error(struct Client *cptr, SSL *tls, int res, int ori
   if (tls && s_tls(&cli_socket(cptr)) == tls) {
     Debug((DEBUG_ERROR, "SSL fall-through fatal error %d for %C", err, cptr));
     s_tls(&cli_socket(cptr)) = NULL;
+    /* The session is gone but FLAG_TLS stays set.  Mark the socket dead so
+     * deliver_it()/read_packet() cannot fall back to the plaintext os_*_nonb
+     * path (which would flush queued data in the clear onto the TLS socket),
+     * and drop any pending cross-direction wait. */
+    SetFlag(cptr, FLAG_DEADSOCKET);
+    cli_tls_want_rd(cptr) = IRCD_TLS_WANT_NONE;
+    cli_tls_want_wr(cptr) = IRCD_TLS_WANT_NONE;
     /* Do not call SSL_shutdown() after fatal errors */
     SSL_free(tls);
   }
 
   return IO_FAILURE;
+}
+
+/** Classify a failed SSL_write() from the send path and record the socket
+ * direction it is blocked on.  A write blocked on SSL_ERROR_WANT_READ must NOT
+ * keep writable interest asserted (update_write() drops it), or the level-
+ * triggered writable event spins; the always-on readable event drives the
+ * retry.  Any other block is an ordinary "wants write". */
+static IOResult ssl_write_block(struct Client *cptr, SSL *tls, int res,
+                                int orig_errno)
+{
+  if (SSL_get_error(tls, res) == SSL_ERROR_WANT_READ)
+  {
+    cli_tls_want_wr(cptr) = IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
+  }
+  cli_tls_want_wr(cptr) = IRCD_TLS_WANT_NONE;
+  return ssl_handle_error(cptr, tls, res, orig_errno);
 }
 
 int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
@@ -877,15 +901,27 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
   if (!tls)
     return IO_FAILURE;
 
+  ERR_clear_error();
   res = SSL_read(tls, buf, length);
   if (res > 0)
   {
     *count_out = res;
+    cli_tls_want_rd(cptr) = IRCD_TLS_WANT_NONE;
     return IO_SUCCESS;
   }
 
   orig_errno = errno;
   *count_out = 0;
+
+  /* A read blocked waiting to *write* the socket (e.g. flushing a TLS1.3
+   * KeyUpdate response) must ask the event loop for a writable event; the
+   * readable event alone would never resume it. */
+  if (SSL_get_error(tls, res) == SSL_ERROR_WANT_WRITE)
+  {
+    cli_tls_want_rd(cptr) = IRCD_TLS_WANT_WRITE;
+    return IO_BLOCKED;
+  }
+  cli_tls_want_rd(cptr) = IRCD_TLS_WANT_NONE;
 
   return ssl_handle_error(cptr, tls, res, orig_errno);
 }
@@ -925,7 +961,7 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
       res = SSL_write(tls, con->con_rexmit, (int)con->con_rexmit_len);
       if (res <= 0) {
         orig_errno = errno;
-        io = ssl_handle_error(cptr, tls, res, orig_errno);
+        io = ssl_write_block(cptr, tls, res, orig_errno);
         if (io == IO_FAILURE)
           *count_out = 0;
         return io;
@@ -963,7 +999,7 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
           res = SSL_write(tls, con->con_rexmit, (int)con->con_rexmit_len);
           if (res <= 0) {
             orig_errno = errno;
-            io = ssl_handle_error(cptr, tls, res, orig_errno);
+            io = ssl_write_block(cptr, tls, res, orig_errno);
             if (io == IO_FAILURE)
               *count_out = 0;
             return io;
@@ -985,13 +1021,18 @@ IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
     orig_errno = errno;
     con->con_rexmit = iov[ii].iov_base;
     con->con_rexmit_len = iov[ii].iov_len;
-    io = ssl_handle_error(cptr, tls, res, orig_errno);
+    io = ssl_write_block(cptr, tls, res, orig_errno);
     if (io == IO_FAILURE)
       *count_out = 0;
     return io;
   }
 
-  return (*count_out || made_progress) ? IO_SUCCESS : IO_BLOCKED;
+  if (*count_out || made_progress)
+  {
+    cli_tls_want_wr(cptr) = IRCD_TLS_WANT_NONE;  /* progress: no cross-direction wait */
+    return IO_SUCCESS;
+  }
+  return IO_BLOCKED;
 }
 
 int ircd_tls_sha1_base64(const void *data, size_t len, char *out, size_t outlen)
