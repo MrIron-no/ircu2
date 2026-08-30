@@ -228,6 +228,20 @@ static void openssl_apply_verify_policy(SSL *tls, ircd_tls_trust_policy policy)
   SSL_set_verify(tls, mode, verify_ca ? NULL : openssl_fingerprint_verify_callback);
 }
 
+/** Apply the I/O mode and hardening options every ircd SSL_CTX needs.
+ * SSL_OP_NO_RENEGOTIATION removes the only way a peer can drive a post-
+ * handshake SSL_write into SSL_ERROR_WANT_READ on TLS 1.2 (a CPU-spin
+ * trigger); SSL_OP_NO_COMPRESSION disables CRIME-style record compression. */
+static void openssl_harden_ctx(SSL_CTX *ctx)
+{
+  SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE
+                   | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+#ifdef SSL_OP_NO_RENEGOTIATION
+  SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION);
+#endif
+  SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION);
+}
+
 static int openssl_configure_server_ctx(SSL_CTX *ctx, const char *ciphers,
                                         const char *cacertfile,
                                         const char *cacertdir,
@@ -259,8 +273,7 @@ static int openssl_configure_server_ctx(SSL_CTX *ctx, const char *ciphers,
 
   SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
   openssl_set_verify_policy(ctx, policy);
-  SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE
-                   | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+  openssl_harden_ctx(ctx);
 
   str = ciphers;
   if (EmptyString(str))
@@ -301,8 +314,7 @@ static int openssl_configure_client_ctx(SSL_CTX *ctx, const char *ciphers,
 
   SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
   openssl_set_verify_policy(ctx, policy);
-  SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE
-                   | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+  openssl_harden_ctx(ctx);
 
   str = ciphers;
   if (EmptyString(str))
@@ -465,8 +477,8 @@ int ircd_tls_init(void)
   /* Default connect context: outbound S2S without verifypeer (REQUIRE_SOFT). */
   openssl_set_verify_policy(new_client_ctx, TLS_TRUST_REQUIRE_SOFT);
 
-  SSL_CTX_set_mode(new_server_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
-  SSL_CTX_set_mode(new_client_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+  openssl_harden_ctx(new_server_ctx);
+  openssl_harden_ctx(new_client_ctx);
 
   /* Configure ciphers */
   str = feature_str(FEAT_TLS_CIPHERS);
