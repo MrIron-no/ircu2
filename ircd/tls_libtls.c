@@ -527,7 +527,8 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       enum ircd_tls_want *want)
 {
   const char *hash;
   struct tls *tls;
@@ -538,6 +539,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
 
   if (reason && reasonlen)
     reason[0] = '\0';
+  if (want)
+    *want = IRCD_TLS_WANT_NONE;
 
   tls = s_tls(&cli_socket(cptr));
   if (!tls) {
@@ -546,13 +549,7 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
     return -1;
   }
 
-  /* Check for handshake timeout */
-  if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
-    Debug((DEBUG_DEBUG, "libtls handshake timeout for %s", cli_name(cptr)));
-    /* No peer write: a stalled handshake must close with a plain EOF. */
-    tls_reason(reason, reasonlen, "TLS handshake timed out");
-    return -1;
-  }
+  /* The handshake deadline is enforced by a core timer (s_bsd.c), not here. */
 
   Debug((DEBUG_DEBUG, "libtls handshake for %s", cli_name(cptr)));
 
@@ -605,6 +602,9 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
   }
   
   if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT) {
+    if (want)
+      *want = (res == TLS_WANT_POLLOUT) ? IRCD_TLS_WANT_WRITE
+                                        : IRCD_TLS_WANT_READ;
     return 0; /* Handshake in progress */
   }
   
@@ -622,7 +622,10 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
       write(cli_fd(cptr), err_handshake, strlen(err_handshake));
       return -1;
     }
-    /* tls_result == IO_BLOCKED - handshake still in progress */
+    /* tls_result == IO_BLOCKED - handshake still in progress; retry via the
+     * always-ready writable event. */
+    if (want)
+      *want = IRCD_TLS_WANT_WRITE;
     return 0;
   }
 }

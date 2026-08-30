@@ -437,7 +437,8 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       enum ircd_tls_want *want)
 {
   gnutls_session_t tls;
   gnutls_x509_crt_t crt;
@@ -451,6 +452,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
 
   if (reason && reasonlen)
     reason[0] = '\0';
+  if (want)
+    *want = IRCD_TLS_WANT_NONE;
 
   tls = s_tls(&cli_socket(cptr));
 
@@ -460,13 +463,7 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
     return -1;
   }
 
-  /* Check for handshake timeout - use the constant from header */
-  if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
-    Debug((DEBUG_DEBUG, "GnuTLS handshake timeout for %s", cli_name(cptr)));
-    /* No peer write: a stalled handshake must close with a plain EOF. */
-    tls_reason(reason, reasonlen, "TLS handshake timed out");
-    return -1;
-  }
+  /* The handshake deadline is enforced by a core timer (s_bsd.c), not here. */
 
   res = gnutls_handshake(tls);
   switch (res)
@@ -475,6 +472,9 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
   case GNUTLS_E_AGAIN:
   case GNUTLS_E_WARNING_ALERT_RECEIVED:
   case GNUTLS_E_GOT_APPLICATION_DATA:
+    if (want)
+      *want = (gnutls_record_get_direction(tls) == 1) ? IRCD_TLS_WANT_WRITE
+                                                      : IRCD_TLS_WANT_READ;
     return 0;
 
   case GNUTLS_E_SUCCESS:
@@ -604,6 +604,10 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
       write(cli_fd(cptr), err_handshake, strlen(err_handshake));
       return -1;
     }
+    /* Non-fatal, non-AGAIN (e.g. a warning alert): call again immediately via
+     * the always-ready writable event. */
+    if (want)
+      *want = IRCD_TLS_WANT_WRITE;
     return 0;
   }
 }

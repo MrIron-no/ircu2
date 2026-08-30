@@ -240,19 +240,25 @@ void ircd_tls_listen_free(struct Listener *listener);
 /** ircd_tls_negotiate() attempts to continue an initial TLS handshake
  * for \a cptr.  If the handshake completes, this function calls
  * \a ClearNegotiatingTLS(cptr) and returns 1.  If the handshake failed,
- * this function returns -1.  Otherwise it updates event flags for the
- * client's socket and returns 0.
+ * this function returns -1.  Otherwise it returns 0 and reports through
+ * \a want which socket direction the handshake is blocked on, so the caller
+ * can set the socket's event interest.  The backend never touches socket
+ * events itself, and it does not enforce the handshake deadline (a core
+ * timer does).
  *
  * @param[in] cptr Locally connected client to perform handshake for.
  * @param[out] reason If non-NULL, receives a human-readable failure reason
  *   on a -1 return (empty otherwise).  Intended for operator notices and
- *   the disconnect log, not for the peer (a categorical ERROR line is sent
- *   to the peer instead).
+ *   the disconnect log, not for the peer.
  * @param[in] reasonlen Size of the \a reason buffer (see TLS_REASON_LEN).
+ * @param[out] want If non-NULL, set on a 0 return to the socket direction the
+ *   handshake is waiting on (IRCD_TLS_WANT_READ / IRCD_TLS_WANT_WRITE);
+ *   IRCD_TLS_WANT_NONE otherwise.
  * \returns 1 on completed handshake, 0 on continuing handshake, -1 on
  *   error.
  */
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen);
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       enum ircd_tls_want *want);
 
 /** ircd_tls_recv() performs a non-blocking receive of TLS application
  * data from \a cptr into \a buf.

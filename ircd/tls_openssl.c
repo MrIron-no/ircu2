@@ -757,7 +757,8 @@ static IOResult ssl_write_block(struct Client *cptr, SSL *tls, int res,
   return ssl_handle_error(cptr, tls, res, orig_errno);
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       enum ircd_tls_want *want)
 {
   SSL *tls;
   X509 *cert;
@@ -770,6 +771,8 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
 
   if (reason && reasonlen)
     reason[0] = '\0';
+  if (want)
+    *want = IRCD_TLS_WANT_NONE;
 
   tls = s_tls(&cli_socket(cptr));
   if (!tls) {
@@ -781,16 +784,11 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
     return -1;
   }
 
-  /* Check for handshake timeout */
-  if (CurrentTime - cli_firsttime(cptr) > TLS_HANDSHAKE_TIMEOUT) {
-    Debug((DEBUG_DEBUG, "SSL handshake timeout for fd=%d", cli_fd(cptr)));
-    /* No peer write: a stalled handshake must close with a plain EOF, not a
-     * plaintext line (which would corrupt a mid-handshake peer's TLS stream). */
-    tls_reason(reason, reasonlen, "TLS handshake timed out");
-    return -1;
-  }
+  /* The handshake deadline is enforced by a core timer (see s_bsd.c), not
+   * here: this backend is driven purely by socket events and never polls. */
 
   /* For client connections, use SSL_connect; for server, SSL_accept. */
+  ERR_clear_error();
   if (SSL_is_server(tls))
     res = SSL_accept(tls);
   else
@@ -886,7 +884,14 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen)
       write(cli_fd(cptr), err_handshake, strlen(err_handshake));
       return -1;
     }
-    /* ssl_result == IO_BLOCKED - handshake still in progress */
+    /* ssl_result == IO_BLOCKED - handshake still in progress.  Report the
+     * blocked direction so the caller waits on exactly that event.  Anything
+     * other than WANT_READ is reported as a write: a wrong "write" costs one
+     * loop pass on the always-ready writable event, a wrong "read" would cost
+     * the whole deadline. */
+    if (want)
+      *want = (sslerr == SSL_ERROR_WANT_READ) ? IRCD_TLS_WANT_READ
+                                              : IRCD_TLS_WANT_WRITE;
     return 0;
   }
 }
