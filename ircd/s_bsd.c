@@ -566,6 +566,7 @@ void add_connection(struct Listener* listener, int fd) {
   struct Client      *new_client;
   time_t             next_target = 0;
   void               *tls;
+  int                ipchecked;
 
   const char* const throttle_message =
          "ERROR :Your host is trying to (re)connect too fast -- throttled\r\n";
@@ -611,33 +612,37 @@ void add_connection(struct Listener* listener, int fd) {
     }
   }
 
+  /*
+   * Throttle check before allocating the Client, so a rejected connection
+   * has nothing to leak but the TLS session freed here.  Cloudflare websocket
+   * ports defer IPcheck until CF-Connecting-IP is known at handshake; the
+   * socket peer is a Cloudflare edge node.
+   */
+  ipchecked = 0;
+  if (!listener_server(listener) && !listener_webirc(listener)
+      && !(listener_websocket(listener) && listener_cloudflare(listener)))
+  {
+    if (!IPcheck_local_connect(&addr.addr, &next_target))
+    {
+      ++ServerStats->is_throttled;
+      write(fd, throttle_message, strlen(throttle_message));
+      close(fd);
+      if (tls)
+        ircd_tls_close(tls, NULL);
+      return;
+    }
+    ipchecked = 1;
+  }
+
   if (listener_server(listener))
-  {
     new_client = make_client(0, STAT_UNKNOWN_SERVER);
-  }
   else if (listener_webirc(listener))
-  {
-      new_client = make_client(0, STAT_WEBIRC);
-  }
+    new_client = make_client(0, STAT_WEBIRC);
   else
-  {
     new_client = make_client(0, listener_websocket(listener) ? STAT_WEBSOCKET : STAT_UNKNOWN_USER);
 
-    /*
-     * Cloudflare websocket ports: defer IPcheck until CF-Connecting-IP is
-     * known at handshake; the socket peer is a Cloudflare edge node.
-     */
-    if (!(listener_websocket(listener) && listener_cloudflare(listener))) {
-      if (!IPcheck_local_connect(&addr.addr, &next_target))
-      {
-        ++ServerStats->is_throttled;
-        write(fd, throttle_message, strlen(throttle_message));
-        close(fd);
-        return;
-      }
-      SetIPChecked(new_client);
-    }
-  }
+  if (ipchecked)
+    SetIPChecked(new_client);
 
   /*
    * Copy ascii address to 'sockhost' just in case. Then we have something
@@ -657,6 +662,11 @@ void add_connection(struct Listener* listener, int fd) {
     write(fd, register_message, strlen(register_message));
     close(fd);
     cli_fd(new_client) = -1;
+    if (tls)
+      ircd_tls_close(tls, NULL);
+    if (IsIPChecked(new_client))
+      IPcheck_disconnect(new_client);
+    free_client(new_client);
     return;
   }
   cli_freeflag(new_client) |= FREEFLAG_SOCKET;
