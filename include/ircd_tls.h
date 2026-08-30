@@ -260,18 +260,21 @@ void ircd_tls_listen_free(struct Listener *listener);
 int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
                        enum ircd_tls_want *want);
 
-/** ircd_tls_recv() performs a non-blocking receive of TLS application
- * data from \a cptr into \a buf.
+/** tls_backend_read() reads TLS application data from \a cptr into \a buf.
+ *
+ * Thin per-backend primitive (tls_io_recv() in the core wraps it and records
+ * the blocked direction).
  *
  * @param[in] cptr Locally connected client to read from.
  * @param[out] buf Buffer to receive application data into.
  * @param[in] length Length of \a buf.
- * @param[out] count_out Number of bytes actually read into \a buf.
- * \returns IO_FAILURE on error, IO_BLOCKED if no data is available, or
- *   IO_SUCCESS if any data was read into \a buf.
+ * @param[out] count_out Number of bytes read (0 unless IO_SUCCESS).
+ * @param[out] want On IO_BLOCKED, the socket direction the read is waiting on.
+ * \returns IO_FAILURE on a fatal error (session torn down), IO_BLOCKED if no
+ *   data is available (with \a want set), or IO_SUCCESS if data was read.
  */
-IOResult ircd_tls_recv(struct Client *cptr, char *buf,
-                       unsigned int length, unsigned int *count_out);
+IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
+                          unsigned int *count_out, enum ircd_tls_want *want);
 
 /** tls_backend_write() writes one contiguous buffer to \a cptr's TLS session.
  *

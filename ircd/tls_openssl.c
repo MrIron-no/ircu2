@@ -896,11 +896,14 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   }
 }
 
-IOResult ircd_tls_recv(struct Client *cptr, char *buf,
-                       unsigned int length, unsigned int *count_out)
+IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
+                          unsigned int *count_out, enum ircd_tls_want *want)
 {
   SSL *tls;
-  int res, orig_errno;
+  int res, orig_errno, err;
+
+  *count_out = 0;
+  *want = IRCD_TLS_WANT_NONE;
 
   tls = s_tls(&cli_socket(cptr));
   if (!tls)
@@ -910,24 +913,22 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
   res = SSL_read(tls, buf, length);
   if (res > 0)
   {
-    *count_out = res;
-    cli_tls_want_rd(cptr) = IRCD_TLS_WANT_NONE;
+    *count_out = (unsigned int)res;
     return IO_SUCCESS;
   }
 
   orig_errno = errno;
-  *count_out = 0;
-
-  /* A read blocked waiting to *write* the socket (e.g. flushing a TLS1.3
-   * KeyUpdate response) must ask the event loop for a writable event; the
-   * readable event alone would never resume it. */
-  if (SSL_get_error(tls, res) == SSL_ERROR_WANT_WRITE)
+  err = SSL_get_error(tls, res);
+  if (err == SSL_ERROR_WANT_WRITE)
   {
-    cli_tls_want_rd(cptr) = IRCD_TLS_WANT_WRITE;
+    *want = IRCD_TLS_WANT_WRITE;
     return IO_BLOCKED;
   }
-  cli_tls_want_rd(cptr) = IRCD_TLS_WANT_NONE;
-
+  if (err == SSL_ERROR_WANT_READ)
+  {
+    *want = IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
+  }
   return ssl_handle_error(cptr, tls, res, orig_errno);
 }
 

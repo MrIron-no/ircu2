@@ -51,6 +51,12 @@ struct MsgQ;
 IOResult tls_io_sendv(struct Client *cptr, struct MsgQ *buf,
                       unsigned int *count_in, unsigned int *count_out);
 
+/** tls_io_recv() reads TLS application data into \a buf, recording the blocked
+ * direction so the event loop waits on the right event.  Drives the thin
+ * per-backend tls_backend_read() primitive. */
+IOResult tls_io_recv(struct Client *cptr, char *buf, unsigned int length,
+                     unsigned int *count_out);
+
 /** Non-zero if the connection currently wants writable events.
  *
  * The plaintext rule is "there is queued output or a /LIST in progress".  TLS

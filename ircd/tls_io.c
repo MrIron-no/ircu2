@@ -176,3 +176,16 @@ IOResult tls_io_sendv(struct Client *cptr, struct MsgQ *buf,
   }
   return IO_BLOCKED;
 }
+
+IOResult tls_io_recv(struct Client *cptr, char *buf, unsigned int length,
+                     unsigned int *count_out)
+{
+  enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
+  IOResult io = tls_backend_read(cptr, buf, length, count_out, &want);
+
+  /* A read blocked waiting to write the socket must ask the event loop for a
+   * writable event; read_packet()'s IO_BLOCKED path asserts it. */
+  con_tls_want_rd(cli_connect(cptr)) =
+    (io == IO_BLOCKED) ? want : IRCD_TLS_WANT_NONE;
+  return io;
+}

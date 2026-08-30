@@ -630,11 +630,14 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   }
 }
 
-IOResult ircd_tls_recv(struct Client *cptr, char *buf,
-                       unsigned int length, unsigned int *count_out)
+IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
+                          unsigned int *count_out, enum ircd_tls_want *want)
 {
   struct tls *tls;
-  int res;
+  ssize_t res;
+
+  *count_out = 0;
+  *want = IRCD_TLS_WANT_NONE;
 
   tls = s_tls(&cli_socket(cptr));
   if (!tls)
@@ -643,11 +646,20 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
   res = tls_read(tls, buf, length);
   if (res > 0)
   {
-    *count_out = res;
+    *count_out = (unsigned int)res;
     return IO_SUCCESS;
   }
-
-  return tls_handle_error(cptr, tls, res);
+  if (res == TLS_WANT_POLLIN)
+  {
+    *want = IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
+  }
+  if (res == TLS_WANT_POLLOUT)
+  {
+    *want = IRCD_TLS_WANT_WRITE;
+    return IO_BLOCKED;
+  }
+  return tls_handle_error(cptr, tls, (int)res);
 }
 
 IOResult tls_backend_write(struct Client *cptr, const char *buf,

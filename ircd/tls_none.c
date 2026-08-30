@@ -95,10 +95,15 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   return 1;
 }
 
-IOResult ircd_tls_recv(struct Client *cptr, char *buf,
-                       unsigned int length, unsigned int *count_out)
+IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
+                          unsigned int *count_out, enum ircd_tls_want *want)
 {
-  return os_recv_nonb(cli_fd(cptr), buf, length, count_out);
+  (void)cptr;
+  (void)buf;
+  (void)length;
+  *count_out = 0;
+  *want = IRCD_TLS_WANT_NONE;
+  return IO_FAILURE;
 }
 
 IOResult tls_backend_write(struct Client *cptr, const char *buf,

@@ -620,13 +620,15 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   }
 }
 
-IOResult ircd_tls_recv(struct Client *cptr, char *buf,
-                       unsigned int length, unsigned int *count_out)
+IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
+                          unsigned int *count_out, enum ircd_tls_want *want)
 {
   gnutls_session_t tls;
   int res;
 
   *count_out = 0;
+  *want = IRCD_TLS_WANT_NONE;
+
   tls = s_tls(&cli_socket(cptr));
   if (!tls)
     return IO_FAILURE;
@@ -637,12 +639,7 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
     *count_out = res;
     return IO_SUCCESS;
   }
-  /*
-   * Peer cleanly closed (close_notify) or EOF.  gnutls_error_is_fatal(0) is
-   * false, so treating this as IO_BLOCKED leaves the socket open while the
-   * client waits for our close_notify (asyncio SSL_SHUTDOWN_TIMEOUT = 30s).
-   * Match OpenSSL SSL_ERROR_ZERO_RETURN → IO_FAILURE.
-   */
+  /* Peer cleanly closed (close_notify) or EOF.  Match OpenSSL ZERO_RETURN. */
   if (res == 0)
     return IO_FAILURE;
   if (res == GNUTLS_E_REHANDSHAKE)
@@ -652,7 +649,11 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
       return IO_SUCCESS;
   }
   if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
+  {
+    *want = (gnutls_record_get_direction(tls) == 1) ? IRCD_TLS_WANT_WRITE
+                                                    : IRCD_TLS_WANT_READ;
     return IO_BLOCKED;
+  }
   return gnutls_error_is_fatal(res) ? IO_FAILURE : IO_BLOCKED;
 }
 

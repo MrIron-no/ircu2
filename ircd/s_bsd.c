@@ -772,7 +772,7 @@ static int read_packet(struct Client *cptr, int socket_ready)
       !(IsUser(cptr) &&
 	recvq_over_flood(cptr, flood_limit))) {
     IOResult io_result = IsTLS(cptr)
-      ? ircd_tls_recv(cptr, readbuf, sizeof(readbuf), &length)
+      ? tls_io_recv(cptr, readbuf, sizeof(readbuf), &length)
       : os_recv_nonb(cli_fd(cptr), readbuf, sizeof(readbuf), &length);
     switch (io_result) {
     case IO_SUCCESS:
