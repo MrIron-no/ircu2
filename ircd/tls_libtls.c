@@ -28,6 +28,7 @@
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
 #include "ircd_tls.h"
+#include "tls_io.h"
 #include "listener.h"
 #include "s_auth.h"
 #include "send.h"
@@ -580,23 +581,9 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
 
     ClearNegotiatingTLS(cptr);
 
-    if (hash && !ircd_strncmp(hash, "SHA256:", 7) && !IsCloudflarePort(cptr))
-    {
-      /* Convert the hash to our fingerprint format */
-      if (strlen(hash + 7) <= 64) {
-        ircd_strncpy(cli_tls_fingerprint(cptr), hash + 7, 64);
-        Debug((DEBUG_DEBUG, "Fingerprint for %s: %s", cli_name(cptr), cli_tls_fingerprint(cptr)));
-      } else {
-        memset(cli_tls_fingerprint(cptr), 0, 65);
-        Debug((DEBUG_DEBUG, "Invalid fingerprint length: %zu", strlen(hash + 7)));
-      }
-    } else {
-      memset(cli_tls_fingerprint(cptr), 0, 65);
-      if (hash && !ircd_strncmp(hash, "SHA256:", 7) && IsCloudflarePort(cptr))
-        Debug((DEBUG_DEBUG, "Skipping TLS fingerprint for Cloudflare port %s", cli_name(cptr)));
-      else
-        Debug((DEBUG_DEBUG, "Failed to get fingerprint for %s", cli_name(cptr)));
-    }
+    /* libtls exposes the fingerprint pre-formatted as "SHA256:<hex>". */
+    tls_io_store_fingerprint_hex(cptr,
+        (hash && !ircd_strncmp(hash, "SHA256:", 7)) ? hash + 7 : NULL);
 
     return 1;
   }

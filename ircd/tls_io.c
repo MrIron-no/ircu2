@@ -26,6 +26,8 @@
 #include "ircd_events.h"
 #include "ircd_tls.h"
 #include "msgq.h"
+#include "ircd_string.h"
+#include <stdio.h>
 
 #include <sys/uio.h>   /* struct iovec */
 
@@ -188,4 +190,30 @@ IOResult tls_io_recv(struct Client *cptr, char *buf, unsigned int length,
   con_tls_want_rd(cli_connect(cptr)) =
     (io == IO_BLOCKED) ? want : IRCD_TLS_WANT_NONE;
   return io;
+}
+
+void tls_io_store_fingerprint(struct Client *cptr, const unsigned char *digest,
+                              unsigned int len)
+{
+  char *p = cli_tls_fingerprint(cptr);
+
+  if (len == 32 && !IsCloudflarePort(cptr))
+  {
+    unsigned int i;
+    for (i = 0; i < len; ++i)
+      sprintf(p + i * 2, "%02x", digest[i]);
+    p[len * 2] = '\0';
+  }
+  else
+    memset(p, 0, 65);
+}
+
+void tls_io_store_fingerprint_hex(struct Client *cptr, const char *hex)
+{
+  char *p = cli_tls_fingerprint(cptr);
+
+  if (hex && hex[0] && strlen(hex) <= 64 && !IsCloudflarePort(cptr))
+    ircd_strncpy(p, hex, 64);
+  else
+    memset(p, 0, 65);
 }

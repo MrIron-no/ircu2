@@ -28,6 +28,7 @@
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
 #include "ircd_tls.h"
+#include "tls_io.h"
 #include "ircd.h"
 #include "listener.h"
 #include "s_conf.h"
@@ -833,26 +834,10 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
       res = X509_digest(cert, fp_digest, buf, &len);
       X509_free(cert);
       if (res != 1)
-      {
         log_write(LS_SYSTEM, L_ERROR, 0, "X509_digest failed for %C: %d",
           cptr, res);
-      }
-      else if (len == 32 && !IsCloudflarePort(cptr)) {
-        /* Convert fingerprint to lowercase hex */
-        char *p = cli_tls_fingerprint(cptr);
-        for (unsigned int i = 0; i < len; i++) {
-          sprintf(p + (i * 2), "%02x", buf[i]);
-        }
-        p[len * 2] = '\0';
-        Debug((DEBUG_DEBUG, "Fingerprint for %C: %s", cptr, cli_tls_fingerprint(cptr)));
-      }
-      else {
-        memset(cli_tls_fingerprint(cptr), 0, 65);
-        if (len == 32 && IsCloudflarePort(cptr))
-          Debug((DEBUG_DEBUG, "Skipping TLS fingerprint for Cloudflare port %C", cptr));
-        else
-          Debug((DEBUG_DEBUG, "Invalid fingerprint length: %u", len));
-      }
+      else
+        tls_io_store_fingerprint(cptr, buf, len);
     }
     ClearNegotiatingTLS(cptr);
     /* X509_digest may have overwritten res; handshake itself succeeded. */

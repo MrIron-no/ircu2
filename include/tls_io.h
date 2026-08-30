@@ -57,6 +57,16 @@ IOResult tls_io_sendv(struct Client *cptr, struct MsgQ *buf,
 IOResult tls_io_recv(struct Client *cptr, char *buf, unsigned int length,
                      unsigned int *count_out);
 
+/** Record \a cptr's peer-certificate fingerprint from a raw SHA-256 \a digest
+ * (\a len bytes): store the lowercase hex, or clear it if the digest is not a
+ * 32-byte SHA-256 or the port suppresses fingerprints (Cloudflare). */
+void tls_io_store_fingerprint(struct Client *cptr, const unsigned char *digest,
+                              unsigned int len);
+
+/** As tls_io_store_fingerprint(), but from an already-hex fingerprint string
+ * \a hex (or NULL to clear), for backends that expose the hash pre-formatted. */
+void tls_io_store_fingerprint_hex(struct Client *cptr, const char *hex);
+
 /** Non-zero if the connection currently wants writable events.
  *
  * The plaintext rule is "there is queued output or a /LIST in progress".  TLS

@@ -23,6 +23,7 @@
  */
 
 #include "ircd_tls.h"
+#include "tls_io.h"
 #include "ircd.h"
 #include "ircd_log.h"
 #include "ircd_snprintf.h"
@@ -582,22 +583,7 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
     }
     gnutls_x509_crt_deinit(crt);
 
-    /* Convert buf to hex like OpenSSL version */
-    if (len == 32 && !IsCloudflarePort(cptr)) {
-      char *p = cli_tls_fingerprint(cptr);
-      for (unsigned int i = 0; i < len; i++) {
-        sprintf(p + (i * 2), "%02x", buf[i]);
-      }
-      p[len * 2] = '\0';
-      Debug((DEBUG_DEBUG, "Fingerprint for %s: %s", cli_name(cptr), cli_tls_fingerprint(cptr)));
-    }
-    else {
-      memset(cli_tls_fingerprint(cptr), 0, 65);
-      if (len == 32 && IsCloudflarePort(cptr))
-        Debug((DEBUG_DEBUG, "Skipping TLS fingerprint for Cloudflare port %s", cli_name(cptr)));
-      else
-        Debug((DEBUG_DEBUG, "Invalid fingerprint length: %zu", len));
-    }
+    tls_io_store_fingerprint(cptr, buf, len);
 
     gnutls_session_set_ptr(tls, (void *)1); /* handshake complete: see ircd_tls_close() */
     ClearNegotiatingTLS(cptr);
