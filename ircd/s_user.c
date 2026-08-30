@@ -820,6 +820,17 @@ int whisper(struct Client* source, const char* nick, const char* channel,
       send_reply(source, RPL_AWAY, cli_name(dest), cli_user(dest)->away);
     sendcmdto_one(source, CMD_PRIVATE, dest, "%C :%s", dest, text);
   }
+
+  /* echo-message: hand the sender a copy, as PRIVMSG/NOTICE do.
+   * (CMD_* expand to a message/token pair, hence the two calls.) */
+  if (CapHas(cli_active(source), CAP_ECHOMESSAGE))
+  {
+    if (is_notice)
+      sendcmdto_one(source, CMD_NOTICE, cli_from(source), "%C :%s", dest, text);
+    else
+      sendcmdto_one(source, CMD_PRIVATE, cli_from(source), "%C :%s", dest, text);
+  }
+
   return 0;
 }
 
