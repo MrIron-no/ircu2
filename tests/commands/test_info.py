@@ -55,11 +55,6 @@ async def test_oper_sees_hashes(oper):
     assert any("client.h" in l for l in hashes)
 
 
-@pytest.mark.xfail(
-    reason="mo_info() still skips text[218] entries (m_info/ms_info were fixed to stop at "
-           "'Sources:'), so opers lose the first source hashes as the file count grows",
-    strict=True,
-)
 async def test_oper_sees_every_source_hash(oper):
     lines = await _info(oper, "hub.test.net")
     hashes = _hashes(lines)
@@ -72,7 +67,16 @@ async def test_oper_without_server_argument_sees_no_hashes(oper):
     """mo_info only sends the hash section when a server name is given."""
     lines = await _info(oper)
     assert not _hashes(lines), _hashes(lines)[:3]
+    assert lines and lines[0] == "IRC --", lines[:3]
+    assert "Sources:" not in lines
     assert any(l.startswith("Birth Date:") for l in lines)
+
+
+async def test_oper_and_user_see_the_same_public_text(oper, make_client):
+    plain = await make_client("info5")
+    plain_lines = [l for l in await _info(plain) if not l.startswith(FOOTER)]
+    oper_lines = [l for l in await _info(oper) if not l.startswith(FOOTER)]
+    assert plain_lines == oper_lines
 
 
 async def test_oper_hash_lines_are_well_formed(oper):
