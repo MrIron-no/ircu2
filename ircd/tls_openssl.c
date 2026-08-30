@@ -700,185 +700,88 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-static IOResult ssl_handle_error(struct Client *cptr, SSL *tls, int res, int orig_errno)
-{
-  int err = SSL_get_error(tls, res);
-
-  Debug((DEBUG_DEBUG, "ssl_handle_error: SSL_get_error=%d, res=%d, orig_errno=%d for %C",
-         err, res, orig_errno, cptr));
-
-  switch (err)
-  {
-  case SSL_ERROR_WANT_READ:
-    return IO_BLOCKED;
-
-  case SSL_ERROR_WANT_WRITE:
-    return IO_BLOCKED;
-
-  case SSL_ERROR_SYSCALL:
-    if (orig_errno == EINTR || orig_errno == EAGAIN || orig_errno == EWOULDBLOCK)
-      return IO_BLOCKED;
-    break;
-  case SSL_ERROR_ZERO_RETURN:
-    Debug((DEBUG_DEBUG, "SSL_ERROR_ZERO_RETURN: peer closed connection for %C", cptr));
-    if (SSL_shutdown(tls) == 0)
-      SSL_shutdown(tls);
-    break;
-
-  default:
-    /* Fatal SSL error */
-    Debug((DEBUG_ERROR, "SSL fatal error %d for %C", err, cptr));
-    unsigned long e;
-    while ((e = ERR_get_error()) != 0) {
-        Debug((DEBUG_ERROR, "SSL ERROR: %s", ERR_error_string(e, NULL)));
-    }
-    break;
-  }
-
-  /* Fatal error - clean up SSL context */
-  if (tls && s_tls(&cli_socket(cptr)) == tls) {
-    Debug((DEBUG_ERROR, "SSL fall-through fatal error %d for %C", err, cptr));
-    s_tls(&cli_socket(cptr)) = NULL;
-    /* The session is gone but FLAG_TLS stays set.  Mark the socket dead so
-     * deliver_it()/read_packet() cannot fall back to the plaintext os_*_nonb
-     * path (which would flush queued data in the clear onto the TLS socket),
-     * and drop any pending cross-direction wait. */
-    SetFlag(cptr, FLAG_DEADSOCKET);
-    cli_tls_want_rd(cptr) = IRCD_TLS_WANT_NONE;
-    cli_tls_want_wr(cptr) = IRCD_TLS_WANT_NONE;
-    /* Do not call SSL_shutdown() after fatal errors */
-    SSL_free(tls);
-  }
-
-  return IO_FAILURE;
-}
-
 /** Classify a failed SSL_write() from the send path and record the socket
  * direction it is blocked on.  A write blocked on SSL_ERROR_WANT_READ must NOT
  * keep writable interest asserted (update_write() drops it), or the level-
  * triggered writable event spins; the always-on readable event drives the
  * retry.  Any other block is an ordinary "wants write". */
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
-                       enum ircd_tls_want *want)
+IOResult tls_backend_handshake(struct Client *cptr, struct tls_peer *peer,
+                               char *reason, size_t reasonlen,
+                               enum ircd_tls_want *want)
 {
   SSL *tls;
   X509 *cert;
-  unsigned int len;
-  int res;
-  unsigned char buf[EVP_MAX_MD_SIZE];
-  const char* const err_certreq   = "ERROR :TLS certificate required\r\n";
-  const char* const err_certrej   = "ERROR :TLS certificate rejected\r\n";
-  const char* const err_handshake = "ERROR :TLS handshake failed\r\n";
-
-  if (reason && reasonlen)
-    reason[0] = '\0';
-  if (want)
-    *want = IRCD_TLS_WANT_NONE;
+  int res, orig_errno, sslerr;
+  long vr;
+  unsigned long queued;
 
   tls = s_tls(&cli_socket(cptr));
-  if (!tls) {
-    /* No session left to negotiate; do not report success or start_auth
-     * will be invoked on every subsequent ET_WRITE while FLAG_NEGOTIATING_TLS
-     * remains set. */
-    tls_reason(reason, reasonlen, "TLS setup failed (no session)");
-    ClearNegotiatingTLS(cptr);
-    return -1;
-  }
+  if (!tls)
+    return IO_FAILURE;
 
-  /* The handshake deadline is enforced by a core timer (see s_bsd.c), not
-   * here: this backend is driven purely by socket events and never polls. */
-
-  /* For client connections, use SSL_connect; for server, SSL_accept. */
   ERR_clear_error();
-  if (SSL_is_server(tls))
-    res = SSL_accept(tls);
-  else
-    res = SSL_connect(tls);
+  res = SSL_is_server(tls) ? SSL_accept(tls) : SSL_connect(tls);
 
   if (res == 1)
   {
     cert = SSL_get_peer_certificate(tls);
-    if (ircd_tls_peer_cert_required(cptr) && !cert)
-    {
-      Debug((DEBUG_DEBUG, "TLS peer certificate required but not presented for %C",
-             cptr));
-      tls_reason(reason, reasonlen,
-                 "no peer certificate presented (certificate required)");
-      write(cli_fd(cptr), err_certreq, strlen(err_certreq));
-      return -1;
-    }
-
-    if (ircd_tls_verifypeer_enabled(cptr))
-    {
-      long vr = SSL_get_verify_result(tls);
-
-      if (vr != X509_V_OK)
-      {
-        Debug((DEBUG_DEBUG,
-               "TLS peer certificate verification failed for %C: %ld",
-               cptr, vr));
-        tls_reason(reason, reasonlen, "certificate verification failed: %s",
-                   X509_verify_cert_error_string(vr));
-        if (cert)
-          X509_free(cert);
-        write(cli_fd(cptr), err_certrej, strlen(err_certrej));
-        return -1;
-      }
-    }
-
-    Debug((DEBUG_DEBUG, "SSL handshake success for fd=%d", cli_fd(cptr)));
+    peer->have_cert = (cert != NULL);
+    peer->verified = (SSL_get_verify_result(tls) == X509_V_OK);
+    if (!peer->verified)
+      tls_reason(peer->verify_err, sizeof(peer->verify_err),
+                 "certificate verification failed: %s",
+                 X509_verify_cert_error_string(SSL_get_verify_result(tls)));
     if (cert)
     {
-      Debug((DEBUG_DEBUG, "SSL_get_peer_certificate success for fd=%d", cli_fd(cptr)));
-      len = sizeof(buf);
-      res = X509_digest(cert, fp_digest, buf, &len);
-      X509_free(cert);
-      if (res != 1)
-        log_write(LS_SYSTEM, L_ERROR, 0, "X509_digest failed for %C: %d",
-          cptr, res);
+      unsigned char buf[EVP_MAX_MD_SIZE];
+      unsigned int len = sizeof(buf);
+      if (X509_digest(cert, fp_digest, buf, &len) == 1
+          && len <= sizeof(peer->digest))
+      {
+        memcpy(peer->digest, buf, len);
+        peer->digest_len = len;
+      }
       else
-        tls_io_store_fingerprint(cptr, buf, len);
+        log_write(LS_SYSTEM, L_ERROR, 0, "X509_digest failed for %C", cptr);
+      X509_free(cert);
     }
-    ClearNegotiatingTLS(cptr);
-    /* X509_digest may have overwritten res; handshake itself succeeded. */
-    return 1;
+    return IO_SUCCESS;
   }
 
+  orig_errno = errno;
+  sslerr = SSL_get_error(tls, res);
+  vr = SSL_get_verify_result(tls);
+  queued = ERR_peek_last_error();
+
+  if (sslerr == SSL_ERROR_WANT_READ)
   {
-    int orig_errno = errno;
-    int sslerr = SSL_get_error(tls, res);
-    long vr = SSL_get_verify_result(tls);
-    unsigned long queued = ERR_peek_last_error(); /* before ssl_handle_error drains */
-    /* Handshake in progress. */
-    IOResult ssl_result = ssl_handle_error(cptr, tls, res, orig_errno);
-    if (ssl_result == IO_FAILURE) {
-      Debug((DEBUG_DEBUG, "SSL handshake failed for fd=%d", cli_fd(cptr)));
-      if (vr != X509_V_OK)
-        /* Handshake aborted on certificate verification: report the exact
-         * X509 error.  SSL_get_verify_result() is set during verification,
-         * so it is available even though SSL_accept()/SSL_connect() failed. */
-        tls_reason(reason, reasonlen, "%s", X509_verify_cert_error_string(vr));
-      else if (queued)
-        tls_reason(reason, reasonlen, "%s", ERR_reason_error_string(queued));
-      else if (sslerr == SSL_ERROR_ZERO_RETURN)
-        tls_reason(reason, reasonlen, "peer closed connection");
-      else if (sslerr == SSL_ERROR_SYSCALL && orig_errno)
-        tls_reason(reason, reasonlen, "%s", strerror(orig_errno));
-      else
-        tls_reason(reason, reasonlen, "handshake error");
-      write(cli_fd(cptr), err_handshake, strlen(err_handshake));
-      return -1;
-    }
-    /* ssl_result == IO_BLOCKED - handshake still in progress.  Report the
-     * blocked direction so the caller waits on exactly that event.  Anything
-     * other than WANT_READ is reported as a write: a wrong "write" costs one
-     * loop pass on the always-ready writable event, a wrong "read" would cost
-     * the whole deadline. */
-    if (want)
-      *want = (sslerr == SSL_ERROR_WANT_READ) ? IRCD_TLS_WANT_READ
-                                              : IRCD_TLS_WANT_WRITE;
-    return 0;
+    *want = IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
   }
+  if (sslerr == SSL_ERROR_WANT_WRITE
+      || (sslerr == SSL_ERROR_SYSCALL
+          && (orig_errno == EINTR || orig_errno == EAGAIN
+              || orig_errno == EWOULDBLOCK)))
+  {
+    /* Anything other than WANT_READ is reported as a write: a wrong "write"
+     * costs one loop pass, a wrong "read" would cost the whole deadline. */
+    *want = IRCD_TLS_WANT_WRITE;
+    return IO_BLOCKED;
+  }
+
+  /* Fatal.  Report the most specific reason available; the caller drops the
+   * session. */
+  if (vr != X509_V_OK)
+    tls_reason(reason, reasonlen, "%s", X509_verify_cert_error_string(vr));
+  else if (queued)
+    tls_reason(reason, reasonlen, "%s", ERR_reason_error_string(queued));
+  else if (sslerr == SSL_ERROR_ZERO_RETURN)
+    tls_reason(reason, reasonlen, "peer closed connection");
+  else if (sslerr == SSL_ERROR_SYSCALL && orig_errno)
+    tls_reason(reason, reasonlen, "%s", strerror(orig_errno));
+  else
+    tls_reason(reason, reasonlen, "handshake error");
+  return IO_FAILURE;
 }
 
 void tls_backend_drop(struct Client *cptr)

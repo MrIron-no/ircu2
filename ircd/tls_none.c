@@ -84,15 +84,16 @@ void ircd_tls_listen_free(struct Listener *listener)
   (void)listener;
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
-                       enum ircd_tls_want *want)
+IOResult tls_backend_handshake(struct Client *cptr, struct tls_peer *peer,
+                               char *reason, size_t reasonlen,
+                               enum ircd_tls_want *want)
 {
+  (void)cptr;
+  (void)peer;
   (void)reason;
   (void)reasonlen;
-  if (want)
-    *want = IRCD_TLS_WANT_NONE;
-  ClearNegotiatingTLS(cptr);
-  return 1;
+  (void)want;
+  return IO_FAILURE;
 }
 
 void tls_backend_drop(struct Client *cptr)

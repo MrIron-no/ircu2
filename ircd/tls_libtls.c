@@ -450,23 +450,6 @@ void ircd_tls_close(void *ctx, const char *message)
   tls_free(ctx);
 }
 
-static IOResult tls_handle_error(struct Client *cptr, struct tls *tls, int err)
-{
-  switch (err) {
-    case TLS_WANT_POLLIN:
-    case TLS_WANT_POLLOUT:
-      return IO_BLOCKED;
-    
-    default:
-      /* Fatal error */
-      Debug((DEBUG_DEBUG, "tls fatal error for %s: %s", cli_name(cptr), tls_error(tls)));
-      break;
-  }
-  tls_free(tls);
-  s_tls(&cli_socket(cptr)) = NULL;
-  return IO_FAILURE;
-}
-
 int ircd_tls_listen(struct Listener *listener)
 {
   struct tls_config *cfg;
@@ -528,93 +511,46 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
-                       enum ircd_tls_want *want)
+IOResult tls_backend_handshake(struct Client *cptr, struct tls_peer *peer,
+                               char *reason, size_t reasonlen,
+                               enum ircd_tls_want *want)
 {
   const char *hash;
   struct tls *tls;
   int res;
-  const char* const err_certreq   = "ERROR :TLS certificate required\r\n";
-  const char* const err_certrej   = "ERROR :TLS certificate rejected\r\n";
-  const char* const err_handshake = "ERROR :TLS handshake failed\r\n";
-
-  if (reason && reasonlen)
-    reason[0] = '\0';
-  if (want)
-    *want = IRCD_TLS_WANT_NONE;
 
   tls = s_tls(&cli_socket(cptr));
-  if (!tls) {
-    tls_reason(reason, reasonlen, "TLS setup failed (no session)");
-    ClearNegotiatingTLS(cptr);
-    return -1;
-  }
-
-  /* The handshake deadline is enforced by a core timer (s_bsd.c), not here. */
-
-  Debug((DEBUG_DEBUG, "libtls handshake for %s", cli_name(cptr)));
+  if (!tls)
+    return IO_FAILURE;
 
   res = tls_handshake(tls);
   if (res == 0)
   {
+    /* libtls enforces the configured verification during the handshake, so a
+     * completed handshake is verified; report the material for the core. */
     hash = tls_peer_cert_hash(tls);
-    if (ircd_tls_peer_cert_required(cptr) && (!hash || !hash[0]))
-    {
-      Debug((DEBUG_DEBUG,
-             "TLS peer certificate required but not presented for %s",
-             cli_name(cptr)));
-      tls_reason(reason, reasonlen,
-                 "no peer certificate presented (certificate required)");
-      write(cli_fd(cptr), err_certreq, strlen(err_certreq));
-      return -1;
-    }
-
-    if (ircd_tls_verifypeer_enabled(cptr) && (!hash || !hash[0]))
-    {
-      Debug((DEBUG_DEBUG,
-             "TLS peer certificate verification failed for %s",
-             cli_name(cptr)));
-      tls_reason(reason, reasonlen, "peer certificate could not be verified");
-      write(cli_fd(cptr), err_certrej, strlen(err_certrej));
-      return -1;
-    }
-
-    ClearNegotiatingTLS(cptr);
-
-    /* libtls exposes the fingerprint pre-formatted as "SHA256:<hex>". */
-    tls_io_store_fingerprint_hex(cptr,
-        (hash && !ircd_strncmp(hash, "SHA256:", 7)) ? hash + 7 : NULL);
-
-    return 1;
+    peer->have_cert = (hash && hash[0]);
+    peer->verified = 1;
+    if (hash && !ircd_strncmp(hash, "SHA256:", 7))
+      ircd_strncpy(peer->fp_hex, hash + 7, sizeof(peer->fp_hex) - 1);
+    return IO_SUCCESS;
   }
-  
-  if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT) {
-    if (want)
-      *want = (res == TLS_WANT_POLLOUT) ? IRCD_TLS_WANT_WRITE
-                                        : IRCD_TLS_WANT_READ;
-    return 0; /* Handshake in progress */
-  }
-  
+  if (res == TLS_WANT_POLLIN)
   {
-    const char *tls_err = tls_error(tls);   /* before tls_handle_error frees it */
-    IOResult tls_result;
-
-    if (tls_err)
-      tls_reason(reason, reasonlen, "%s", tls_err);
-    tls_result = tls_handle_error(cptr, tls, res);
-    if (tls_result == IO_FAILURE) {
-      Debug((DEBUG_DEBUG, "TLS handshake failed for %s", cli_name(cptr)));
-      if (!tls_err)
-        tls_reason(reason, reasonlen, "handshake error");
-      write(cli_fd(cptr), err_handshake, strlen(err_handshake));
-      return -1;
-    }
-    /* tls_result == IO_BLOCKED - handshake still in progress; retry via the
-     * always-ready writable event. */
-    if (want)
-      *want = IRCD_TLS_WANT_WRITE;
-    return 0;
+    *want = IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
   }
+  if (res == TLS_WANT_POLLOUT)
+  {
+    *want = IRCD_TLS_WANT_WRITE;
+    return IO_BLOCKED;
+  }
+
+  {
+    const char *tls_err = tls_error(tls);
+    tls_reason(reason, reasonlen, "%s", tls_err ? tls_err : "handshake error");
+  }
+  return IO_FAILURE;
 }
 
 void tls_backend_drop(struct Client *cptr)

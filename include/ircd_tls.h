@@ -273,6 +273,35 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
  * \returns IO_FAILURE on a fatal error (session torn down), IO_BLOCKED if no
  *   data is available (with \a want set), or IO_SUCCESS if data was read.
  */
+/** Raw peer material a backend hands back after a completed handshake, for the
+ * core (tls_io.c) to apply trust policy to.  The backend does no policy of its
+ * own beyond what the TLS library enforces during the handshake. */
+struct tls_peer {
+  int           have_cert;             /**< peer presented a certificate */
+  int           verified;              /**< PKIX/CA verification passed */
+  unsigned char digest[32];            /**< SHA-256 of the peer cert */
+  unsigned int  digest_len;            /**< bytes in \a digest (0 if none) */
+  char          fp_hex[65];            /**< pre-formatted hex, for libtls */
+  char          verify_err[TLS_REASON_LEN]; /**< backend-specific verify reason */
+};
+
+/** tls_backend_handshake() advances the TLS handshake for \a cptr.
+ *
+ * Thin per-backend primitive (ircd_tls_negotiate() in the core wraps it and
+ * applies the cert-required / verifypeer trust policy and fingerprint storage).
+ * It performs no teardown and touches no client flags.
+ *
+ * @param[out] peer On IO_SUCCESS, filled with the peer's raw material.
+ * @param[out] reason On IO_FAILURE, a human-readable failure reason.
+ * @param[out] want On IO_BLOCKED, the socket direction to wait on.
+ * \returns IO_SUCCESS (handshake complete, \a peer filled), IO_BLOCKED (in
+ *   progress), or IO_FAILURE (fatal; \a reason set, session left for the caller
+ *   to drop).
+ */
+IOResult tls_backend_handshake(struct Client *cptr, struct tls_peer *peer,
+                               char *reason, size_t reasonlen,
+                               enum ircd_tls_want *want);
+
 /** tls_backend_drop() hard-frees \a cptr's TLS session after a fatal error and
  * NULLs the socket's session pointer.  Unlike ircd_tls_close() it sends no
  * close_notify (the session is unusable).  The core teardown (tls_io.c) calls

@@ -438,8 +438,9 @@ void ircd_tls_listen_free(struct Listener *listener)
   }
 }
 
-int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
-                       enum ircd_tls_want *want)
+IOResult tls_backend_handshake(struct Client *cptr, struct tls_peer *peer,
+                               char *reason, size_t reasonlen,
+                               enum ircd_tls_want *want)
 {
   gnutls_session_t tls;
   gnutls_x509_crt_t crt;
@@ -447,29 +448,13 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   size_t len;
   int res, i;
   unsigned char buf[32];
-  const char* const err_certreq   = "ERROR :TLS certificate required\r\n";
-  const char* const err_certrej   = "ERROR :TLS certificate rejected\r\n";
-  const char* const err_handshake = "ERROR :TLS handshake failed\r\n";
-
-  if (reason && reasonlen)
-    reason[0] = '\0';
-  if (want)
-    *want = IRCD_TLS_WANT_NONE;
 
   tls = s_tls(&cli_socket(cptr));
+  if (!tls)
+    return IO_FAILURE;
 
-  if (!tls) {
-    tls_reason(reason, reasonlen, "TLS setup failed (no session)");
-    ClearNegotiatingTLS(cptr);
-    return -1;
-  }
-
-  /* The handshake deadline is enforced by a core timer (s_bsd.c), not here. */
-
-  /* Non-fatal results other than E_AGAIN/E_INTERRUPTED (e.g. a warning alert)
-   * mean "call gnutls_handshake() again now"; no socket event will follow, so
-   * retry here rather than fabricating a socket direction.  Each pass consumes
-   * at least one record; the bound only guards against a misbehaving peer. */
+  /* Non-fatal results other than AGAIN/INTERRUPTED mean "call again now"; the
+   * bound guards against a misbehaving peer. */
   for (i = 0; i < 16; ++i)
   {
     res = gnutls_handshake(tls);
@@ -481,25 +466,17 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
   {
   case GNUTLS_E_INTERRUPTED:
   case GNUTLS_E_AGAIN:
-    if (want)
-      *want = (gnutls_record_get_direction(tls) == 1) ? IRCD_TLS_WANT_WRITE
-                                                      : IRCD_TLS_WANT_READ;
-    return 0;
+    *want = (gnutls_record_get_direction(tls) == 1) ? IRCD_TLS_WANT_WRITE
+                                                    : IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
 
   case GNUTLS_E_SUCCESS:
     datum = gnutls_certificate_get_peers(tls, NULL);
-    if (ircd_tls_peer_cert_required(cptr) && (!datum || datum->size == 0))
-    {
-      Debug((DEBUG_DEBUG,
-             "TLS peer certificate required but not presented for %s",
-             cli_name(cptr)));
-      tls_reason(reason, reasonlen,
-                 "no peer certificate presented (certificate required)");
-      write(cli_fd(cptr), err_certreq, strlen(err_certreq));
-      return -1;
-    }
+    peer->have_cert = (datum && datum->size > 0);
 
-    if (ircd_tls_verifypeer_enabled(cptr) && gnutls_auth_get_type(tls) == GNUTLS_CRT_X509)
+    /* Verify the peer chain (with the outbound hostname where applicable) so
+     * the core can enforce verifypeer; the result is advisory for soft ports. */
+    if (gnutls_auth_get_type(tls) == GNUTLS_CRT_X509)
     {
       unsigned int vstatus = 0;
       const char *hostname = NULL;
@@ -512,97 +489,54 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
 
       res = gnutls_certificate_verify_peers3(tls, hostname, &vstatus);
       if (res < 0)
-      {
-        Debug((DEBUG_DEBUG,
-               "TLS peer certificate verification failed for %s: %s",
-               cli_name(cptr), gnutls_strerror(res)));
-        tls_reason(reason, reasonlen, "certificate verification error: %s",
-                   gnutls_strerror(res));
-        write(cli_fd(cptr), err_certrej, strlen(err_certrej));
-        return -1;
-      }
-      if (vstatus != 0)
+        tls_reason(peer->verify_err, sizeof(peer->verify_err),
+                   "certificate verification error: %s", gnutls_strerror(res));
+      else if (vstatus != 0)
       {
         gnutls_datum_t out;
-
-        Debug((DEBUG_DEBUG,
-               "TLS peer certificate verification failed for %s (0x%x)",
-               cli_name(cptr), vstatus));
-        if (gnutls_certificate_verification_status_print(vstatus, GNUTLS_CRT_X509,
+        if (gnutls_certificate_verification_status_print(vstatus,
+                                                         GNUTLS_CRT_X509,
                                                          &out, 0) >= 0)
         {
-          tls_reason(reason, reasonlen, "certificate verification failed: %s",
-                     out.data);
+          tls_reason(peer->verify_err, sizeof(peer->verify_err),
+                     "certificate verification failed: %s", out.data);
           gnutls_free(out.data);
         }
         else
-          tls_reason(reason, reasonlen,
+          tls_reason(peer->verify_err, sizeof(peer->verify_err),
                      "certificate verification failed (0x%x)", vstatus);
-        write(cli_fd(cptr), err_certrej, strlen(err_certrej));
-        return -1;
       }
-    }
-
-    if (!datum)
-    {
-      gnutls_session_set_ptr(tls, (void *)1); /* handshake complete: see ircd_tls_close() */
-      ClearNegotiatingTLS(cptr);
-      return 1;
-    }
-
-    res = gnutls_x509_crt_init(&crt);
-    if (res)
-    {
-      log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_init failed for %s: %d",
-        cli_name(cptr), res);
-        return -1;
-    }
-
-    /* Extract the SHA-256 fingerprint.  If the certificate cannot be
-     * re-parsed or hashed, treat it like "no fingerprint" (len = 0 takes the
-     * empty-fingerprint branch below) and still complete the handshake, as the
-     * OpenSSL and libtls backends do.  Returning early here would leave
-     * FLAG_NEGOTIATING_TLS set and wedge the connection. */
-    res = gnutls_x509_crt_import(crt, datum, GNUTLS_X509_FMT_DER);
-    if (res)
-    {
-      log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_import failed for %s: %d",
-        cli_name(cptr), res);
-      len = 0;
+      peer->verified = (res >= 0 && vstatus == 0);
     }
     else
+      peer->verified = 1;
+
+    if (datum && gnutls_x509_crt_init(&crt) == 0)
     {
       len = sizeof(buf);
-      res = gnutls_x509_crt_get_fingerprint(crt, GNUTLS_DIG_SHA256, buf, &len);
-      if (res)
+      if (gnutls_x509_crt_import(crt, datum, GNUTLS_X509_FMT_DER) == 0
+          && gnutls_x509_crt_get_fingerprint(crt, GNUTLS_DIG_SHA256, buf,
+                                             &len) == 0
+          && len <= sizeof(peer->digest))
       {
-        log_write(LS_SYSTEM, L_ERROR, 0, "gnutls_x509_crt_get_fingerprint failed for %s: %d",
-          cli_name(cptr), res);
-        len = 0;
+        memcpy(peer->digest, buf, len);
+        peer->digest_len = len;
       }
+      gnutls_x509_crt_deinit(crt);
     }
-    gnutls_x509_crt_deinit(crt);
 
-    tls_io_store_fingerprint(cptr, buf, len);
-
-    gnutls_session_set_ptr(tls, (void *)1); /* handshake complete: see ircd_tls_close() */
-    ClearNegotiatingTLS(cptr);
-    return 1;
+    gnutls_session_set_ptr(tls, (void *)1); /* handshake complete: ircd_tls_close() */
+    return IO_SUCCESS;
 
   default:
-    Debug((DEBUG_DEBUG, " ... gnutls_handshake() failed -> %s (%d)",
-           gnutls_strerror(res), res));
-    if (gnutls_error_is_fatal(res)) {
-      Debug((DEBUG_DEBUG, "GnuTLS handshake failed for %s: %s", cli_name(cptr), gnutls_strerror(res)));
+    if (gnutls_error_is_fatal(res))
+    {
       tls_reason(reason, reasonlen, "%s", gnutls_strerror(res));
-      write(cli_fd(cptr), err_handshake, strlen(err_handshake));
-      return -1;
+      return IO_FAILURE;
     }
-    /* Non-fatal, non-AGAIN (e.g. a warning alert): call again immediately via
-     * the always-ready writable event. */
-    if (want)
-      *want = IRCD_TLS_WANT_WRITE;
-    return 0;
+    /* Non-fatal, non-AGAIN: come back via the always-ready writable event. */
+    *want = IRCD_TLS_WANT_WRITE;
+    return IO_BLOCKED;
   }
 }
 

@@ -28,6 +28,7 @@
 #include "msgq.h"
 #include "ircd_string.h"
 #include <stdio.h>
+#include "ircd_snprintf.h"
 
 #include <sys/uio.h>   /* struct iovec */
 
@@ -237,4 +238,63 @@ void tls_io_store_fingerprint_hex(struct Client *cptr, const char *hex)
     ircd_strncpy(p, hex, 64);
   else
     memset(p, 0, 65);
+}
+
+/** Set \a reason to a plain message (bounded), the core's one reason writer. */
+static void tls_io_reason(char *reason, size_t reasonlen, const char *msg)
+{
+  if (reason && reasonlen)
+    ircd_snprintf(0, reason, reasonlen, "%s", msg);
+}
+
+int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
+                       enum ircd_tls_want *want)
+{
+  struct tls_peer peer;
+  IOResult io;
+
+  if (reason && reasonlen)
+    reason[0] = '\0';
+  if (want)
+    *want = IRCD_TLS_WANT_NONE;
+
+  /* No session left to negotiate: fail rather than report success, or
+   * start_auth() would run on every subsequent event while FLAG_NEGOTIATING_TLS
+   * stays set. */
+  if (!s_tls(&cli_socket(cptr)))
+  {
+    tls_io_reason(reason, reasonlen, "TLS setup failed (no session)");
+    ClearNegotiatingTLS(cptr);
+    return -1;
+  }
+
+  memset(&peer, 0, sizeof(peer));
+  io = tls_backend_handshake(cptr, &peer, reason, reasonlen, want);
+  if (io == IO_BLOCKED)
+    return 0;
+  if (io == IO_FAILURE)
+    return -1;   /* reason filled by the backend; the caller drops the session */
+
+  /* Handshake complete — apply the trust policy the backend does not. */
+  if (ircd_tls_peer_cert_required(cptr) && !peer.have_cert)
+  {
+    tls_io_reason(reason, reasonlen,
+                  "no peer certificate presented (certificate required)");
+    return -1;
+  }
+  if (ircd_tls_verifypeer_enabled(cptr) && !peer.verified)
+  {
+    tls_io_reason(reason, reasonlen,
+                  peer.verify_err[0] ? peer.verify_err
+                                     : "certificate verification failed");
+    return -1;
+  }
+
+  if (peer.digest_len)
+    tls_io_store_fingerprint(cptr, peer.digest, peer.digest_len);
+  else
+    tls_io_store_fingerprint_hex(cptr, peer.fp_hex[0] ? peer.fp_hex : NULL);
+
+  ClearNegotiatingTLS(cptr);
+  return 1;
 }
