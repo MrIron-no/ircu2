@@ -380,18 +380,15 @@ static int completed_connection(struct Client* cptr)
     /* Are we making progress?  A failure (fatal handshake error, missing
      * session) must fail the link now rather than fall through to sending
      * PASS/SERVER on a socket without a TLS session; tls_negotiate_client()
-     * has already marked the socket dead and dropped the session, so the
-     * caller's exit cannot leak plaintext into the handshake stream. */
+     * has notified opers, marked the socket dead and dropped the session, so
+     * the caller's exit cannot leak plaintext into the handshake stream. */
     if (IsNegotiatingTLS(cptr)) {
       char *fmt = "%s";
       char *fallback = 0;
       int res = tls_negotiate_client(cptr, &fmt, &fallback);
 
-      if (res < 0) {
-        sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s: %s",
-                             cli_name(cptr), fallback);
+      if (res < 0)
         return 0;
-      }
       if (res == 0)
         return 1; /* still negotiating */
     }
@@ -1115,10 +1112,19 @@ void init_server_identity(void)
   SetYXXServerName(&me, conf->numeric);
 }
 
-/** Notify operators of inbound TLS failures on server ports. */
+/** Notify operators of a failed TLS handshake on a server link: an
+ * outbound link we initiated, or an inbound connection on a server port.
+ * This is the only place that reports it, so a failure detected on a
+ * later socket event (ET_READ after the connect step) is reported exactly
+ * like one detected during the connect step itself. */
 static void tls_negotiation_failed(struct Client *cptr, const char *reason)
 {
-  if (IsServerPort(cptr))
+  if (IsConnecting(cptr))
+    sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s%s%s",
+                         cli_name(cptr),
+                         (reason && reason[0]) ? ": " : "",
+                         reason ? reason : "");
+  else if (IsServerPort(cptr))
     sendto_opmask_butone(0, SNO_OLDSNO,
                          "TLS negotiation failed from unknown server%s%s",
                          (reason && reason[0]) ? ": " : "",
@@ -1182,11 +1188,7 @@ static void tls_handshake_drop(struct Client *cptr)
  */
 static void tls_handshake_abort(struct Client *cptr, const char *reason)
 {
-  if (IsConnecting(cptr))
-    sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s: %s",
-                         cli_name(cptr), reason);
-  else
-    tls_negotiation_failed(cptr, reason);
+  tls_negotiation_failed(cptr, reason);
   tls_handshake_drop(cptr);
   exit_client_msg(cptr, cptr, &me, "%s", reason);
 }

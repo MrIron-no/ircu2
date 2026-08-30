@@ -419,8 +419,12 @@ int exit_client(struct Client *cptr,
                 NumNick(victim), /* two %s's */
                 cli_name(victim), cli_info(victim));
 
+    /* IsClient() does not cover STAT_CONNECTING, but the "Link with %s
+     * canceled" notices below are meant for connecting links too: without
+     * this, an outbound link that dies between connect() and registration
+     * (e.g. reset during the TLS handshake) is invisible to opers. */
     if (victim != cli_from(killer)  /* The source knows already */
-        && IsClient(victim))    /* Not a Ping struct or Log file */
+        && (IsClient(victim) || IsConnecting(victim))) /* Not a Ping struct or Log file */
     {
       if (IsServer(victim) || IsHandshake(victim))
 	sendcmdto_one(killer, CMD_SQUIT, victim, "%s 0 :%s", cli_name(&me), comment);
