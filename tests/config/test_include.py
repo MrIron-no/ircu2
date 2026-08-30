@@ -151,20 +151,42 @@ async def test_include_of_empty_and_comment_only_file(ircd_hub):
     assert _ok(result), result
 
 
-@pytest.mark.xfail(
-    reason="a self-including file aborts ircd (SIGABRT after 'memory exhausted' from the parser)",
-    strict=True,
-)
 async def test_include_cycle_is_not_fatal(ircd_hub):
-    """A file that includes itself must not make ircd loop or crash."""
+    """A file that includes itself is reported, not recursed into."""
     files = {
         "cycle_main.conf": BASE % {"extra": 'Client { ip = "*"; class = "Local"; };\nInclude "cycle_self.conf";'},
         "cycle_self.conf": 'Include "cycle_self.conf";\n',
     }
     result = _check(ircd_hub["container"], "cycle_main.conf", files)
-    assert result.returncode != 137, "ircd hung on a self-including file"
-    assert result.returncode != 134, f"ircd aborted on a self-including file: {result.stderr[-200:]}"
-    assert result.returncode != 0
+    assert result.returncode == 7, result
+    assert "recursive include" in result.stderr, result.stderr
+
+
+async def test_mutual_include_cycle_is_not_fatal(ircd_hub):
+    files = {
+        "mcyc_main.conf": BASE % {"extra": 'Include "mcyc_a.conf";'},
+        "mcyc_a.conf": 'Include "mcyc_b.conf";\n',
+        "mcyc_b.conf": 'Client { ip = "*"; class = "Local"; };\nInclude "mcyc_a.conf";\n',
+    }
+    result = _check(ircd_hub["container"], "mcyc_main.conf", files)
+    assert result.returncode == 7, result
+    assert "recursive include" in result.stderr, result.stderr
+
+
+async def test_include_nesting_limit(ircd_hub):
+    """More than 16 nested includes is refused; a chain below the limit is fine."""
+    files = {"deep_main.conf": BASE % {"extra": 'Include "deep1.conf";'}}
+    for i in range(1, 21):
+        files[f"deep{i}.conf"] = f'Include "deep{i + 1}.conf";\n'
+    files["deep21.conf"] = 'Client { ip = "*"; class = "Local"; };\n'
+    result = _check(ircd_hub["container"], "deep_main.conf", files)
+    assert result.returncode == 7, result
+    assert "include nesting too deep" in result.stderr, result.stderr
+
+    files = {"deep_ok.conf": BASE % {"extra": 'Include "deep17.conf";'}}
+    result = _check(ircd_hub["container"], "deep_ok.conf", files, client="probe@10.55.0.1")
+    assert _ok(result), result
+    assert "Match!" in result.stdout + result.stderr
 
 
 async def test_include_relative_to_dpath(ircd_hub):
