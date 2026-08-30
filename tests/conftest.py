@@ -1,5 +1,6 @@
 """pytest fixtures for ircu2 integration testing."""
 
+import itertools
 import os
 import subprocess
 import time
@@ -660,12 +661,20 @@ async def make_client(ircd_hub):
         await client.disconnect()
 
 
+_oper_seq = itertools.count(1)
+
+
 @pytest_asyncio.fixture
 async def oper(make_client):
-    """A registered global operator on the hub."""
+    """A registered global operator on the hub.
+
+    The nick is unique per test: ircu defers a client's commands once its
+    flood penalty builds up, so the previous test's QUIT may still be
+    pending when the next test registers.
+    """
     from cap_helpers import oper_up
 
-    client = await make_client("testop")
+    client = await make_client(f"op{next(_oper_seq)}")
     await oper_up(client)
     return client
 
