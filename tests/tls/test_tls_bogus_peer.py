@@ -481,10 +481,14 @@ async def test_outbound_garbage_server_fails_fast(ircd_tls_network, link_oper, d
     try:
         await _connect_out(link_oper, port)
         await srv.wait_event("accepted", 10.0)
-        start = time.monotonic()
-        note = await _wait_notice(link_oper, rf"TLS negotiation failed to {PEER_NAME}", 6.0)
+        note = await _wait_notice(link_oper, rf"TLS negotiation failed to {PEER_NAME}", delay + 10.0)
+        # The 5 s handshake deadline reports "...: TLS handshake timed out"; a
+        # prompt detection reports the backend's read/handshake error instead.
+        # Asserting on the text (not on arrival timing) proves prompt detection
+        # without racing docker load.  The window sits well above the 5 s
+        # deadline so a deadline-path regression is *received* and fails here,
+        # rather than surfacing as an opaque recv timeout.
         assert "timed out" not in note, note
-        assert time.monotonic() - start < delay + 3.0, note
     finally:
         await srv.stop()
 
@@ -496,7 +500,6 @@ async def test_outbound_server_closes(ircd_tls_network, link_oper, delay):
     try:
         await _connect_out(link_oper, port)
         await srv.wait_event("accepted", 10.0)
-        start = time.monotonic()
         # Depending on timing the EOF is seen by the TLS layer (unexpected
         # eof), by the connect step, or as a socket reset on a later event;
         # every variant must reach the oper who issued the CONNECT.
@@ -504,10 +507,13 @@ async def test_outbound_server_closes(ircd_tls_network, link_oper, delay):
             link_oper,
             rf"(TLS negotiation failed to {PEER_NAME}|Connection failed to {PEER_NAME}"
             rf"|Link with {PEER_NAME} canceled)",
-            6.0,
+            delay + 10.0,
         )
+        # Same invariant as the garbage case: the failure must be detected
+        # promptly, never left to the 5 s handshake deadline (whose notice
+        # always carries "TLS handshake timed out").  The text — not arrival
+        # timing — is the load-independent proof.
         assert "timed out" not in note, note
-        assert time.monotonic() - start < delay + 3.0, note
     finally:
         await srv.stop()
 

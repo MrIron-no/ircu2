@@ -1308,6 +1308,19 @@ static void client_sock_callback(struct Event* ev)
       exit_client_msg(cptr, cptr, &me, "Server %s closed the connection (%s)",
 		      cli_name(cptr), cli_serv(cptr)->last_error_msg);
       return;
+    } else if (IsNegotiatingTLS(cptr)) {
+      /* The peer dropped mid-handshake and the kernel surfaced it as EOF/error
+       * rather than through the TLS read path (tls_negotiate_client()).  A
+       * still-connecting link is STAT_CONNECTING, which exit_client() does not
+       * treat as IsClient(), so it would otherwise be torn down without telling
+       * the oper who issued the CONNECT.  Report it here exactly like a fatal
+       * handshake result, then fall through to the normal exit. */
+      tls_negotiation_failed(cptr,
+          cli_error(cptr) ? strerror(cli_error(cptr))
+                          : "connection closed during handshake");
+      ClrFlag(cptr, FLAG_NEGOTIATING_TLS);
+      fmt = "%s";
+      fallback = "TLS negotiation failed";
     } else {
       fmt = "Read error: %s";
       fallback = "EOF from client";
