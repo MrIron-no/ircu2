@@ -301,7 +301,7 @@ unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf)
   }
 
   io_result = IsTLS(cptr)
-    ? ircd_tls_sendv(cptr, buf, &bytes_count, &bytes_written)
+    ? tls_io_sendv(cptr, buf, &bytes_count, &bytes_written)
     : os_sendv_nonb(cli_fd(cptr), buf, &bytes_count, &bytes_written);
   switch (io_result) {
   case IO_SUCCESS:

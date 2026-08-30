@@ -650,105 +650,39 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
   return tls_handle_error(cptr, tls, res);
 }
 
-IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
-                        unsigned int *count_in, unsigned int *count_out)
+IOResult tls_backend_write(struct Client *cptr, const char *buf,
+                           unsigned int len, unsigned int *written,
+                           enum ircd_tls_want *want)
 {
-  struct iovec iov[512];
   struct tls *tls;
-  struct Connection *con;
-  IOResult result = IO_BLOCKED;
-  int ii, count, res;
-  int made_progress = 0;
+  ssize_t res;
 
-  con = cli_connect(cptr);
-  tls = s_tls(&con_socket(con));
+  *written = 0;
+  *want = IRCD_TLS_WANT_NONE;
+
+  tls = s_tls(&cli_socket(cptr));
   if (!tls)
     return IO_FAILURE;
 
-  /* tls_write() does not document any restriction on retries. */
-  *count_in = 0;
-  *count_out = 0;
-  if (con->con_rexmit)
+  res = tls_write(tls, buf, len);
+  if (res > 0)
   {
-    /* Drain the unfinished head message, then remove it by identity with
-     * msgq_excise().  Its bytes are NOT added to *count_out — see the OpenSSL
-     * backend for why (msgq_delete() would misattribute them to a priority
-     * message enqueued while we were blocked). */
-    const char *rexmit_base = con->con_rexmit;
-
-    while (con->con_rexmit)
-    {
-      res = tls_write(tls, con->con_rexmit, con->con_rexmit_len);
-      if (res <= 0) {
-        if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT)
-          return IO_BLOCKED;
-        result = tls_handle_error(cptr, tls, res);
-        if (result == IO_FAILURE)
-          *count_out = 0;
-        return result;
-      }
-      if (res == (int)con->con_rexmit_len) {
-        con->con_rexmit_len = 0;
-        con->con_rexmit = NULL;
-      } else {
-        con->con_rexmit = (char *)con->con_rexmit + res;
-        con->con_rexmit_len -= (size_t)res;
-      }
-    }
-    msgq_excise(buf, rexmit_base);
-    made_progress = 1;
-    /* fall through to send more from the now-shorter queue */
+    *written = (unsigned int)res;
+    return IO_SUCCESS;
   }
-
-  /* Process remaining messages in the queue. */
-  count = msgq_mapiov(buf, iov, sizeof(iov) / sizeof(iov[0]), count_in);
-  for (ii = 0; ii < count; ++ii)
+  if (res == TLS_WANT_POLLIN)
   {
-    res = tls_write(tls, iov[ii].iov_base, iov[ii].iov_len);
-    if (res > 0)
-    {
-      *count_out += res;
-      if (res < (int)iov[ii].iov_len) {
-        con->con_rexmit = (char *)iov[ii].iov_base + res;
-        con->con_rexmit_len = iov[ii].iov_len - (size_t)res;
-        while (con->con_rexmit)
-        {
-          res = tls_write(tls, con->con_rexmit, con->con_rexmit_len);
-          if (res <= 0) {
-            if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT)
-              return IO_BLOCKED;
-            result = tls_handle_error(cptr, tls, res);
-            if (result == IO_FAILURE)
-              *count_out = 0;
-            return result;
-          }
-          *count_out += (unsigned int)res;
-          if (res == (int)con->con_rexmit_len) {
-            con->con_rexmit_len = 0;
-            con->con_rexmit = NULL;
-          } else {
-            con->con_rexmit = (char *)con->con_rexmit + res;
-            con->con_rexmit_len -= (size_t)res;
-          }
-        }
-      }
-      continue;
-    }
-
-    /* tls_write failed before any bytes of this iov. */
-    if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT) {
-      con->con_rexmit = iov[ii].iov_base;
-      con->con_rexmit_len = iov[ii].iov_len;
-      return IO_BLOCKED;
-    }
-    result = tls_handle_error(cptr, tls, res);
-    if (result == IO_FAILURE)
-      *count_out = 0;
-    return result;
+    *want = IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
   }
-
-  return (*count_out || made_progress) ? IO_SUCCESS : IO_BLOCKED;
+  if (res == TLS_WANT_POLLOUT)
+  {
+    *want = IRCD_TLS_WANT_WRITE;
+    return IO_BLOCKED;
+  }
+  return tls_handle_error(cptr, tls, (int)res);
 }
+
 
 int ircd_tls_sha1_base64(const void *data, size_t len, char *out, size_t outlen)
 {

@@ -273,22 +273,24 @@ int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
 IOResult ircd_tls_recv(struct Client *cptr, char *buf,
                        unsigned int length, unsigned int *count_out);
 
-/** ircd_tls_sendv() performs a non-blocking send of TLS application
- * data from \a buf to \a cptr.
+/** tls_backend_write() writes one contiguous buffer to \a cptr's TLS session.
  *
- * This function must accomodate changes to \a buf for successive calls
- * to \a cptr.  The connection's \a con_rexmit and \a con_rexmit_len
- * fields are provided to support this requirement.
+ * This is a thin per-backend primitive: it does no message-queue or
+ * retransmit bookkeeping (tls_io_sendv() in the core owns that).  It performs
+ * a single non-blocking record write and classifies the outcome.
  *
  * @param[in] cptr Locally connected client to send to.
- * @param[in] buf Client's message queue.
- * @param[out] count_in Total number of bytes in \a buf at entry.
- * @param[out] count_out Number of bytes consumed from \a buf.
- * \returns IO_FAILURE on error, IO_BLOCKED if no data could be sent, or
- *   IO_SUCCESS if any data was written from \a buf.
+ * @param[in] buf Bytes to write.
+ * @param[in] len Number of bytes in \a buf.
+ * @param[out] written Number of bytes accepted (only meaningful on IO_SUCCESS).
+ * @param[out] want On IO_BLOCKED, the socket direction the write is waiting on.
+ * \returns IO_SUCCESS if any bytes were written, IO_BLOCKED if none could be
+ *   (with \a want set), or IO_FAILURE on a fatal error (the backend has torn
+ *   the session down).
  */
-IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
-                        unsigned int *count_in, unsigned int *count_out);
+IOResult tls_backend_write(struct Client *cptr, const char *buf,
+                           unsigned int len, unsigned int *written,
+                           enum ircd_tls_want *want);
 
 /** Compute base64(SHA1(\a data)) into \a out.
  * Used for RFC 6455 WebSocket handshakes and similar protocols.

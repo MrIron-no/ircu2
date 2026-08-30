@@ -27,6 +27,8 @@
 #include "ircd_tls.h"
 #include "msgq.h"
 
+#include <sys/uio.h>   /* struct iovec */
+
 /** The base (plaintext) writable desire: queued output or an active /LIST. */
 static int base_want_writable(struct Client *cptr)
 {
@@ -56,4 +58,121 @@ unsigned int tls_desired_events(struct Client *cptr)
   if (tls_want_writable(cptr))
     ev |= SOCK_EVENT_WRITABLE;
   return ev;
+}
+
+/** Record the direction a blocked/failed write is waiting on, in one place. */
+static void tls_io_note_write(struct Client *cptr, IOResult io,
+                              enum ircd_tls_want want)
+{
+  con_tls_want_wr(cli_connect(cptr)) =
+    (io == IO_BLOCKED) ? want : IRCD_TLS_WANT_NONE;
+}
+
+IOResult tls_io_sendv(struct Client *cptr, struct MsgQ *buf,
+                      unsigned int *count_in, unsigned int *count_out)
+{
+  struct iovec iov[512];
+  struct Connection *con = cli_connect(cptr);
+  enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
+  unsigned int written;
+  int ii, count, made_progress = 0;
+  IOResult io;
+
+  *count_in = 0;
+  *count_out = 0;
+
+  if (con->con_rexmit)
+  {
+    /* con_rexmit is a raw pointer into the head queued message left unfinished
+     * by a prior partial write.  Drain it to completion (a short write does not
+     * mean the socket is full), then remove that exact message by identity with
+     * msgq_excise().  These bytes are deliberately NOT added to *count_out:
+     * msgq_delete() deletes in (partial-normal, prio, normal) order, so
+     * crediting a whole normal message here would instead delete a priority
+     * message that jumped ahead while we were blocked. */
+    const char *rexmit_base = con->con_rexmit;
+
+    while (con->con_rexmit)
+    {
+      io = tls_backend_write(cptr, con->con_rexmit, con->con_rexmit_len,
+                             &written, &want);
+      if (io != IO_SUCCESS)
+      {
+        tls_io_note_write(cptr, io, want);
+        if (io == IO_FAILURE)
+          *count_out = 0;
+        return io;
+      }
+      if (written == con->con_rexmit_len)
+      {
+        con->con_rexmit_len = 0;
+        con->con_rexmit = NULL;
+      }
+      else
+      {
+        con->con_rexmit = (char *)con->con_rexmit + written;
+        con->con_rexmit_len -= written;
+      }
+    }
+    msgq_excise(buf, rexmit_base);
+    made_progress = 1;
+    /* fall through to send more from the now-shorter queue */
+  }
+
+  count = msgq_mapiov(buf, iov, sizeof(iov) / sizeof(iov[0]), count_in);
+  for (ii = 0; ii < count; ++ii)
+  {
+    io = tls_backend_write(cptr, iov[ii].iov_base, iov[ii].iov_len,
+                           &written, &want);
+    if (io == IO_SUCCESS)
+    {
+      *count_out += written;
+      if (written < iov[ii].iov_len)
+      {
+        /* Short write: park the remainder in con_rexmit and drain it.  These
+         * bytes are in mapiov order, so they are safe to credit to *count_out. */
+        con->con_rexmit = (char *)iov[ii].iov_base + written;
+        con->con_rexmit_len = iov[ii].iov_len - written;
+        while (con->con_rexmit)
+        {
+          io = tls_backend_write(cptr, con->con_rexmit, con->con_rexmit_len,
+                                 &written, &want);
+          if (io != IO_SUCCESS)
+          {
+            tls_io_note_write(cptr, io, want);
+            if (io == IO_FAILURE)
+              *count_out = 0;
+            return io;
+          }
+          *count_out += written;
+          if (written == con->con_rexmit_len)
+          {
+            con->con_rexmit_len = 0;
+            con->con_rexmit = NULL;
+          }
+          else
+          {
+            con->con_rexmit = (char *)con->con_rexmit + written;
+            con->con_rexmit_len -= written;
+          }
+        }
+      }
+      continue;
+    }
+
+    /* Blocked or fatal before any byte of this iov was accepted. */
+    con->con_rexmit = iov[ii].iov_base;
+    con->con_rexmit_len = iov[ii].iov_len;
+    tls_io_note_write(cptr, io, want);
+    if (io == IO_FAILURE)
+      *count_out = 0;
+    return io;
+  }
+
+  if (*count_out || made_progress)
+  {
+    con_tls_want_wr(con) = IRCD_TLS_WANT_NONE;
+    return IO_SUCCESS;
+  }
+  return IO_BLOCKED;
 }

@@ -30,7 +30,26 @@
 #ifndef INCLUDED_tls_io_h
 #define INCLUDED_tls_io_h
 
+#ifndef INCLUDED_ircd_osdep_h
+#include "ircd_osdep.h"      /* IOResult */
+#endif
+
 struct Client;
+struct MsgQ;
+
+/** tls_io_sendv() sends as much of \a cptr's message queue as the TLS session
+ * will accept, owning the partial-write / retransmit bookkeeping so no backend
+ * has to.  It drives the thin per-backend tls_backend_write() primitive.
+ *
+ * @param[in] cptr Locally connected TLS client to send to.
+ * @param[in] buf Client's message queue.
+ * @param[out] count_in Total number of bytes mapped from \a buf.
+ * @param[out] count_out Number of bytes consumed from \a buf.
+ * \returns IO_FAILURE on a fatal error, IO_BLOCKED if nothing could be sent,
+ *   or IO_SUCCESS if any data was written.
+ */
+IOResult tls_io_sendv(struct Client *cptr, struct MsgQ *buf,
+                      unsigned int *count_in, unsigned int *count_out);
 
 /** Non-zero if the connection currently wants writable events.
  *

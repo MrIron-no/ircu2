@@ -757,18 +757,6 @@ static IOResult ssl_handle_error(struct Client *cptr, SSL *tls, int res, int ori
  * keep writable interest asserted (update_write() drops it), or the level-
  * triggered writable event spins; the always-on readable event drives the
  * retry.  Any other block is an ordinary "wants write". */
-static IOResult ssl_write_block(struct Client *cptr, SSL *tls, int res,
-                                int orig_errno)
-{
-  if (SSL_get_error(tls, res) == SSL_ERROR_WANT_READ)
-  {
-    cli_tls_want_wr(cptr) = IRCD_TLS_WANT_READ;
-    return IO_BLOCKED;
-  }
-  cli_tls_want_wr(cptr) = IRCD_TLS_WANT_NONE;
-  return ssl_handle_error(cptr, tls, res, orig_errno);
-}
-
 int ircd_tls_negotiate(struct Client *cptr, char *reason, size_t reasonlen,
                        enum ircd_tls_want *want)
 {
@@ -943,114 +931,45 @@ IOResult ircd_tls_recv(struct Client *cptr, char *buf,
   return ssl_handle_error(cptr, tls, res, orig_errno);
 }
 
-IOResult ircd_tls_sendv(struct Client *cptr, struct MsgQ *buf,
-                        unsigned int *count_in,
-                        unsigned int *count_out)
+IOResult tls_backend_write(struct Client *cptr, const char *buf,
+                           unsigned int len, unsigned int *written,
+                           enum ircd_tls_want *want)
 {
-  struct iovec iov[512];
   SSL *tls;
-  struct Connection *con;
-  int ii, count, res, orig_errno;
-  int made_progress = 0;
-  IOResult io;
+  int res, orig_errno, err;
 
-  con = cli_connect(cptr);
-  tls = s_tls(&con_socket(con));
+  *written = 0;
+  *want = IRCD_TLS_WANT_NONE;
+
+  tls = s_tls(&cli_socket(cptr));
   if (!tls)
     return IO_FAILURE;
-  *count_in = 0;
-  *count_out = 0;
-  if (con->con_rexmit)
+
+  ERR_clear_error();
+  res = SSL_write(tls, buf, (int)len);
+  if (res > 0)
   {
-    /* con_rexmit is a raw pointer into the head queued message left
-     * unfinished by a prior partial SSL_write.  Drain it to completion (a
-     * short SSL_write does not mean the socket is full under
-     * SSL_MODE_ENABLE_PARTIAL_WRITE), then remove that exact message from the
-     * queue by identity with msgq_excise().  These bytes are deliberately NOT
-     * added to *count_out: msgq_delete() deletes in (partial-normal, prio,
-     * normal) order, so crediting a whole normal message here would instead
-     * delete a priority message that jumped ahead while we were blocked. */
-    const char *rexmit_base = con->con_rexmit;
-
-    while (con->con_rexmit)
-    {
-      ERR_clear_error();
-      res = SSL_write(tls, con->con_rexmit, (int)con->con_rexmit_len);
-      if (res <= 0) {
-        orig_errno = errno;
-        io = ssl_write_block(cptr, tls, res, orig_errno);
-        if (io == IO_FAILURE)
-          *count_out = 0;
-        return io;
-      }
-      if (res == (int)con->con_rexmit_len) {
-        con->con_rexmit_len = 0;
-        con->con_rexmit = NULL;
-      } else {
-        con->con_rexmit = (char *)con->con_rexmit + res;
-        con->con_rexmit_len -= (size_t)res;
-      }
-    }
-    msgq_excise(buf, rexmit_base);
-    made_progress = 1;
-    /* fall through to send more from the now-shorter queue */
-  }
-
-  /* Process remaining messages in the queue. */
-  count = msgq_mapiov(buf, iov, sizeof(iov) / sizeof(iov[0]), count_in);
-  for (ii = 0; ii < count; ++ii)
-  {
-    ERR_clear_error();
-    res = SSL_write(tls, iov[ii].iov_base, iov[ii].iov_len);
-    if (res > 0)
-    {
-      *count_out += res;
-      if (res < (int)iov[ii].iov_len) {
-        con->con_rexmit = (char *)iov[ii].iov_base + res;
-        con->con_rexmit_len = iov[ii].iov_len - (size_t)res;
-        /* Finish this message or stop on real TLS block.  These bytes are
-         * in mapiov order, so they are safe to credit to *count_out. */
-        while (con->con_rexmit)
-        {
-          ERR_clear_error();
-          res = SSL_write(tls, con->con_rexmit, (int)con->con_rexmit_len);
-          if (res <= 0) {
-            orig_errno = errno;
-            io = ssl_write_block(cptr, tls, res, orig_errno);
-            if (io == IO_FAILURE)
-              *count_out = 0;
-            return io;
-          }
-          *count_out += (unsigned int)res;
-          if (res == (int)con->con_rexmit_len) {
-            con->con_rexmit_len = 0;
-            con->con_rexmit = NULL;
-          } else {
-            con->con_rexmit = (char *)con->con_rexmit + res;
-            con->con_rexmit_len -= (size_t)res;
-          }
-        }
-      }
-      continue;
-    }
-
-    /* SSL_write failed before any bytes of this iov were accepted. */
-    orig_errno = errno;
-    con->con_rexmit = iov[ii].iov_base;
-    con->con_rexmit_len = iov[ii].iov_len;
-    io = ssl_write_block(cptr, tls, res, orig_errno);
-    if (io == IO_FAILURE)
-      *count_out = 0;
-    return io;
-  }
-
-  if (*count_out || made_progress)
-  {
-    cli_tls_want_wr(cptr) = IRCD_TLS_WANT_NONE;  /* progress: no cross-direction wait */
+    *written = (unsigned int)res;
     return IO_SUCCESS;
   }
-  return IO_BLOCKED;
+
+  orig_errno = errno;
+  err = SSL_get_error(tls, res);
+  if (err == SSL_ERROR_WANT_READ)
+  {
+    *want = IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
+  }
+  if (err == SSL_ERROR_WANT_WRITE)
+  {
+    *want = IRCD_TLS_WANT_WRITE;
+    return IO_BLOCKED;
+  }
+  /* SYSCALL EINTR/EAGAIN maps to IO_BLOCKED (want stays NONE, a normal socket
+   * block); anything else is fatal and tears the session down. */
+  return ssl_handle_error(cptr, tls, res, orig_errno);
 }
+
 
 int ircd_tls_sha1_base64(const void *data, size_t len, char *out, size_t outlen)
 {
