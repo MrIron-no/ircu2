@@ -99,6 +99,20 @@ static inline int ircd_tls_trust_verifies_ca(ircd_tls_trust_policy policy)
 /** Size of the human-readable reason buffer filled by ircd_tls_negotiate(). */
 #define TLS_REASON_LEN 128
 
+/** Which socket direction a TLS operation is blocked on.
+ *
+ * TLS breaks the plaintext assumption that a read waits on readable and a
+ * write waits on writable: a TLS *write* can be blocked waiting to *read* the
+ * socket (and vice versa).  Backends report the blocked direction with these
+ * values; the core (tls_io.c) turns them into socket event interest.  This is
+ * the single source of truth for cross-direction I/O — there are no separate
+ * ad-hoc flags. */
+enum ircd_tls_want {
+  IRCD_TLS_WANT_NONE = 0,  /**< not blocked (or blocked on its natural direction) */
+  IRCD_TLS_WANT_READ,      /**< the operation needs the socket to become readable */
+  IRCD_TLS_WANT_WRITE      /**< the operation needs the socket to become writable */
+};
+
 /* The following variables and functions are provided by ircu2's core
  * code, not by the TLS interface.
  */
