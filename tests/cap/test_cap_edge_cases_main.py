@@ -126,10 +126,6 @@ async def test_echo_message_multi_target(make_client):
         assert got.params[-1] == "both of you"
 
 
-@pytest.mark.xfail(
-    reason="CPRIVMSG/CNOTICE (whisper) never echo the message, unlike PRIVMSG/NOTICE",
-    strict=True,
-)
 async def test_echo_message_cprivmsg(make_client):
     chan = "#ech_cprivmsg"
     op = await make_client("ech_op5", caps=["echo-message"])
@@ -139,6 +135,46 @@ async def test_echo_message_cprivmsg(make_client):
     await asyncio.sleep(0.2)
     await drain(op)
     await op.send(f"CPRIVMSG ech_peer5 {chan} :whispered")
+    got = await peer.wait_for_user_msg("PRIVMSG", timeout=5.0)
+    assert got.params == ["ech_peer5", "whispered"], got.raw
+    echo = await op.wait_for_user_msg("PRIVMSG", timeout=5.0)
+    assert sender_nick(echo) == "ech_op5" and echo.params == ["ech_peer5", "whispered"], echo.raw
+
+
+async def test_echo_message_cnotice(make_client):
+    chan = "#ech_cnotice"
+    op = await make_client("ech_op6", caps=["echo-message"])
+    peer = await make_client("ech_peer6")
+    await join(op, chan)
+    await join(peer, chan)
+    await asyncio.sleep(0.2)
+    await drain(op)
+    await op.send(f"CNOTICE ech_peer6 {chan} :whispered notice")
+    got = await peer.wait_for_user_msg("NOTICE", timeout=5.0)
+    assert got.params == ["ech_peer6", "whispered notice"], got.raw
+    echo = await op.wait_for_user_msg("NOTICE", timeout=5.0)
+    assert echo.params == ["ech_peer6", "whispered notice"], echo.raw
+
+
+async def test_no_cprivmsg_echo_without_cap(make_client):
+    chan = "#ech_cprivmsg_nocap"
+    op = await make_client("ech_op7")
+    peer = await make_client("ech_peer7")
+    await join(op, chan)
+    await join(peer, chan)
+    await asyncio.sleep(0.2)
+    await drain(op)
+    await op.send(f"CPRIVMSG ech_peer7 {chan} :quiet")
     await peer.wait_for_user_msg("PRIVMSG", timeout=5.0)
-    echo = await op.wait_for_user_msg("PRIVMSG", timeout=3.0)
-    assert echo.params == ["ech_peer5", "whispered"]
+    await op.assert_no_message("PRIVMSG", timeout=1.0)
+
+
+async def test_refused_cprivmsg_is_not_echoed(make_client):
+    """A whisper the server rejects (target not on channel) has no echo."""
+    chan = "#ech_cprivmsg_refused"
+    op = await make_client("ech_op8", caps=["echo-message"])
+    other = await make_client("ech_other8")
+    await join(op, chan)
+    await op.send(f"CPRIVMSG ech_other8 {chan} :nope")
+    await op.wait_for("441", timeout=5.0)
+    await op.assert_no_message("PRIVMSG", timeout=1.0)
