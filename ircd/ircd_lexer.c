@@ -95,6 +95,7 @@ static const struct lexer_token tokens[] = {
   { "fingerprint", FINGERPRINT },
   { "force_local_opmode", TPRIV_FORCE_LOCAL_OPMODE },
   { "force_opmode", TPRIV_FORCE_OPMODE },
+  { "from", FROM },
   { "gb", GBYTES },
   { "gbytes", GBYTES },
   { "general", GENERAL },

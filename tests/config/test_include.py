@@ -109,10 +109,6 @@ async def test_missing_include_file_exits_promptly(ircd_hub):
     assert result.returncode != 137, "ircd hung and was killed by timeout"
 
 
-@pytest.mark.xfail(
-    reason="the hand-coded lexer has no FROM token, so 'Include <types> from \"file\"' is a syntax error",
-    strict=True,
-)
 async def test_include_restricted_to_block_types(ircd_hub):
     files = {
         "types_main.conf": BASE % {"extra": 'Include Client from "types_extra.conf";'},
@@ -175,3 +171,14 @@ async def test_include_relative_to_dpath(ircd_hub):
     result = _check(ircd_hub["container"], "rel_main.conf", files, client="probe@10.55.0.1")
     assert _ok(result), result
     assert "Match!" in result.stdout + result.stderr
+
+
+async def test_include_restricted_block_type_refused(ircd_hub):
+    """A block outside the listed types in "Include <types> from" is an error."""
+    files = {
+        "types2_main.conf": BASE % {"extra": 'Client { ip = "*"; class = "Local"; };\nInclude Class from "types2_extra.conf";'},
+        "types2_extra.conf": 'Client { ip = "*"; class = "Local"; };\n',
+    }
+    result = _check(ircd_hub["container"], "types2_main.conf", files)
+    assert result.returncode != 0, result
+    assert "forbidden" in result.stderr, result.stderr
