@@ -114,6 +114,7 @@ async def test_missing_include_in_the_middle_still_parses_rest(ircd_hub):
     result = _check(ircd_hub["container"], "miss3_main.conf", files, client="probe@10.55.0.1")
     assert result.returncode == 7, result
     assert "error opening file" in result.stderr, result.stderr
+    assert "syntax error" not in result.stderr, result.stderr
 
 
 async def test_include_restricted_to_block_types(ircd_hub):
@@ -138,10 +139,6 @@ async def test_hash_comments_and_quoted_strings(ircd_hub):
     assert _ok(result), result
 
 
-@pytest.mark.xfail(
-    reason="the grammar requires at least one block per included file, so an empty/comment-only include is a syntax error",
-    strict=True,
-)
 async def test_include_of_empty_and_comment_only_file(ircd_hub):
     files = {
         "empty_main.conf": BASE % {"extra": 'Client { ip = "*"; class = "Local"; };\nInclude "empty_extra.conf";'},
