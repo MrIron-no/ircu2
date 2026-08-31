@@ -35,6 +35,9 @@ async def main() -> None:
     ap.add_argument("--truncate", type=int, default=200)
     ap.add_argument("--cert", default="tlspeer")
     ap.add_argument("--delay", type=float, default=0.0)
+    ap.add_argument("--pre-delay", type=float, default=0.0)
+    ap.add_argument("--chunk", type=int, default=0)
+    ap.add_argument("--chunk-delay", type=float, default=0.0)
     args = ap.parse_args()
 
     # Each scenario replaces the container at the same address; announce the
@@ -45,7 +48,9 @@ async def main() -> None:
     except Exception:
         pass
 
-    srv = BogusTLSServer(args.mode, cert=args.cert, truncate=args.truncate, delay=args.delay)
+    srv = BogusTLSServer(args.mode, cert=args.cert, truncate=args.truncate,
+                         delay=args.delay, pre_delay=args.pre_delay,
+                         chunk=args.chunk, chunk_delay=args.chunk_delay)
     srv.server = await asyncio.start_server(srv._handle, "0.0.0.0", args.port)
     srv.port = args.port
     emit(event="listening", port=args.port)

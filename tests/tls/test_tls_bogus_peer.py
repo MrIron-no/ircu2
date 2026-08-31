@@ -535,3 +535,134 @@ async def test_outbound_full_handshake_delivers_pass_and_server(ircd_tls_network
         await srv.stop()
         # The hub drops the link once our server goes away.
         await _notices(link_oper, r".", 1.0)
+
+
+# ---------------------------------------------------------------------------
+# outbound: latency / slow-handshake edge cases (server-to-server)
+#
+# These stress the hub's OUTBOUND TLS connect state machine under realistic
+# latency: dribbled handshake flights, flights still arriving when the 5 s
+# handshake deadline fires, and mid-handshake closes.  The oracle for every
+# case is threefold -- the hub must (1) not spin a core, (2) keep answering a
+# healthy control client's PINGs throughout (proving it is neither hung nor
+# crashed), and (3) reach a definite outcome (link up, or a prompt failure
+# notice), never leave a completed handshake to the deadline.
+#
+# NOTE: the docker harness runs the epoll engine, so a purely kqueue-ordering
+# fault cannot surface here; these cover the engine-independent behaviour of
+# the handshake / deadline / teardown paths.
+# ---------------------------------------------------------------------------
+
+
+async def _keep_alive(client: IRCClient, seconds: float, gap: float = 0.5) -> int:
+    """PING `client` every `gap` seconds for `seconds`; each must PONG.
+    Returns the number of successful round-trips; raises if one is missed."""
+    n = 0
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        await _ping_rtt(client, f"alive{n}", timeout=3.0)
+        n += 1
+        await asyncio.sleep(gap)
+    return n
+
+
+async def test_outbound_slow_handshake_completes(ircd_tls_network, link_oper, healthy):
+    """A peer that dribbles every handshake flight still links; the hub does
+    the many small partial reads without spinning and stays responsive."""
+    srv = SidecarBogusServer("slow_complete", cert="tlspeer", chunk=64, chunk_delay=0.05)
+    port = await srv.start()
+    try:
+        await _connect_out(link_oper, port)
+        await srv.wait_event("accepted", 10.0)
+        cpu = asyncio.create_task(sample_cpu(HUB_CONTAINER, 4.0))
+        await _keep_alive(healthy, 4.0)
+        _assert_no_spin(await cpu, "peer dribbled the handshake")
+        # The handshake completed: the hub sent its PASS/SERVER over the link.
+        await srv.wait_event("line", 10.0)
+        assert any(l.startswith("PASS ") for l in srv.app_lines), srv.app_lines
+        assert any(l.startswith("SERVER tls-hub.test.net ") for l in srv.app_lines), srv.app_lines
+    finally:
+        await srv.stop()
+        await _notices(link_oper, r".", 1.0)
+
+
+async def test_outbound_slow_handshake_crosses_deadline(ircd_tls_network, link_oper, healthy):
+    """The server flight dribbles so slowly it is still arriving when the 5 s
+    deadline fires.  The hub must abort with a prompt timeout notice, keep the
+    control client served, and not spin -- the deadline teardown racing with
+    in-flight handshake data is the interesting window here."""
+    srv = SidecarBogusServer("slow_complete", cert="tlspeer", chunk=24, chunk_delay=0.4)
+    port = await srv.start()
+    try:
+        await _connect_out(link_oper, port)
+        await srv.wait_event("accepted", 10.0)
+        cpu = asyncio.create_task(sample_cpu(HUB_CONTAINER, 6.0))
+        alive = asyncio.create_task(_keep_alive(healthy, 6.0))
+        note = await _wait_notice(link_oper, rf"TLS negotiation failed to {PEER_NAME}", CLOSE_MAX + 4.0)
+        assert "timed out" in note, note
+        _assert_no_spin(await cpu, "handshake dribbled across the deadline")
+        await alive          # raises if the hub stopped answering mid-teardown
+    finally:
+        await srv.stop()
+        await _notices(link_oper, r".", 1.0)
+
+
+async def test_outbound_slow_close_mid_handshake(ircd_tls_network, link_oper, healthy):
+    """Peer dribbles a partial flight then closes mid-handshake.  The hub must
+    report a failure, stay responsive, and not spin."""
+    srv = SidecarBogusServer("slow_close", cert="tlspeer", truncate=180, chunk=20, chunk_delay=0.1)
+    port = await srv.start()
+    try:
+        await _connect_out(link_oper, port)
+        await srv.wait_event("accepted", 10.0)
+        cpu = asyncio.create_task(sample_cpu(HUB_CONTAINER, 4.0))
+        alive = asyncio.create_task(_keep_alive(healthy, 4.0))
+        note = await _wait_notice(
+            link_oper,
+            rf"(TLS negotiation failed to {PEER_NAME}|Connection failed to {PEER_NAME}"
+            rf"|Link with {PEER_NAME} canceled)",
+            CLOSE_MAX + 2.0,
+        )
+        _assert_no_spin(await cpu, "peer closed mid-handshake")
+        await alive
+    finally:
+        await srv.stop()
+        await _notices(link_oper, r".", 1.0)
+
+
+async def test_outbound_byte_dribble_handshake(ircd_tls_network, link_oper, healthy):
+    """Extreme fragmentation: every handshake flight is written one byte at a
+    time.  The hub's partial-read reassembly must still complete the link
+    without spinning."""
+    srv = SidecarBogusServer("slow_complete", cert="tlspeer", chunk=1, chunk_delay=0.0)
+    port = await srv.start()
+    try:
+        await _connect_out(link_oper, port)
+        await srv.wait_event("accepted", 10.0)
+        cpu = asyncio.create_task(sample_cpu(HUB_CONTAINER, 4.0))
+        await _keep_alive(healthy, 4.0)
+        _assert_no_spin(await cpu, "handshake fragmented to single bytes")
+        await srv.wait_event("line", 10.0)
+        assert any(l.startswith("SERVER tls-hub.test.net ") for l in srv.app_lines), srv.app_lines
+    finally:
+        await srv.stop()
+        await _notices(link_oper, r".", 1.0)
+
+
+async def test_outbound_handshake_pre_delay_near_deadline(ircd_tls_network, link_oper, healthy):
+    """The peer stalls ~3.5 s (under the 5 s deadline) then completes the
+    handshake quickly.  The link must come up -- the deadline must not fire on a
+    handshake that finishes in time -- with no spin and a responsive hub."""
+    srv = SidecarBogusServer("slow_complete", cert="tlspeer", pre_delay=3.5)
+    port = await srv.start()
+    try:
+        await _connect_out(link_oper, port)
+        await srv.wait_event("accepted", 10.0)
+        cpu = asyncio.create_task(sample_cpu(HUB_CONTAINER, 6.0))
+        await _keep_alive(healthy, 6.0)
+        _assert_no_spin(await cpu, "peer stalled just under the deadline")
+        await srv.wait_event("line", 10.0)
+        assert any(l.startswith("SERVER tls-hub.test.net ") for l in srv.app_lines), srv.app_lines
+    finally:
+        await srv.stop()
+        await _notices(link_oper, r".", 1.0)

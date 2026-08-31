@@ -213,10 +213,18 @@ class BogusTLSServer:
                         of the server flight, then go silent
       complete          full handshake with the given cert, then record the
                         decrypted application data ircd sends (PASS/SERVER)
+      slow_complete     full handshake, but every server flight is dribbled
+                        `chunk` bytes at a time with `chunk_delay` between
+                        writes (after an optional `pre_delay`).  With a slow
+                        enough drip the handshake is still incomplete when
+                        ircd's 5 s deadline fires -- exercising the deadline
+                        teardown racing with in-flight handshake data.
+      slow_close        dribble a partial server flight, then close mid-drip.
     """
 
     def __init__(self, mode: str, *, cert: str = "tlspeer", truncate: int = 200,
-                 delay: float = 0.0):
+                 delay: float = 0.0, pre_delay: float = 0.0,
+                 chunk: int = 0, chunk_delay: float = 0.0):
         self.mode = mode
         self.cert = cert
         self.truncate = truncate
@@ -224,6 +232,12 @@ class BogusTLSServer:
         # while ircd is still inside its connect-completion step; ~1 s makes
         # sure ircd has parked in "waiting for the server flight" first.
         self.delay = delay
+        # Latency knobs (slow_* modes): pre_delay before the first flight, then
+        # each flight written `chunk` bytes at a time with `chunk_delay` between
+        # writes (chunk=0 means write the whole flight at once).
+        self.pre_delay = pre_delay
+        self.chunk = chunk
+        self.chunk_delay = chunk_delay
         self.server: asyncio.AbstractServer | None = None
         self.port: int = 0
         self.accepted = asyncio.Event()
@@ -288,6 +302,52 @@ class BogusTLSServer:
                 await self._drain_until_eof(reader)
                 return
 
+            if self.mode in ("slow_complete", "slow_close"):
+                if self.pre_delay:
+                    await asyncio.sleep(self.pre_delay)
+                # Drive the handshake, dribbling each outgoing flight so the
+                # peer's SSL_connect sees many small WANT_READ steps; a slow
+                # enough drip is still going when ircd's 5 s deadline fires.
+                while True:
+                    try:
+                        tls.do_handshake()
+                        break
+                    except ssl.SSLWantReadError:
+                        out = outgoing.read()
+                        if out:
+                            if self.mode == "slow_close":
+                                await self._write_slow(writer, out[: self.truncate])
+                                writer.close()
+                                return
+                            await self._write_slow(writer, out)
+                        data = await reader.read(65536)
+                        if not data:
+                            return
+                        self.received_raw += data
+                        incoming.write(data)
+                out = outgoing.read()
+                if out:
+                    await self._write_slow(writer, out)
+                # Handshake done -> behave like `complete`: decrypt app lines.
+                buf = ""
+                while True:
+                    try:
+                        chunk = tls.read(65536)
+                        if not chunk:
+                            return
+                        buf += chunk.decode(errors="replace")
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            self.app_lines.append(line.rstrip("\r"))
+                            self.done.set()
+                    except ssl.SSLWantReadError:
+                        data = await reader.read(65536)
+                        if not data:
+                            return
+                        incoming.write(data)
+                    except ssl.SSLZeroReturnError:
+                        return
+
             if self.mode == "complete":
                 # Full handshake, then decrypt whatever ircd sends.
                 while True:
@@ -332,6 +392,19 @@ class BogusTLSServer:
             self.done.set()
             writer.close()
 
+    async def _write_slow(self, writer: asyncio.StreamWriter, data: bytes) -> None:
+        """Write `data`, dribbling `self.chunk` bytes at a time with
+        `self.chunk_delay` between writes (whole write when chunk<=0)."""
+        if self.chunk and self.chunk > 0:
+            for i in range(0, len(data), self.chunk):
+                writer.write(data[i:i + self.chunk])
+                await writer.drain()
+                if self.chunk_delay:
+                    await asyncio.sleep(self.chunk_delay)
+        else:
+            writer.write(data)
+            await writer.drain()
+
     async def _drain_until_eof(self, reader: asyncio.StreamReader) -> None:
         while True:
             data = await reader.read(65536)
@@ -371,11 +444,15 @@ class SidecarBogusServer:
     """
 
     def __init__(self, mode: str, *, truncate: int = 200, cert: str = "tlspeer",
-                 delay: float = 0.0):
+                 delay: float = 0.0, pre_delay: float = 0.0,
+                 chunk: int = 0, chunk_delay: float = 0.0):
         self.mode = mode
         self.truncate = truncate
         self.cert = cert
         self.delay = delay
+        self.pre_delay = pre_delay
+        self.chunk = chunk
+        self.chunk_delay = chunk_delay
         self.port = SIDECAR_PORT
         self.ip = SIDECAR_IP
         self.events: list[dict] = []
@@ -399,6 +476,8 @@ class SidecarBogusServer:
             "--mode", self.mode, "--port", str(self.port),
             "--truncate", str(self.truncate), "--cert", self.cert,
             "--delay", str(self.delay),
+            "--pre-delay", str(self.pre_delay),
+            "--chunk", str(self.chunk), "--chunk-delay", str(self.chunk_delay),
         ]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         if r.returncode != 0:
