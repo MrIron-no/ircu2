@@ -1345,7 +1345,14 @@ static void client_sock_callback(struct Event* ev)
      * update_write()).  Retry the read now the socket can flush whatever the
      * TLS layer owed (e.g. a KeyUpdate response). */
     if (con_tls_want_rd(con) == IRCD_TLS_WANT_WRITE) {
-      if (read_packet(cptr, 1) == 0) {
+      int res = read_packet(cptr, 1);
+      /* read_packet() may have killed and freed cptr while processing the data
+       * it just read (an ordinary QUIT, an excess-flood kill, a failed
+       * websocket upgrade): CPTR_KILLED means the struct is gone, so return
+       * before anything — the trailing assert included — looks at cptr again. */
+      if (res == CPTR_KILLED)
+        return;
+      if (res == 0) {
         fallback = "EOF from client";
         break;
       }
@@ -1380,14 +1387,21 @@ static void client_sock_callback(struct Event* ev)
       tls_handshake_succeeded(cptr);
       return;
     }
-    if (read_packet(cptr, 1) == 0) /* error while reading packet */
-      fallback = "EOF from client";
-    /* A TLS write blocked waiting to read parked its send queue with writable
-     * interest dropped (see update_write()).  The data we just read may have
-     * unblocked it, so retry the send now. */
-    else if (!IsDead(cptr) && con_tls_want_wr(con) == IRCD_TLS_WANT_READ) {
-      ClrFlag(cptr, FLAG_BLOCKED);
-      send_queued(cptr);
+    {
+      int res = read_packet(cptr, 1);
+      /* read_packet() may have killed and freed cptr (see the ET_WRITE arm);
+       * CPTR_KILLED means the struct is gone, so return before touching it. */
+      if (res == CPTR_KILLED)
+        return;
+      if (res == 0) /* read error; cptr is still alive */
+        fallback = "EOF from client";
+      /* A TLS write blocked waiting to read parked its send queue with writable
+       * interest dropped (see update_write()).  The data we just read may have
+       * unblocked it, so retry the send now. */
+      else if (!IsDead(cptr) && con_tls_want_wr(con) == IRCD_TLS_WANT_READ) {
+        ClrFlag(cptr, FLAG_BLOCKED);
+        send_queued(cptr);
+      }
     }
     break;
 
