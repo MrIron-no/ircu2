@@ -72,8 +72,6 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <netinet/in.h>  /* TLSDBG: sockaddr_in for the peer port */
-#include <arpa/inet.h>   /* TLSDBG: ntohs() */
 #include <sys/time.h>
 #include <sys/utsname.h>
 #include <unistd.h>
@@ -112,39 +110,6 @@ static void client_sock_callback(struct Event* ev);
 static void client_timer_callback(struct Event* ev);
 static void tls_handshake_timer_arm(struct Client *cptr);
 static void tls_negotiation_events(struct Client *cptr, enum ircd_tls_want want);
-
-/** TLSDBG: the peer's TCP port, so a hub inbound handshake log can be tied to
- * the leaf's outbound handshake log by the shared 4-tuple (the hub's remote
- * port == the leaf's local port).  Every unregistered connection logs as '*',
- * so without this the two ends' logs cannot be proven to be the same socket.
- * Returns 0 when unavailable. */
-static unsigned int tlsdbg_port(struct Client *cptr, int local)
-{
-  struct sockaddr_storage sa;
-  socklen_t slen = sizeof(sa);
-  int r;
-
-  if (cli_fd(cptr) < 0)
-    return 0;
-  r = local ? getsockname(cli_fd(cptr), (struct sockaddr *)&sa, &slen)
-            : getpeername(cli_fd(cptr), (struct sockaddr *)&sa, &slen);
-  if (r != 0)
-    return 0;
-  if (sa.ss_family == AF_INET)
-    return ntohs(((struct sockaddr_in *)&sa)->sin_port);
-#ifdef AF_INET6
-  if (sa.ss_family == AF_INET6)
-    return ntohs(((struct sockaddr_in6 *)&sa)->sin6_port);
-#endif
-  return 0;
-}
-
-/* rport = peer port, lport = our port.  The leaf's OUTBOUND link to the hub is
- * a *named* connection whose lport equals the hub's INBOUND '*' rport -- that
- * (and only that) ties the two ends' logs to one 4-tuple.  The leaf's '*'
- * handshakes are unrelated inbound clients. */
-static unsigned int tlsdbg_rport(struct Client *cptr) { return tlsdbg_port(cptr, 0); }
-static unsigned int tlsdbg_lport(struct Client *cptr) { return tlsdbg_port(cptr, 1); }
 
 
 /*
@@ -429,10 +394,6 @@ static int completed_connection(struct Client* cptr)
       char reason[TLS_REASON_LEN];
       enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
       int res = ircd_tls_negotiate(cptr, reason, sizeof(reason), &want);
-
-      Debug((DEBUG_DEBUG, "TLSDBG %C fd=%d lport=%u rport=%u connect-negotiate res=%d want=%s", cptr, cli_fd(cptr), tlsdbg_lport(cptr), tlsdbg_rport(cptr), res,
-             want == IRCD_TLS_WANT_WRITE ? "WRITE" :
-             want == IRCD_TLS_WANT_READ  ? "READ"  : "NONE"));
 
       if (res < 0) {
         sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s%s%s",
@@ -1229,13 +1190,6 @@ static void tls_handshake_timer_arm(struct Client *cptr)
  * is bounded by the handshake timer either way. */
 static void tls_negotiation_events(struct Client *cptr, enum ircd_tls_want want)
 {
-  /* TLSDBG: temporary diagnostic for the kqueue inbound-handshake stall --
-   * shows every interest transition; a WANT_WRITE step drops READABLE, and if
-   * no further ET_READ follows, the peer's next flight was missed. */
-  Debug((DEBUG_DEBUG, "TLSDBG %C fd=%d lport=%u rport=%u negotiate_events want=%s -> arm %s", cptr, cli_fd(cptr), tlsdbg_lport(cptr), tlsdbg_rport(cptr),
-         want == IRCD_TLS_WANT_WRITE ? "WRITE" :
-         want == IRCD_TLS_WANT_READ  ? "READ"  : "NONE",
-         want == IRCD_TLS_WANT_WRITE ? "WRITABLE(read dropped)" : "READABLE"));
   socket_events(&cli_socket(cptr), SOCK_ACTION_SET
                 | (want == IRCD_TLS_WANT_WRITE ? SOCK_EVENT_WRITABLE
                                                : SOCK_EVENT_READABLE));
@@ -1249,10 +1203,6 @@ static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback
   static char reason[TLS_REASON_LEN];
   enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
   int res = ircd_tls_negotiate(cptr, reason, sizeof(reason), &want);
-
-  Debug((DEBUG_DEBUG, "TLSDBG %C fd=%d lport=%u rport=%u negotiate res=%d want=%s", cptr, cli_fd(cptr), tlsdbg_lport(cptr), tlsdbg_rport(cptr), res,
-         want == IRCD_TLS_WANT_WRITE ? "WRITE" :
-         want == IRCD_TLS_WANT_READ  ? "READ"  : "NONE"));
 
   if (res == 0)
     tls_negotiation_events(cptr, want);
@@ -1380,7 +1330,6 @@ static void client_sock_callback(struct Event* ev)
   case ET_WRITE: /* socket is writable */
     if (IsNegotiatingTLS(cptr)) {
       int res = tls_negotiate_client(cptr, &fmt, &fallback);
-      Debug((DEBUG_DEBUG, "TLSDBG %C fd=%d lport=%u rport=%u handshake ET_WRITE res=%d", cptr, cli_fd(cptr), tlsdbg_lport(cptr), tlsdbg_rport(cptr), res));
       if (res < 0)
         break;
       if (res == 0) {
@@ -1427,7 +1376,6 @@ static void client_sock_callback(struct Event* ev)
     Debug((DEBUG_DEBUG, "Reading data from %C", cptr));
     if (IsNegotiatingTLS(cptr)) {
       int res = tls_negotiate_client(cptr, &fmt, &fallback);
-      Debug((DEBUG_DEBUG, "TLSDBG %C fd=%d lport=%u rport=%u handshake ET_READ res=%d", cptr, cli_fd(cptr), tlsdbg_lport(cptr), tlsdbg_rport(cptr), res));
       if (res < 0)
         break;
       if (res == 0)
@@ -1505,46 +1453,12 @@ static void client_timer_callback(struct Event* ev)
     if (!con_freeflag(con) && !cptr)
       free_connection(con); /* client is being destroyed */
   } else if (IsNegotiatingTLS(cptr)) {
-    /* TLSDBG: at the stall, probe the socket queues.
-     *   FIONREAD  >0 -> the peer's next flight DID arrive and kqueue never
-     *                   delivered a read event for it (engine read-delivery bug);
-     *             ==0 -> the bytes never reached us (send-side / network).
-     *   FIONWRITE >0 -> our own flight is still stuck in the send buffer (the
-     *                   peer never drained it, so it could not reply). */
-    {
-      int fionread = -1;
-#ifdef FIONWRITE
-      int fionwrite = -1;
-      ioctl(cli_fd(cptr), FIONWRITE, &fionwrite);
-#else
-      int fionwrite = -2; /* not available on this platform */
-#endif
-      ioctl(cli_fd(cptr), FIONREAD, &fionread);
-      /* The discriminator line: fd + remote port identify the exact 4-tuple;
-       * FIONREAD is the kernel's unread byte count; events is what the engine
-       * believes it armed (1=READABLE, 2=WRITABLE).  FIONREAD>0 with events&1
-       * set is the "impossible" case (data present, read armed, no event) =>
-       * an engine delivery bug.  FIONREAD==0 => the peer never sent more on
-       * THIS socket (likely a different connection completed, or the peer went
-       * away). */
-      Debug((DEBUG_DEBUG, "TLSDBG %C fd=%d lport=%u rport=%u handshake TIMEOUT: "
-             "FIONREAD=%d FIONWRITE=%d events=%u",
-             cptr, cli_fd(cptr), tlsdbg_lport(cptr), tlsdbg_rport(cptr),
-             fionread, fionwrite, s_events(&cli_socket(cptr))));
-    }
     /* Handshake deadline from tls_handshake_timer_arm().  No peer write: a
      * stalled handshake must close with a plain EOF, not a plaintext line
      * that would corrupt a mid-handshake peer's TLS stream.  Exiting from
      * inside the timer's own callback is fine: timer_del() is a no-op while it
      * is GEN_MARKED and timer_run() destroys the one-shot afterwards. */
-    {
-      /* TLSDBG: carry the peer port into the oper notice so it ties to the
-       * leaf's outbound log by 4-tuple. */
-      char tmoreason[64];
-      ircd_snprintf(0, tmoreason, sizeof(tmoreason),
-                    "TLS handshake timed out (rport %u)", tlsdbg_rport(cptr));
-      tls_negotiation_failed(cptr, tmoreason);
-    }
+    tls_negotiation_failed(cptr, "TLS handshake timed out");
     SetFlag(cptr, FLAG_DEADSOCKET);
     ClrFlag(cptr, FLAG_NEGOTIATING_TLS);
     if (s_tls(&cli_socket(cptr))) {
