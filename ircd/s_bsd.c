@@ -395,6 +395,10 @@ static int completed_connection(struct Client* cptr)
       enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
       int res = ircd_tls_negotiate(cptr, reason, sizeof(reason), &want);
 
+      Debug((DEBUG_DEBUG, "TLSDBG %C connect-negotiate res=%d want=%s", cptr, res,
+             want == IRCD_TLS_WANT_WRITE ? "WRITE" :
+             want == IRCD_TLS_WANT_READ  ? "READ"  : "NONE"));
+
       if (res < 0) {
         sendto_opmask_butone(0, SNO_OLDSNO, "TLS negotiation failed to %s%s%s",
                              cli_name(cptr), reason[0] ? ": " : "", reason);
@@ -1190,6 +1194,13 @@ static void tls_handshake_timer_arm(struct Client *cptr)
  * is bounded by the handshake timer either way. */
 static void tls_negotiation_events(struct Client *cptr, enum ircd_tls_want want)
 {
+  /* TLSDBG: temporary diagnostic for the kqueue inbound-handshake stall --
+   * shows every interest transition; a WANT_WRITE step drops READABLE, and if
+   * no further ET_READ follows, the peer's next flight was missed. */
+  Debug((DEBUG_DEBUG, "TLSDBG %C negotiate_events want=%s -> arm %s", cptr,
+         want == IRCD_TLS_WANT_WRITE ? "WRITE" :
+         want == IRCD_TLS_WANT_READ  ? "READ"  : "NONE",
+         want == IRCD_TLS_WANT_WRITE ? "WRITABLE(read dropped)" : "READABLE"));
   socket_events(&cli_socket(cptr), SOCK_ACTION_SET
                 | (want == IRCD_TLS_WANT_WRITE ? SOCK_EVENT_WRITABLE
                                                : SOCK_EVENT_READABLE));
@@ -1203,6 +1214,10 @@ static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback
   static char reason[TLS_REASON_LEN];
   enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
   int res = ircd_tls_negotiate(cptr, reason, sizeof(reason), &want);
+
+  Debug((DEBUG_DEBUG, "TLSDBG %C negotiate res=%d want=%s", cptr, res,
+         want == IRCD_TLS_WANT_WRITE ? "WRITE" :
+         want == IRCD_TLS_WANT_READ  ? "READ"  : "NONE"));
 
   if (res == 0)
     tls_negotiation_events(cptr, want);
@@ -1330,6 +1345,7 @@ static void client_sock_callback(struct Event* ev)
   case ET_WRITE: /* socket is writable */
     if (IsNegotiatingTLS(cptr)) {
       int res = tls_negotiate_client(cptr, &fmt, &fallback);
+      Debug((DEBUG_DEBUG, "TLSDBG %C handshake ET_WRITE res=%d", cptr, res));
       if (res < 0)
         break;
       if (res == 0) {
@@ -1376,6 +1392,7 @@ static void client_sock_callback(struct Event* ev)
     Debug((DEBUG_DEBUG, "Reading data from %C", cptr));
     if (IsNegotiatingTLS(cptr)) {
       int res = tls_negotiate_client(cptr, &fmt, &fallback);
+      Debug((DEBUG_DEBUG, "TLSDBG %C handshake ET_READ res=%d", cptr, res));
       if (res < 0)
         break;
       if (res == 0)
