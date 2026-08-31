@@ -576,9 +576,15 @@ IOResult tls_backend_read(struct Client *cptr, char *buf, unsigned int length,
     return IO_FAILURE;
   if (res == GNUTLS_E_REHANDSHAKE)
   {
-    res = gnutls_handshake(tls);
-    if (res >= 0)
-      return IO_SUCCESS;
+    /* Refuse renegotiation (matches OpenSSL's SSL_OP_NO_RENEGOTIATION): a
+     * peer-driven rehandshake is the classic post-handshake CPU / cross-
+     * direction spin trigger, and a reauth could swap in a different peer
+     * certificate that cli_tls_fingerprint would never be refreshed against.
+     * Send a warning no_renegotiation alert and carry on reading. */
+    gnutls_alert_send(tls, GNUTLS_AL_WARNING, GNUTLS_A_NO_RENEGOTIATION);
+    *want = (gnutls_record_get_direction(tls) == 1) ? IRCD_TLS_WANT_WRITE
+                                                    : IRCD_TLS_WANT_READ;
+    return IO_BLOCKED;
   }
   if (res == GNUTLS_E_INTERRUPTED || res == GNUTLS_E_AGAIN)
   {
