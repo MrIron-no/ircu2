@@ -171,18 +171,21 @@ set_or_clear(struct Socket* sock, unsigned int clear, unsigned int set)
   assert(0 != sock);
   assert(-1 < s_fd(sock));
 
+  /* Arm a changed filter with EV_ADD, disarm it with EV_DELETE -- never
+   * EV_DISABLE/EV_ENABLE.  A fresh EV_ADD re-runs the filter attach, which
+   * re-evaluates the socket buffer, so data that arrived while the filter was
+   * absent is re-delivered.  EV_ENABLE after EV_DISABLE does not reliably
+   * re-report such data on kqueue: it made an inbound TLS SSL_accept() miss
+   * the client's Finished (which arrived while the read filter was disabled
+   * for the WANT_WRITE flight) and stall to the handshake deadline. */
   if ((clear ^ set) & SOCK_EVENT_READABLE) { /* readable has changed */
     chglist[i].ident = s_fd(sock); /* set up the change list */
     chglist[i].filter = EVFILT_READ; /* readable filter */
-    chglist[i].flags = EV_ADD; /* adding it */
+    chglist[i].flags = (set & SOCK_EVENT_READABLE) ? (EV_ADD | EV_ENABLE)
+                                                   : EV_DELETE;
     chglist[i].fflags = 0;
     chglist[i].data = 0;
     chglist[i].udata = 0; /* I love udata, but it can't really be used here */
-
-    if (set & SOCK_EVENT_READABLE) /* it's set */
-      chglist[i].flags |= EV_ENABLE;
-    else /* clear it */
-      chglist[i].flags |= EV_DISABLE;
 
     i++; /* advance to next element */
   }
@@ -190,20 +193,19 @@ set_or_clear(struct Socket* sock, unsigned int clear, unsigned int set)
   if ((clear ^ set) & SOCK_EVENT_WRITABLE) { /* writable has changed */
     chglist[i].ident = s_fd(sock); /* set up the change list */
     chglist[i].filter = EVFILT_WRITE; /* writable filter */
-    chglist[i].flags = EV_ADD; /* adding it */
+    chglist[i].flags = (set & SOCK_EVENT_WRITABLE) ? (EV_ADD | EV_ENABLE)
+                                                   : EV_DELETE;
     chglist[i].fflags = 0;
     chglist[i].data = 0;
     chglist[i].udata = 0;
 
-    if (set & SOCK_EVENT_WRITABLE) /* it's set */
-      chglist[i].flags |= EV_ENABLE;
-    else /* clear it */
-      chglist[i].flags |= EV_DISABLE;
-
     i++; /* advance count... */
   }
 
-  if (kevent(kqueue_id, chglist, i, 0, 0, 0) < 0 && errno != EBADF)
+  /* EBADF: the fd was already closed; ENOENT: EV_DELETE of a filter that is
+   * already gone -- both are benign here, not worth an ET_ERROR. */
+  if (kevent(kqueue_id, chglist, i, 0, 0, 0) < 0
+      && errno != EBADF && errno != ENOENT)
     event_generate(ET_ERROR, sock, errno); /* report error */
 }
 
