@@ -1470,6 +1470,24 @@ static void client_timer_callback(struct Event* ev)
     if (!con_freeflag(con) && !cptr)
       free_connection(con); /* client is being destroyed */
   } else if (IsNegotiatingTLS(cptr)) {
+    /* TLSDBG: at the stall, probe the socket queues.
+     *   FIONREAD  >0 -> the peer's next flight DID arrive and kqueue never
+     *                   delivered a read event for it (engine read-delivery bug);
+     *             ==0 -> the bytes never reached us (send-side / network).
+     *   FIONWRITE >0 -> our own flight is still stuck in the send buffer (the
+     *                   peer never drained it, so it could not reply). */
+    {
+      int fionread = -1;
+#ifdef FIONWRITE
+      int fionwrite = -1;
+      ioctl(cli_fd(cptr), FIONWRITE, &fionwrite);
+#else
+      int fionwrite = -2; /* not available on this platform */
+#endif
+      ioctl(cli_fd(cptr), FIONREAD, &fionread);
+      Debug((DEBUG_DEBUG, "TLSDBG %C handshake TIMEOUT: FIONREAD=%d FIONWRITE=%d",
+             cptr, fionread, fionwrite));
+    }
     /* Handshake deadline from tls_handshake_timer_arm().  No peer write: a
      * stalled handshake must close with a plain EOF, not a plaintext line
      * that would corrupt a mid-handshake peer's TLS stream.  Exiting from
