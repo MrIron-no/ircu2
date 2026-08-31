@@ -162,51 +162,45 @@ state_to_events(enum SocketState state, unsigned int events)
  * @param[in] clear Set of interest events to clear from socket.
  * @param[in] set Set of interest events to set on socket.
  */
+/** Apply one filter change: arm it with a fresh EV_ADD, disarm it with
+ * EV_DELETE -- never EV_DISABLE/EV_ENABLE.  A fresh EV_ADD re-runs the filter
+ * attach, which re-evaluates the socket buffer, so data that arrived while the
+ * filter was absent is re-delivered.  EV_ENABLE after EV_DISABLE does not
+ * reliably re-report such data on kqueue: it made an inbound TLS SSL_accept()
+ * miss the client's Finished (which arrived while the read filter was disabled
+ * for the WANT_WRITE flight) and stall to the handshake deadline.
+ *
+ * Each change is submitted in its OWN kevent() call.  With several changes and
+ * no eventlist, kevent() aborts the changelist at the first erroring element
+ * and silently drops the rest -- so a benign error on the first filter would
+ * leave the second never applied, re-creating the kernel/engine desync this
+ * function exists to avoid.  One call per change keeps them independent.
+ * EBADF (fd already closed) and ENOENT (EV_DELETE of an already-gone filter)
+ * are benign and not worth an ET_ERROR. */
+static void
+kqueue_apply(struct Socket* sock, short filter, int arm)
+{
+  struct kevent chg;
+
+  EV_SET(&chg, s_fd(sock), filter, arm ? (EV_ADD | EV_ENABLE) : EV_DELETE,
+         0, 0, 0);
+
+  if (kevent(kqueue_id, &chg, 1, 0, 0, 0) < 0
+      && errno != EBADF && errno != ENOENT)
+    event_generate(ET_ERROR, sock, errno);
+}
+
 static void
 set_or_clear(struct Socket* sock, unsigned int clear, unsigned int set)
 {
-  int i = 0;
-  struct kevent chglist[2] = {0};
-
   assert(0 != sock);
   assert(-1 < s_fd(sock));
 
-  /* Arm a changed filter with EV_ADD, disarm it with EV_DELETE -- never
-   * EV_DISABLE/EV_ENABLE.  A fresh EV_ADD re-runs the filter attach, which
-   * re-evaluates the socket buffer, so data that arrived while the filter was
-   * absent is re-delivered.  EV_ENABLE after EV_DISABLE does not reliably
-   * re-report such data on kqueue: it made an inbound TLS SSL_accept() miss
-   * the client's Finished (which arrived while the read filter was disabled
-   * for the WANT_WRITE flight) and stall to the handshake deadline. */
-  if ((clear ^ set) & SOCK_EVENT_READABLE) { /* readable has changed */
-    chglist[i].ident = s_fd(sock); /* set up the change list */
-    chglist[i].filter = EVFILT_READ; /* readable filter */
-    chglist[i].flags = (set & SOCK_EVENT_READABLE) ? (EV_ADD | EV_ENABLE)
-                                                   : EV_DELETE;
-    chglist[i].fflags = 0;
-    chglist[i].data = 0;
-    chglist[i].udata = 0; /* I love udata, but it can't really be used here */
+  if ((clear ^ set) & SOCK_EVENT_READABLE) /* readable has changed */
+    kqueue_apply(sock, EVFILT_READ, set & SOCK_EVENT_READABLE);
 
-    i++; /* advance to next element */
-  }
-
-  if ((clear ^ set) & SOCK_EVENT_WRITABLE) { /* writable has changed */
-    chglist[i].ident = s_fd(sock); /* set up the change list */
-    chglist[i].filter = EVFILT_WRITE; /* writable filter */
-    chglist[i].flags = (set & SOCK_EVENT_WRITABLE) ? (EV_ADD | EV_ENABLE)
-                                                   : EV_DELETE;
-    chglist[i].fflags = 0;
-    chglist[i].data = 0;
-    chglist[i].udata = 0;
-
-    i++; /* advance count... */
-  }
-
-  /* EBADF: the fd was already closed; ENOENT: EV_DELETE of a filter that is
-   * already gone -- both are benign here, not worth an ET_ERROR. */
-  if (kevent(kqueue_id, chglist, i, 0, 0, 0) < 0
-      && errno != EBADF && errno != ENOENT)
-    event_generate(ET_ERROR, sock, errno); /* report error */
+  if ((clear ^ set) & SOCK_EVENT_WRITABLE) /* writable has changed */
+    kqueue_apply(sock, EVFILT_WRITE, set & SOCK_EVENT_WRITABLE);
 }
 
 /** Add a socket to the event engine.
