@@ -89,10 +89,22 @@ For more information, refer to `freebsd.txt`, also in this directory.
 
 Currently, everything that a client sends to a server is read by the server and stored in a buffer (the clients receive queue).
 The server will process messages from this queue one by one (running over all clients each time).
-When a client sends new messages faster they get processed, and the size of its receive buffer reaches this value, the client is dropped with the error "Excess flood."
+When a client sends new messages faster they get processed, and the flood-accounted size of its receive buffer reaches this value, the client is dropped with the error "Excess flood."
+Flood accounting counts the RFC1459 message body only (through `BUFSIZE`); leading IRCv3 client-tag prefixes are excluded so tagged and untagged lines consume the same flood budget.
 
 A reasonable value is 1024 bytes.
-The maximum size is 8000 bytes.
+Class maxflood overrides this per class; setting maxflood above `CLIENT_FLOOD` also exempts that class from input throttling.
+
+## CLIENT_TAG_FLOOD
+
+* **Type:** integer
+* **Default:** 8192
+
+Separate recvQ ceiling for IRCv3 message-tag prefixes (`@…` through the separating space).
+Independent of `CLIENT_FLOOD` so short bodies (e.g. `TAGMSG`) cannot hide tag stuffing.
+Exceeding this limit disconnects the client with the same "Excess flood" error.
+Feature-only — there is no per-class override.
+A value of 0 disables the tag ceiling.
 
 ## SERVER_PORT
 
@@ -236,6 +248,17 @@ This selects the suffix for the hidden hostmask (see `HOST_HIDING`).
 * **Default:** 127.0.0.1
 
 This selects a fake IP to be shown on `/USERIP` and `/WHO %i` when the target has a hidden host (see `HOST_HIDING`).
+
+## TRUST_USERNAME
+
+* **Type:** boolean
+* **Default:** `TRUE`
+
+When enabled, other users see a fully hidden client's username without a leading tilde (~) in `WHOIS`, `USERHOST`, `USERIP`, `NAMES` (UHNAMES), and similar user-facing output.
+Both umode +x and a registered account are required (see `HOST_HIDING`).
+Internal username records and server propagation still use the real tilded username.
+Channel bans (and silence) match those two complete identities only (`~user@realhost` and `user@account.hiddenhost`), not mixed forms such as `user@realhost`.
+G-lines continue to match only the real tilded username and real host.
 
 ## CONNEXIT_NOTICES
 
@@ -1152,9 +1175,10 @@ Per-block TLS trust settings are documented in `doc/example.conf`.
 * **Type:** boolean
 * **Default:** `TRUE`
 
-When `TRUE`, this server emits non-backwards-compatible S2S extensions: TLS certificate fingerprints on `NICK`/umode bursts, and IRCv3 `message-tags` prefixes on server links.
+When `TRUE`, this server emits non-backwards-compatible S2S extensions: TLS certificate fingerprints on `NICK`/umode bursts, relay of remote `OPMODE +x` toward a user's home server, relay of `ACCOUNT` updates for users who are already authenticated (e.g. account flag changes), IRCv3 `message-tags` prefixes on server links, and `TAGMSG` (`TM`) to servers.
 Set `FALSE` while some peers still run older ircu that cannot parse those fields, then turn it back on once the network is fully upgraded.
-Inbound extensions are still accepted when this is `FALSE`.
+Peers on u2.10.12.19 and earlier protocol_violate on a second `ACCOUNT` for an already-authed nick; u2.10.13.0 tolerates same-name updates locally.
+Inbound extensions are still accepted when this is `FALSE` (`TAGMSG` is delivered to local clients only).
 
 Federating `@time=` specifically is controlled by `NETWORK_TIME`.
 
