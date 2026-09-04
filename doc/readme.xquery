@@ -5,7 +5,7 @@ The extension query mechanism provides a means by which servers may
 send queries to other servers and receive replies.  Obviously,
 ordinary ircu servers have no need of this mechanism, but it allows
 pseudo-server services to communicate with each other.  Additionally,
-extensions have been made to the iauth protocol (see readme.iauth) to
+extensions have been made to the iauth protocol (see readme.iauth.md) to
 allow iauth instances to send and receive extension queries.  This
 could be used, for instance, to submit client information for
 immediate proxy scanning by a centralized service, or to query a
