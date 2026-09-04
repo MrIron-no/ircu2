@@ -8,7 +8,7 @@ numeric replies should be added here too.
 Extended Who information: (WHOX)
  Version: unknown, but at least 2.10.07+
 
- This is described in the file 'readme.who'
+ This is described in the file 'readme.who.md'
 
 USERIP:
  Version: unknown, but at least 2.10.07+
