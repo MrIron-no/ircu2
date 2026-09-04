@@ -177,7 +177,7 @@ actually default to this behavior, in fact.  For security, log
 messages containing IP addresses or other extremely sensitive data
 will never be sent via server notices, but all others can be sent to a
 specific server notice mask.  (For more information about server
-notice masks, please see doc/snomask.html.)  The available mask names
+notice masks, please see doc/snomask.md.)  The available mask names
 are OLDSNO, SERVKILL, OPERKILL, HACK2, HACK3, UNAUTH, TCPCOMMON,
 TOOMANY, HACK4, GLINE, NETWORK, IPMISMATCH, THROTTLE, OLDREALOP,
 CONNEXIT, and DEBUG.  The special mask name "NONE" inhibits sending of
