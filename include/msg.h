@@ -418,6 +418,16 @@ struct Client;
 #define   MFLG_EXTRA             0x08   /** Handler requests that
                                          * mptr->extra be passed in
                                          * parv[1]. */
+#define   MFLG_NO_S2S_TIME       0x10   /** Never invent @time= on the
+                                         * S2S wire for this command:
+                                         * link/state and net-admin
+                                         * protocol, and server<->services
+                                         * RPC parsed positionally by
+                                         * software that does not strip
+                                         * tags (see msg_tag_s2s_needs_
+                                         * time()). Everything else that
+                                         * hits S2S is treated as
+                                         * (eventually) client-visible. */
 
 /*
  * Structures

@@ -20,6 +20,7 @@
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
 #include "msg.h"
+#include "parse.h"
 
 #include <string.h>
 #include <time.h>
@@ -346,37 +347,18 @@ msg_tag_key_federated(const char *key)
 int
 msg_tag_s2s_needs_time(const char *tok)
 {
+  const struct Message *mptr;
+
   if (!tok)
     return 0;
-  /* Omit @time= on link/state and net-admin protocol.  Everything else that
-   * hits S2S is treated as (eventually) client-visible. */
-  if (!ircd_strcmp(tok, TOK_BURST)
-      || !ircd_strcmp(tok, TOK_END_OF_BURST)
-      || !ircd_strcmp(tok, TOK_END_OF_BURST_ACK)
-      || !ircd_strcmp(tok, TOK_SERVER)
-      || !ircd_strcmp(tok, TOK_PING)
-      || !ircd_strcmp(tok, TOK_PONG)
-      || !ircd_strcmp(tok, TOK_SETTIME)
-      || !ircd_strcmp(tok, TOK_ASLL)
-      || !ircd_strcmp(tok, TOK_RPING)
-      || !ircd_strcmp(tok, TOK_RPONG)
-      || !ircd_strcmp(tok, TOK_UPING)
-      || !ircd_strcmp(tok, TOK_PASS)
-      || !ircd_strcmp(tok, TOK_ERROR)
-      || !ircd_strcmp(tok, TOK_PROTO)
-      || !ircd_strcmp(tok, TOK_SQUIT)
-      || !ircd_strcmp(tok, TOK_CONFIG)
-      || !ircd_strcmp(tok, TOK_JUPE)
-      || !ircd_strcmp(tok, TOK_GLINE)
-      || !ircd_strcmp(tok, TOK_SLINE)
-      /* Server<->services RPC: consumed by services software that parses
-       * P10 fields positionally and does not strip tags.  A @time= prefix
-       * shifts every field and breaks SASL/spamfilter routing. */
-      || !ircd_strcmp(tok, TOK_XQUERY)
-      || !ircd_strcmp(tok, TOK_XREPLY)
-      || !ircd_strcmp(tok, TOK_DESTRUCT))
-    return 0;
-  return 1;
+  /* The per-command policy lives on the command table (MFLG_NO_S2S_TIME
+   * in msgtab[], parse.c): link/state and net-admin protocol, and the
+   * server<->services RPC that services parse positionally without
+   * stripping tags, are flagged there. Everything else that hits S2S --
+   * including tokens not in the table at all -- is treated as (eventually)
+   * client-visible and gets @time=. */
+  mptr = msg_find_by_tok(tok);
+  return !(mptr && (mptr->flags & MFLG_NO_S2S_TIME));
 }
 
 /** Append one tag to a wire prefix; \a *wrote tracks whether '@' was emitted. */

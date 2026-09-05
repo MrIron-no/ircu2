@@ -203,7 +203,7 @@ struct Message msgtab[] = {
   {
     MSG_BURST,
     TOK_BURST,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_burst, m_ignore, m_ignore }
   },
@@ -217,7 +217,7 @@ struct Message msgtab[] = {
   {
     MSG_DESTRUCT,
     TOK_DESTRUCT,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_destruct, m_ignore, m_ignore }
   },
@@ -280,21 +280,21 @@ struct Message msgtab[] = {
   {
     MSG_PING,
     TOK_PING,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_ping, ms_ping, mo_ping, m_ignore }
   },
   {
     MSG_PONG,
     TOK_PONG,
-    0, MAXPARA, MFLG_SLOW | MFLG_UNREG, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_UNREG | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { mr_pong, m_pong, ms_pong, m_pong, m_ignore }
   },
   {
     MSG_ERROR,
     TOK_ERROR,
-    0, MAXPARA, MFLG_SLOW | MFLG_UNREG, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_UNREG | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { mr_error, m_ignore, ms_error, m_ignore, m_ignore }
   },
@@ -329,14 +329,14 @@ struct Message msgtab[] = {
   {
     MSG_SERVER,
     TOK_SERVER,
-    0, MAXPARA, MFLG_SLOW | MFLG_UNREG, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_UNREG | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { mr_server, m_registered, ms_server, m_registered, m_ignore }
   },
   {
     MSG_SQUIT,
     TOK_SQUIT,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_not_oper, ms_squit, mo_squit, m_ignore }
   },
@@ -399,7 +399,7 @@ struct Message msgtab[] = {
   {
     MSG_PASS,
     TOK_PASS,
-    0, MAXPARA, MFLG_SLOW | MFLG_UNREG, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_UNREG | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { mr_pass, m_registered, m_ignore, m_registered, m_ignore }
   },
@@ -420,21 +420,21 @@ struct Message msgtab[] = {
   {
     MSG_SETTIME,
     TOK_SETTIME,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_not_oper, ms_settime, mo_settime, m_ignore }
   },
   {
     MSG_RPING,
     TOK_RPING,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_not_oper, ms_rping, mo_rping, m_ignore }
   },
   {
     MSG_RPONG,
     TOK_RPONG,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_ignore, ms_rpong, m_ignore, m_ignore }
   },
@@ -525,21 +525,21 @@ struct Message msgtab[] = {
   {
     MSG_GLINE,
     TOK_GLINE,
-    0, MAXPARA,         0, 0, NULL,
+    0, MAXPARA, MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_gline, ms_gline, mo_gline, m_ignore }
   },
   {
     MSG_SLINE,
     TOK_SLINE,
-    0, MAXPARA,         0, 0, NULL,
+    0, MAXPARA, MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_ignore, ms_sline, m_ignore, m_ignore }
   },
   {
     MSG_JUPE,
     TOK_JUPE,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_not_oper, ms_jupe, mo_jupe, m_ignore }
   },
@@ -560,21 +560,21 @@ struct Message msgtab[] = {
   {
     MSG_UPING,
     TOK_UPING,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_unregistered, m_not_oper, ms_uping, mo_uping, m_ignore }
   },
   {
     MSG_END_OF_BURST,
     TOK_END_OF_BURST,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_end_of_burst, m_ignore, m_ignore }
   },
   {
     MSG_END_OF_BURST_ACK,
     TOK_END_OF_BURST_ACK,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_end_of_burst_ack, m_ignore, m_ignore }
   },
@@ -609,7 +609,7 @@ struct Message msgtab[] = {
   {
     MSG_PROTO,
     TOK_PROTO,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_proto, m_proto, m_proto, m_proto, m_ignore }
   },
@@ -651,7 +651,7 @@ struct Message msgtab[] = {
   {
     MSG_ASLL,
     TOK_ASLL,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_not_oper, ms_asll, mo_asll, m_ignore }
    },
@@ -665,14 +665,14 @@ struct Message msgtab[] = {
   {
     MSG_XQUERY,
     TOK_XQUERY,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_xquery, mo_xquery, m_ignore }
   },
   {
     MSG_XREPLY,
     TOK_XREPLY,
-    0, MAXPARA, MFLG_SLOW, 0, NULL,
+    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_xreply, m_ignore, m_ignore }
   },
@@ -706,7 +706,7 @@ struct Message msgtab[] = {
   {
     MSG_CONFIG,
     TOK_CONFIG,
-    0, MAXPARA, 0, 0, NULL,
+    0, MAXPARA, MFLG_NO_S2S_TIME, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_config, m_ignore, m_ignore }
   }, 
@@ -843,6 +843,18 @@ msg_tree_parse(char *cmd, struct MessageTree *root)
           return NULL;
   }
   return NULL;
+}
+
+/** Look up a command table entry by its S2S token.
+ * @param[in] tok Token (e.g. TOK_PRIVATE), exact case.
+ * @return The msgtab entry, or NULL if no command has that token.
+ */
+struct Message *
+msg_find_by_tok(const char *tok)
+{
+  if (!tok || !*tok)
+    return NULL;
+  return msg_tree_parse((char *)tok, &tok_tree);
 }
 
 /** Registers a service mapping to the pseudocommand handler.
