@@ -1462,25 +1462,28 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
      * send.c), because *we* are the one who will actually answer it.
      * If so, wrap this dispatch the same way parse_client() wraps a
      * local labeled command -- except the capture belongs to `from`,
-     * the *original* (remote) requester, not a genuine local socket;
-     * label_capture_start()/finish() key off cli_from(from), which
-     * aliases the shared link Connection, so multiple remote users
-     * behind the same link can each have their own outstanding capture
-     * at once, disambiguated by ref as usual.
+     * the *original* (remote) requester. Only lines addressed to that
+     * exact client are captured (see label_capture_intercept()), never
+     * anything else the handler happens to send down the same link.
      *
-     * Excluded: BATCH/ACK themselves (m_batch.c) are the *relay* for a
-     * capture some other server already decided the shape of, not a
-     * command whose own reply needs capturing here. */
+     * Only a *user*-prefixed line can be such a request: hunt_server_cmd()
+     * always forwards with the requester as prefix. A labeled line with a
+     * *server* prefix is the opposite thing -- an answering server's
+     * single-line reply (e.g. ms_connect()'s NOTICE) being relayed back
+     * to the requester, already labeled by label_capture_finish() -- and
+     * must be passed through untouched, label included, exactly like
+     * do_numeric() relays a labeled numeric. Wrapping it here would strip
+     * the label and deliver the reply unlabeled.
+     *
+     * Also excluded: BATCH/ACK themselves (m_batch.c/m_ack.c) are the
+     * *relay* for a capture some other server already decided the shape
+     * of, not a command whose own reply needs capturing here. */
     const char *inbound_label = NULL;
     char ref[16];
     char from_numnick[16];
-    char from_server_numeric[16];
-    /* 0 = unverifiable, 1 = verify via findNUser(), 2 = verify via
-     * FindNServer() -- see the two branches below. */
-    int from_verify_kind = 0;
     int rc;
 
-    if (feature_bool(FEAT_NETWORK_FEATURES) && mptr->tok
+    if (feature_bool(FEAT_NETWORK_FEATURES) && mptr->tok && IsUser(from)
         && strcmp(mptr->tok, TOK_BATCH) && strcmp(mptr->tok, TOK_ACK)) {
       struct MsgTag *label_tag = msg_tag_find(current_tags, "label");
 
@@ -1517,29 +1520,20 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
       ircd_strncpy(ref, lc->ref, sizeof(ref) - 1);
       ref[sizeof(ref) - 1] = '\0';
 
-      /* Save from's identity (while from is definitely still valid) so
+      /* Save from's numnick (while from is definitely still valid) so
        * it can be safely re-resolved after the handler returns, instead
        * of trusting rc == CPTR_KILLED the way parse_client() does.
        * CPTR_KILLED only fires when cptr == victim (s_misc.c) -- true
        * for a *local* client killing itself, where cptr and from are
        * the same object, but never true here: cptr is this server
-       * link, from is the resolved remote requester (almost always a
-       * user; occasionally a bare server, for a server-prefixed or
-       * missing-prefix line), and e.g. a labeled server-origin QUIT for
-       * from's own user (ms_quit() -> exit_client(cptr, from, from,
-       * ...)) frees from while returning 0, since cptr != from.
-       * Outstanding captures for any client about to be freed are
-       * finished by exit_one_client() (s_misc.c) while it's still valid
-       * memory -- this is just the safety check that stops the wrapper
-       * from also dereferencing from afterward. */
-      if (IsUser(from)) {
-        ircd_snprintf(0, from_numnick, sizeof(from_numnick), "%s%s", NumNick(from));
-        from_verify_kind = 1;
-      } else if (IsServer(from)) {
-        ircd_strncpy(from_server_numeric, cli_yxx(from), sizeof(from_server_numeric) - 1);
-        from_server_numeric[sizeof(from_server_numeric) - 1] = '\0';
-        from_verify_kind = 2;
-      }
+       * link, from is the remote requester, and e.g. a labeled
+       * server-origin QUIT for from's own user (ms_quit() ->
+       * exit_client(cptr, from, from, ...)) frees from while returning
+       * 0, since cptr != from. Outstanding captures for any client about
+       * to be freed are finished by exit_one_client() (s_misc.c) while
+       * it's still valid memory -- this is just the safety check that
+       * stops the wrapper from also dereferencing from afterward. */
+      ircd_snprintf(0, from_numnick, sizeof(from_numnick), "%s%s", NumNick(from));
     }
 
     rc = (*mptr->handlers[cli_handler(cptr)]) (cptr, from, i, para);
@@ -1552,30 +1546,18 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
       if (rc == CPTR_KILLED) {
         /* cptr itself died; from's Connection aliased it, so from is
          * gone too either way -- nothing to finish. */
-      } else if (from_verify_kind == 1 && findNUser(from_numnick) != from) {
-        /* from (a user) was freed by a cascading side effect of its own
-         * handler even though cptr survived. findNUser() does a hash
-         * lookup by the numnick string saved earlier -- it never
-         * dereferences the (possibly now-dangling) from pointer itself,
-         * only compares the returned value against it, which is always
-         * a safe pointer comparison regardless of what from currently
-         * points to. exit_one_client() already finished this capture
-         * properly before from was freed (see s_misc.c); nothing left
-         * to do. */
-      } else if (from_verify_kind == 2 && FindNServer(from_server_numeric) != from) {
-        /* Same reasoning, for the rarer case where from is a server
-         * that got SQUIT out from under this dispatch. FindNServer() is
-         * likewise a safe hash lookup by numeric, not a dereference of
-         * from -- mirrors the prefix-resolution lookup earlier in this
-         * same function (from = FindNServer(numeric_prefix) above). */
-      } else if (from_verify_kind != 0) {
+      } else if (findNUser(from_numnick) != from) {
+        /* from was freed by a cascading side effect of its own handler
+         * even though cptr survived. findNUser() does a hash lookup by
+         * the numnick string saved earlier -- it never dereferences the
+         * (possibly now-dangling) from pointer itself, only compares the
+         * returned value against it, which is always a safe pointer
+         * comparison regardless of what from currently points to.
+         * exit_one_client() already finished this capture properly
+         * before from was freed (see s_misc.c); nothing left to do. */
+      } else {
         label_capture_finish(from, ref);
       }
-      /* else: from was neither IsUser() nor IsServer() at capture-start
-       * time (unexpected for this code path in practice -- labels only
-       * ever originate from hunt_server_cmd()-forwarded user commands)
-       * and so can't be safely re-verified; leave the capture parked
-       * rather than risk touching a pointer with no verification. */
     }
 
     return rc;

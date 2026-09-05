@@ -239,14 +239,15 @@ struct LabelCapture *
 label_capture_start(struct Client *cptr, const char *label)
 {
   static unsigned int label_ref_seq;
-  /* Track the *owning* client consistently with send_buffer()'s own
-   * "to == label_capture_active_client" check, which always compares
-   * against cli_from(to). For a genuine local client cli_from(cptr) ==
-   * cptr, so this changes nothing for the pre-existing (local-only)
-   * callers; it matters once parse_server() starts captures for a
-   * *remote* requester (cli_connect() aliasing the shared S2S link),
-   * where cptr itself would never match what send_buffer() compares. */
-  struct Client *owner = cli_from(cptr);
+  /* The owner is the requesting client itself -- a genuine local client,
+   * or, for a hunted command answered on its behalf (parse_server()), a
+   * *remote* user. Deliberately not cli_from(cptr): for a remote user
+   * that is the shared S2S link, and keying the window on the link would
+   * sweep every line headed down it during the dispatch (a WALLOPS the
+   * handler broadcasts, an RPING it sends onward, another user's reply)
+   * into this requester's response. send_buffer() therefore runs the
+   * intercept on the intended recipient, before resolving the link. */
+  struct Client *owner = cptr;
   struct LabelCapture *lc = (struct LabelCapture *)MyMalloc(sizeof(*lc));
 
   ircd_snprintf(0, lc->ref, sizeof(lc->ref), "%x", ++label_ref_seq);
@@ -290,7 +291,7 @@ label_capture_start(struct Client *cptr, const char *label)
 const char *
 label_capture_stream_active(struct Client *cptr)
 {
-  struct Client *owner = cli_from(cptr);
+  struct Client *owner = cptr;
   struct LabelCapture *lc;
   struct MsgTag labeltag;
   struct MsgTagCtx opentagctx;
@@ -356,7 +357,7 @@ label_capture_stream_active(struct Client *cptr)
 int
 label_capture_reopen(struct Client *cptr, const char *ref)
 {
-  struct Client *owner = cli_from(cptr);
+  struct Client *owner = cptr;
   struct LabelCapture *lc;
 
   if (!ref || !*ref)
@@ -409,7 +410,7 @@ label_capture_restore_active(struct Client *client, struct LabelCapture *node)
 static void
 label_capture_close_if_active(struct Client *cptr, const char *ref)
 {
-  struct Client *owner = cli_from(cptr);
+  struct Client *owner = cptr;
 
   if (label_capture_active_client == owner && label_capture_active_node
       && !strcmp(label_capture_active_node->ref, ref))

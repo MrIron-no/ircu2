@@ -92,16 +92,18 @@ extern void label_capture_abort(struct Client *cptr, const char *ref);
  * free_client() runs. */
 extern void label_capture_client_gone(struct Client *cptr);
 
-/* send_buffer() hook: if \a to (already resolved through cli_from()) is
- * the owner of the active capture, take the line into that capture and
- * return 1; otherwise return 0 and let it go to the wire. \a tctx is the
- * effective tag context for the line (cache ctx or explicit ctx). */
+/* send_buffer() hook: if \a to -- the *intended recipient*, before
+ * cli_from() resolution, so a remote user is distinguishable from the
+ * link it sits behind -- is the owner of the active capture, take the
+ * line into that capture and return 1; otherwise return 0 and let it go
+ * to the wire. \a tctx is the effective tag context for the line (cache
+ * ctx or explicit ctx). */
 extern int label_capture_intercept(struct Client *to, struct Client *from,
                                    struct MsgBuf *buf, int prio,
                                    const struct MsgTagCtx *tctx);
-/* The capture currently active for \a owner (a cli_from()-resolved
- * client), or NULL if the active window belongs to someone else or is
- * closed. For callers that need to hand a capture off (see
+/* The capture currently active for \a owner (the requesting client
+ * itself, local or remote), or NULL if the active window belongs to
+ * someone else or is closed. For callers that need to hand a capture off (see
  * sendcmdto_one_hunted() in send.c). */
 extern struct LabelCapture *label_capture_active_for(struct Client *owner);
 

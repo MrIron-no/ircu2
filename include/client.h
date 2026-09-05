@@ -61,18 +61,25 @@ struct Privs;
 struct AuthRequest;
 struct LabelDeferred; /* opaque; defined in label.c */
 
-/** One outstanding labeled-response capture for a connection.
+/** One outstanding labeled-response capture for a client.
  *
- * A connection may have several of these at once (e.g. a parked LIST and
- * an unrelated command both labeled). Each is independently identified by
- * \a ref, which -- besides being the eventual client-facing BATCH
- * reference -- doubles as the S2S correlation key when a capture is
- * waiting on a remote server's reply.
+ * A client may have several of these at once (e.g. a parked LIST and an
+ * unrelated command both labeled). Each is independently identified by
+ * \a ref, the eventual client-facing BATCH reference.
  *
- * Briefly "active" (the current recipient of anything the connection's
- * owner sends) during a synchronous command dispatch or a single
- * continuation tick (e.g. one call to list_next_channels()); "parked"
- * the rest of the time, waiting for whatever will eventually finish it.
+ * The list hangs off the struct Client itself (cli_labelcap()), not the
+ * Connection: a *remote* requester whose hunted command this server
+ * answers has no Connection of its own here (cli_connect() aliases the
+ * S2S link), and its captures must not be confused with those of other
+ * remote users behind the same link. Only lines addressed to that exact
+ * client are captured (label_capture_intercept() runs on the intended
+ * recipient, before cli_from() resolution) -- never other traffic that
+ * merely travels down the same link.
+ *
+ * Briefly "active" (the current recipient of anything sent to its owner)
+ * during a synchronous command dispatch or a single continuation tick
+ * (e.g. one call to list_next_channels()); "parked" the rest of the
+ * time, waiting for whatever will eventually finish it.
  */
 struct LabelCapture {
   struct LabelCapture *next;
@@ -263,7 +270,6 @@ struct Connection
                                         from. */
   struct SLink*       con_confs;     /**< Associated configuration records. */
   struct ListingArgs* con_listing;   /**< Current LIST status. */
-  struct LabelCapture* con_labelcap; /**< Outstanding labeled-response captures. */
   unsigned int        con_max_sendq; /**< cached max send queue for client */
   unsigned int        con_max_flood; /**< cached client flood limit */
   unsigned int        con_ping_freq; /**< cached ping freq */
@@ -314,6 +320,7 @@ struct Client {
   struct Client* cli_hnext;       /**< link in hash table bucket or this */
   struct Connection* cli_connect; /**< Connection structure associated with us */
   struct User*   cli_user;        /**< Defined if this client is a user */
+  struct LabelCapture* cli_labelcap; /**< Outstanding labeled-response captures. */
   struct Server* cli_serv;        /**< Defined if this client is a server */
   struct Whowas* cli_whowas;      /**< Pointer to ww struct to be freed on quit */
   char           cli_yxx[4];      /**< Numeric Nick: YY if this is a
@@ -427,8 +434,9 @@ struct Client {
 #define cli_handler(cli)	con_handler(cli_connect(cli))
 /** Get LIST status for client. */
 #define cli_listing(cli)	con_listing(cli_connect(cli))
-/** Get outstanding labeled-response captures for client. */
-#define cli_labelcap(cli)	con_labelcap(cli_connect(cli))
+/** Get outstanding labeled-response captures for client (per client, not
+ * per connection: a remote requester has no connection of its own). */
+#define cli_labelcap(cli)	((cli)->cli_labelcap)
 /** Get cached max SendQ for client. */
 #define cli_max_sendq(cli)	con_max_sendq(cli_connect(cli))
 /** Get cached flood limit for client. */
@@ -514,8 +522,6 @@ struct Client {
 #define con_handler(con)	((con)->con_handler)
 /** Get the LIST status for the connection. */
 #define con_listing(con)	((con)->con_listing)
-/** Get the outstanding labeled-response captures for the connection. */
-#define con_labelcap(con)	((con)->con_labelcap)
 /** Get the maximum permitted SendQ size for the connection. */
 #define con_max_sendq(con)	((con)->con_max_sendq)
 /** Get the flood limit for the connection. */
