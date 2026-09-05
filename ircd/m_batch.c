@@ -1,6 +1,6 @@
 /*
  * IRC - Internet Relay Chat, ircd/m_batch.c
- * Copyright (C) 2026 UndernetIRC
+ * Copyright (C) 2026 MrIron <mriron@undernet.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by

@@ -1089,32 +1089,19 @@ parse_client(struct Client *cptr, char *buffer, char *bufend)
       && CapHas(cli_active(cptr), CAP_BATCH);
     /* A local copy of the ref, not the struct LabelCapture* itself: the
      * handler may already have finished or aborted this capture on its
-     * own before returning (e.g. LIST overflowing the 500-line/64KB
+     * own before returning (e.g. LIST overflowing the 5000-line/1MB
      * capture safety valve mid-dispatch, which releases it immediately
      * and keeps going uncaptured) -- at which point the node is freed.
      * label_capture_finish()/reopen() below look it up by this string and
      * no-op harmlessly if it's already gone, but touching the pointer
      * itself here would be a use-after-free. */
     char ref[16];
-    /* cli_listing(cptr) is per-connection state that can already be
-     * non-NULL *before* this command even runs -- a LIST from an earlier,
-     * unrelated command may still be parked mid-pagination. Snapshotting
-     * it beforehand lets the check below tell "this handler itself just
-     * started/replaced the listing" (pointer changed) apart from "a
-     * listing merely happened to already be running" (pointer
-     * unchanged): only the former means this capture belongs to the
-     * listing. Getting this wrong misroutes an unrelated labeled
-     * command's capture into someone else's LIST batch, and orphans
-     * whatever ref was already parked there (its capture is never
-     * finished/reopened again). */
-    struct ListingArgs *listing_before = NULL;
     int rc;
 
     if (labeled) {
       struct LabelCapture *lc = label_capture_start(cptr, request_label);
       ircd_strncpy(ref, lc->ref, sizeof(ref) - 1);
       ref[sizeof(ref) - 1] = '\0';
-      listing_before = cli_listing(cptr);
     }
 
     rc = (*handler) (cptr, from, i, para);
@@ -1132,19 +1119,27 @@ parse_client(struct Client *cptr, char *buffer, char *bufend)
          * self-GLINE) -- must not be dereferenced again. Cleanup of any
          * capture left on it happens in exit_one_client(), while cptr
          * was still valid memory, before free_client() ran. */
-      } else if (cli_listing(cptr) && cli_listing(cptr) != listing_before) {
-        /* This handler itself left a *new* async continuation running
-         * (e.g. LIST, which resumes later from the event loop via
-         * list_next_channels(), well outside this call). Remember which
-         * capture it's continuing on behalf of; list_next_channels()
-         * (natural completion) or an interrupting LIST/STOP in m_list.c
-         * (superseded early) will finish it later. If the capture
-         * already ended mid-dispatch (overflow, above), this ref no
-         * longer resolves to anything -- reopen()/finish() on it later
-         * are harmless no-ops, and the (now uncaptured) rest of the
-         * listing is correctly left unlabeled. */
-        ircd_strncpy(cli_listing(cptr)->label_ref, ref,
-                     sizeof(cli_listing(cptr)->label_ref) - 1);
+      } else if (cli_listing(cptr)
+                 && !strcmp(cli_listing(cptr)->label_ref, ref)) {
+        /* This handler left an async continuation running on behalf of
+         * *this* capture: m_list() stamps the ref into ListingArgs.label_ref
+         * (via label_capture_stream_active()) the moment it starts a
+         * paginated listing, and list_next_channels() resumes it later
+         * from the event loop, well outside this call. Leave the capture
+         * parked; list_next_channels() (natural completion) or an
+         * interrupting LIST in m_list.c (superseded early) finishes it.
+         *
+         * Matching by ref, not by whether cli_listing() changed: a
+         * listing from an earlier command may already be parked when
+         * this one runs (then label_ref holds *its* ref, or is empty for
+         * an unlabeled LIST, and this capture must be finished normally),
+         * and a LIST that supersedes a parked one frees the old
+         * ListingArgs and allocates a new one of the same size -- which
+         * the allocator routinely hands back at the same address, so a
+         * before/after pointer comparison cannot tell "replaced" from
+         * "unchanged" and would finish the new streaming capture right
+         * here, closing its BATCH after the first tick and leaving the
+         * rest of the listing unlabeled. */
       } else {
         label_capture_finish(cptr, ref);
       }

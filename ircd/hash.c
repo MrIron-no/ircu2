@@ -434,11 +434,11 @@ void list_next_channels(struct Client *cptr)
 
   args = cli_listing(cptr);
 
-  /* This listing is continuing a labeled LIST from an earlier tick (the
-   * first tick, called synchronously from m_list(), already has its
-   * window open via parse.c's own dispatch wrapper -- args->label_ref is
-   * only populated *after* that first call returns, so this is a no-op
-   * for it and only matters here on later, independently-invoked ticks). */
+  /* This listing is continuing a labeled LIST from an earlier tick. On
+   * the first tick, called synchronously from m_list(), the capture is
+   * already the active window (parse.c's dispatch wrapper), so reopening
+   * it is a harmless no-op; it matters on later, independently-invoked
+   * ticks from the event loop. */
   if (*args->label_ref)
     label_capture_reopen(cptr, args->label_ref);
 

@@ -50,6 +50,8 @@ client-based helper unusable at the channel counts these tests need.
 from __future__ import annotations
 
 import asyncio
+import socket
+import subprocess
 
 import pytest
 
@@ -318,5 +320,125 @@ async def test_unrelated_labeled_command_while_unlabeled_list_parked_gets_own_re
         await client.send("PING :after")
         pong2 = await client.wait_for("PONG", timeout=5.0)
         assert pong2.params[-1] == "after", pong2.raw
+    finally:
+        await _cleanup(client)
+
+
+def _hub_container_ip() -> str:
+    """The hub's own address on the docker bridge. Connecting there (rather
+    than to the 127.0.0.1 port mapping) keeps docker-proxy -- a userspace
+    relay with buffering of its own -- out of the path, so the hub's kernel
+    write really does block when the client stops reading."""
+    out = subprocess.run(
+        ["docker", "inspect", "ircu-hub", "--format",
+         "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"],
+        check=True, capture_output=True, text=True,
+    )
+    ip = out.stdout.strip()
+    assert ip, "could not determine hub container IP"
+    return ip
+
+
+async def _make_throttled_cap_client(host: str, port: int, nick: str) -> IRCClient:
+    """Like make_cap_client(), but on a socket whose receive side is kept
+    tiny (SO_RCVBUF plus a small asyncio StreamReader limit), so that once
+    the test stops calling recv() the hub's kernel send buffer fills within
+    a few KB and its write blocks -- the only way list_next_channels()
+    genuinely parks: send_buffer() flushes to the kernel every 1KB, so the
+    TinySendQ class's sendq/2 pause threshold is never reached while the
+    kernel keeps accepting data."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)
+    sock.connect((host, port))
+    sock.setblocking(False)
+    client = IRCClient()
+    client._reader, client._writer = await asyncio.open_connection(sock=sock, limit=4096)
+    acked = await client.negotiate_cap(LABELED_CAPS)
+    if any(c not in acked for c in LABELED_CAPS):
+        await client.disconnect()
+        pytest.skip(f"CAP(s) not available (acked={acked})")
+    await client.register(nick, "testuser", "Test User")
+    return client
+
+
+async def test_new_labeled_list_replacing_parked_labeled_list(
+    ircd_hub, ulined_server,
+):
+    """A second labeled LIST -- one with a parameter, so it starts a *new*
+    paginated listing rather than acting as LIST STOP -- parsed while the
+    first is genuinely parked mid-pagination (hub write blocked: the
+    client isn't reading and its receive side is throttled, see
+    _make_throttled_cap_client()).
+
+    Regression: parse.c decided "this handler started a new listing" by
+    comparing the cli_listing() *pointer* before and after the handler.
+    m_list.c's superseding path frees the old ListingArgs and immediately
+    mallocs a new one of the same size, so the allocator hands back the
+    same address, the comparison says "unchanged", and parse.c finished
+    the brand-new streaming capture on the spot -- BATCH -ref2 went out
+    after the first tick, and every later tick's RPL_LIST plus the final
+    RPL_LISTEND left unlabeled, outside any batch.
+    """
+    count = 1500
+    await _make_channels_via_burst(ulined_server, "supl", count)
+    client = await _make_throttled_cap_client(
+        _hub_container_ip(), ircd_hub["tiny_sendq_port"], "lblsup1"
+    )
+    try:
+        await client.send("@label=firstlist LIST")
+        # Let the hub run the first LIST until its write blocks and the
+        # listing parks, then supersede it while parked.
+        await asyncio.sleep(2.0)
+        await client.send("@label=secondlist LIST >0")
+        await asyncio.sleep(1.0)
+
+        opening1 = await client.wait_for("BATCH", timeout=5.0)
+        assert tag_value(opening1.tags, "label") == "firstlist", opening1.raw
+        ref1 = opening1.params[0][1:]
+
+        old_tail = await client.collect_until("BATCH", timeout=30.0)
+        assert old_tail[-1].params[0] == f"-{ref1}", old_tail[-1].raw
+        old_body = [m for m in old_tail[:-1] if tag_value(m.tags, "batch") == ref1]
+        assert any(m.command == "323" for m in old_body)
+        # Count only this test's channels, and distinct names: other tests
+        # in the same hub session leave their channels behind (both LISTs
+        # match them too), and list_next_channels() re-sends the hash
+        # bucket it paused on when it resumes (pre-existing ircu
+        # behaviour: the bucket loop breaks before its increment), so a
+        # paused listing repeats a few entries.
+        old_322 = len({
+            m.params[1] for m in old_body
+            if m.command == "322" and m.params[1].startswith("#supl")
+        })
+        # Precondition for the scenario: the first LIST must have been
+        # superseded while still parked, i.e. cut short.
+        assert old_322 < count, (
+            "first LIST completed before the second was parsed; "
+            "the superseding path was not exercised"
+        )
+
+        opening2 = await client.wait_for("BATCH", timeout=5.0)
+        assert tag_value(opening2.tags, "label") == "secondlist", opening2.raw
+        ref2 = opening2.params[0][1:]
+        assert ref2 != ref1
+
+        new_lines = await client.collect_until("BATCH", timeout=30.0)
+        assert new_lines[-1].params[0] == f"-{ref2}", new_lines[-1].raw
+        new_body = [m for m in new_lines[:-1] if tag_value(m.tags, "batch") == ref2]
+        new_322 = len({
+            m.params[1] for m in new_body
+            if m.command == "322" and m.params[1].startswith("#supl")
+        })
+        assert any(m.command == "323" for m in new_body), (
+            f"RPL_LISTEND missing from batch {ref2}: only {new_322} RPL_LIST "
+            f"lines were inside it before BATCH -{ref2}"
+        )
+        assert new_322 == count, new_322
+
+        # Nothing from the second listing may trail out unlabeled.
+        await client.send("PING :after-supersede")
+        trailing = await client.collect_until("PONG", timeout=10.0)
+        leaked = [m.raw for m in trailing if m.command in ("322", "323")]
+        assert not leaked, leaked
     finally:
         await _cleanup(client)
