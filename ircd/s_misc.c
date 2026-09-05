@@ -38,6 +38,7 @@
 #include "ircd_reply.h"
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
+#include "label.h"
 #include "list.h"
 #include "match.h"
 #include "msg.h"

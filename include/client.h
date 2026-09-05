@@ -59,7 +59,7 @@ struct Whowas;
 struct hostent;
 struct Privs;
 struct AuthRequest;
-struct LabelDeferred; /* opaque; defined in send.c */
+struct LabelDeferred; /* opaque; defined in label.c */
 
 /** One outstanding labeled-response capture for a connection.
  *
@@ -89,7 +89,7 @@ struct LabelCapture {
    * it). Finishing it only emits the BATCH close. For a response that's
    * unconditionally multi-line and may span many event-loop ticks (LIST)
    * rather than one where the eventual line count decides ACK vs.
-   * single-line vs. BATCH. See label_capture_stream_active() in send.c. */
+   * single-line vs. BATCH. See label_capture_stream_active() in label.c. */
   int streaming;
 };
 

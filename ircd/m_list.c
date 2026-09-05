@@ -91,6 +91,7 @@
 #include "ircd_log.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
+#include "label.h"
 #include "msg.h"
 #include "numeric.h"
 #include "numnicks.h"
@@ -386,13 +387,13 @@ int m_list(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
        * around the old one so this doesn't steal its output.
        *
        * This fires against a genuinely live capture in practice, not
-       * just defensively: label_capture_stream_active() (send.c) makes
+       * just defensively: label_capture_stream_active() (label.c) makes
        * a labeled LIST's output go out through the *real*
        * send_buffer()/cli_sendQ() path as it's produced, so list_next_
        * channels()'s own sendQ-based pause check sees it and can leave
        * cli_listing() (and this capture) parked across ticks exactly
        * like an unlabeled LIST always could -- see
-       * label_capture_append()'s streaming branch in send.c. */
+       * label_capture_append()'s streaming branch in label.c. */
       struct Client *saved_active_client;
       struct LabelCapture *saved_active_node;
 
@@ -461,7 +462,7 @@ int m_list(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
          * is unconditionally multi-line (at minimum RPL_LISTEND) and may
          * span many event-loop ticks, so there is nothing to decide and
          * nothing worth buffering in memory until some eventual finish().
-         * See label_capture_stream_active() in send.c. */
+         * See label_capture_stream_active() in label.c. */
         const char *ref = label_capture_stream_active(sptr);
 
         if (ref)

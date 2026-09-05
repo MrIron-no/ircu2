@@ -17,10 +17,11 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 /** @file
- * @brief Server-to-server relay for IRCv3 labeled-response BATCH/ACK.
+ * @brief Server-to-server relay for IRCv3 labeled-response BATCH.
  *
- * BATCH and ACK are otherwise purely client-facing (see send.c's
- * label_capture_* family): a server answering a hunt_server_cmd()-routed
+ * (ACK, the same relay for a response with no output, lives in m_ack.c.)
+ *
+ * BATCH and ACK are otherwise purely client-facing (see label.c): a server answering a hunt_server_cmd()-routed
  * request on behalf of a *remote* client (see parse_server()'s
  * labeled-response wrapper) emits its own BATCH/ACK addressed to that
  * client by numnick -- ":<server> BA <target-numnick> +ref type" /
@@ -111,35 +112,6 @@ int ms_batch(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
      * untouched. Whichever server ends up actually MyConnect()-ing
      * acptr makes the one HIS-rewrite decision that matters. */
     sendcmdto_one(sptr, CMD_BATCH, acptr, "%C %s", acptr, rest);
-
-  return 0;
-}
-
-/** Relay an S2S-addressed labeled-response ACK to its target.
- * @param[in] cptr Neighbor that sent us this line.
- * @param[in] sptr Server that generated it.
- * @param[in] parc Number of valid parameters.
- * @param[in] parv Parameters: parv[1] is the target numnick.
- */
-int ms_ack(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
-{
-  struct Client *acptr;
-
-  if (parc < 2)
-    return protocol_violation(cptr, "ACK with no target");
-
-  if (!(acptr = findNUser(parv[1])))
-    return 0;
-
-  if (MyConnect(acptr)) {
-    if (!CapActive(acptr, CAP_BATCH) || !CapActive(acptr, CAP_LABELED_RESPONSE))
-      return 0;
-    /* See ms_batch(): HIS rewrite is only meaningful at the delivering
-     * hop, not baked in while relaying. */
-    sendcmdto_one((feature_bool(FEAT_HIS_REWRITE) && !IsOper(acptr)) ? &me : sptr,
-                  CMD_ACK, acptr, "");
-  } else
-    sendcmdto_one(sptr, CMD_ACK, acptr, "%C", acptr);
 
   return 0;
 }

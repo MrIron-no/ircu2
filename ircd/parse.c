@@ -38,6 +38,7 @@
 #include "ircd_reply.h"
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
+#include "label.h"
 #include "msg.h"
 #include "msg_tag.h"
 #include "numeric.h"
@@ -140,7 +141,7 @@ struct Message msgtab[] = {
     { m_unregistered, m_tagmsg, ms_tagmsg, mo_tagmsg, m_ignore }
   },
   {
-    /* BATCH is server-generated (labeled-response flush, see send.c) or
+    /* BATCH is server-generated (labeled-response flush, see label.c) or
      * an S2S relay of one (m_batch.c, addressed by target numnick, see
      * sendcmdto_one_hunted()/parse_server()'s labeled-response wrapper).
      * Unavailable to clients -- clients never send BATCH. */

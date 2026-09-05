@@ -31,6 +31,7 @@
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "ircd.h"
+#include "label.h"
 #include "match.h"
 #include "msg.h"
 #include "numeric.h"

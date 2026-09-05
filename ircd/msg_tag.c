@@ -534,7 +534,7 @@ msg_tag_format(char *buf, size_t buflen, struct Client *to,
   }
 
   /* IRCv3 labeled-response / batch: these are only ever synthesized
-   * server-side (see label_capture_finish() in send.c), never taken
+   * server-side (see label_capture_finish() in label.c), never taken
    * verbatim from client input, so no further validation is needed here. */
   if (CapHas(cli_active(to), CAP_LABELED_RESPONSE)) {
     const struct MsgTag *label_tag = msg_tag_find(tags, "label");
