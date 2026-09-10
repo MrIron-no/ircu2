@@ -178,9 +178,11 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
 {
   char **argv_check = hr_build_argv(fdtext, 1);
   int seconds = feature_int(FEAT_RELOAD_TIMEOUT);
+  struct sigaction chld_wait, chld_old;
   time_t deadline;
   int status = 0;
   int reaped = 0;
+  int rc = 1;
   pid_t pid;
 
   /* Clamp the deadline here rather than trust the feature.  The wait below is
@@ -195,6 +197,22 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
   if (seconds > 30)
     seconds = 30;
 
+  /* The kqueue engine (engine_kqueue.c) sets every registered signal, SIGCHLD
+   * included, to SIG_IGN.  For SIGCHLD that tells the kernel to reap children
+   * itself, so the pre-flight child never becomes a waitable zombie and the
+   * waitpid() below returns ECHILD ("No child processes") -- which aborted
+   * every reload on FreeBSD.  Install a disposition under which the child is
+   * waitable for the span of the pre-flight and restore the engine's handler
+   * afterwards.  The event loop is paused here, so nothing else needs SIGCHLD
+   * meanwhile, and the kqueue EVFILT_SIGNAL registration is independent of the
+   * sigaction disposition, so it survives untouched.  The self-pipe engines
+   * (epoll/poll/select) already use a real handler, so this is a no-op there. */
+  memset(&chld_wait, 0, sizeof(chld_wait));
+  chld_wait.sa_handler = SIG_DFL;
+  sigemptyset(&chld_wait.sa_mask);
+  chld_wait.sa_flags = 0;
+  sigaction(SIGCHLD, &chld_wait, &chld_old);
+
   pid = fork();
   if (pid == 0) {
     execv(SPATH, argv_check);
@@ -204,7 +222,8 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
   if (pid < 0) {
     ircd_snprintf(0, detail, len, "fork failed: %s", strerror(errno));
     MyFree(argv_check);
-    return 0;
+    rc = 0;
+    goto restore;
   }
 
   MyFree(argv_check);
@@ -229,7 +248,8 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
       ircd_snprintf(0, detail, len, "waitpid failed: %s", strerror(errno));
       kill(pid, SIGKILL);
       waitpid(pid, &status, 0);
-      return 0;
+      rc = 0;
+      goto restore;
     }
     /* usleep() returning EINTR has slept for an unknown part of the interval;
      * the loop condition re-reads the clock, so simply probe again. */
@@ -240,21 +260,29 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
     ircd_snprintf(0, detail, len, "timeout after %d seconds", seconds);
-    return 0;
+    rc = 0;
+    goto restore;
   }
 
   if (WIFSIGNALED(status)) {
     ircd_snprintf(0, detail, len, "signal %d", WTERMSIG(status));
-    return 0;
+    rc = 0;
+    goto restore;
   }
 
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
     ircd_snprintf(0, detail, len, "exit status %d",
                   WIFEXITED(status) ? WEXITSTATUS(status) : -1);
-    return 0;
+    rc = 0;
+    goto restore;
   }
 
-  return 1;
+  rc = 1;
+
+restore:
+  /* Restore the engine's SIGCHLD disposition (SIG_IGN under kqueue). */
+  sigaction(SIGCHLD, &chld_old, NULL);
+  return rc;
 }
 
 /** Dump state and exec this server in place, keeping connections open.
