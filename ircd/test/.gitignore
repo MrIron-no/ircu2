@@ -4,3 +4,4 @@ ircd_in_addr_t
 ircd_string_t
 ircd_match_t
 *.log
+hotreload_abi_gen

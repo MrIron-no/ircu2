@@ -36,5 +36,8 @@ jobs:
       - name: Build
         run: make -j$(nproc)
 
+      - name: Check hot-reload dump ABI
+        run: tools/check-hotreload-abi.sh
+
       - name: Run unit tests
         run: make check
