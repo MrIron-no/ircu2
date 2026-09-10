@@ -629,8 +629,12 @@ msgq_append_raw(struct MsgQ *mq, const void *data, size_t len)
   /* One byte under the biggest bucket.  msgq_alloc() rounds a request up to
    * the next power of two and stops at 1 << MB_MAX_SHIFT, so a buffer asked
    * for with exactly that length has room for indices 0 .. (1 << MB_MAX_SHIFT)
-   * - 1 and no more -- while the NUL below is written at mb->msg[chunk].
-   * Chunking one byte short keeps that terminator inside the allocation. */
+   * - 1, while the NUL below is written at mb->msg[chunk].  A full-bucket
+   * chunk therefore put that terminator one past the requested length: in
+   * bounds only by way of the padding the compiler leaves after the trailing
+   * char msg[1] of struct MsgBuf.  Chunking one byte short keeps the
+   * terminator inside the requested length and drops the dependence on
+   * padding that happens to be there. */
   size_t chunk_max = ((size_t)1 << MB_MAX_SHIFT) - 1;
 
   assert(0 != mq);

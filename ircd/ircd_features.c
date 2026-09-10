@@ -315,8 +315,15 @@ static struct FeatureDesc {
   F_I(RELOAD_TIMEOUT, 0, 15, 0),
   /* Unset means "the server's DPATH", which is the working directory the
    * daemon chdir()s into at startup; hotreload_dump_to_path() spells that
-   * ".".  Local opers only: it names a path on the server's filesystem. */
-  F_S(RELOAD_DUMP_DIR, FEAT_NULL | FEAT_CASE | FEAT_MYOPER, 0, 0),
+   * ".".  Local opers only: it names a path on the server's filesystem.
+   * FEAT_READ like PPATH: this is the one directory an oper with DIE and
+   * RESTART can steer a state dump into, and a dump holds every local user's
+   * credentials-adjacent state in cleartext.  Letting it be retargeted at
+   * runtime by the same oper who asks for the dump would make the containing
+   * directory an oper-chosen path rather than an administrator-chosen one, so
+   * only the config file may set it -- feature_set() honours FEAT_READ for
+   * from != NULL only, which leaves F: lines working. */
+  F_S(RELOAD_DUMP_DIR, FEAT_NULL | FEAT_CASE | FEAT_MYOPER | FEAT_READ, 0, 0),
   F_I(CLIENT_TAG_FLOOD, 0, 8192, 0),
   F_I(SERVER_PORT, FEAT_OPER, 4400, 0),
   F_B(NODEFAULTMOTD, 0, 1, 0),

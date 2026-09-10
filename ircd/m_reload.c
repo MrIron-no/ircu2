@@ -106,8 +106,9 @@
  * RELOAD alone needs PRIV_RESTART.  RELOAD DUMP needs PRIV_RESTART *and*
  * PRIV_DIE, because a state dump is not a lesser operation than a reload: the
  * file it writes holds every local user's nick, host, address, account,
- * operator privileges, silence list and queued output, so the right to ask
- * for one is the right to read the whole server's state off the disk.  The
+ * operator privileges, silence list and queued output, and -- in cleartext --
+ * every channel's key, upass and apass, so the right to ask for one is the
+ * right to read the whole server's state, secrets included, off the disk.  The
  * name is a plain file name below RELOAD_DUMP_DIR (see
  * hotreload_dump_to_path()); the request is logged and noticed to opers
  * whether or not it succeeds at writing anything.
@@ -146,14 +147,14 @@ int mo_reload(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     if (hotreload_dump_to_path(parv[2]))
       sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :State dumped to %s", sptr,
                     parv[2]);
-    else {
+    /* Exactly one notice either way.  Only the name check earns a reason: it
+     * is the oper's own mistake and it says nothing about what is on the
+     * disk. */
+    else if (EINVAL == errno)
+      sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Dump failed: file name must "
+                    "be a plain file name (no '/')", sptr);
+    else
       sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Dump failed", sptr);
-      /* Only the name check earns a reason: it is the oper's own mistake and
-       * it says nothing about what is on the disk. */
-      if (EINVAL == errno)
-        sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Dump failed: file name must "
-                      "be a plain file name (no '/')", sptr);
-    }
     return 0;
   }
 

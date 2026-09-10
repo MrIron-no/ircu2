@@ -1695,6 +1695,9 @@ int iauth_do_spawn(struct IAuth *iauth, int automatic)
  * @param[in] argc Number of parameters to use when starting process.
  * @param[in] argv Array of parameters to start process.
  * @return 0 on failure, 1 on new process, 2 on reuse of existing process.
+ *   The pre-flight child (see below) deliberately starts nothing and reports
+ *   2, the "no new process was started, and nothing is wrong" value: 0 means
+ *   the IAuth block could not be honoured, which is not what happened.
  */
 int auth_spawn(int argc, char *argv[])
 {
@@ -1706,9 +1709,12 @@ int auth_spawn(int argc, char *argv[])
    * program from it would start a second copy alongside the running server's,
    * both talking to whatever backend it authenticates against, and would then
    * orphan it moments later when the child exits.  Nothing in check mode ever
-   * authenticates a client, so there is nothing for it to do either. */
+   * authenticates a client, so there is nothing for it to do either.
+   *
+   * Not the failure value: no caller acts on it today, but 0 says the IAuth
+   * block was rejected, and declining to spawn here is a deliberate skip. */
   if (hotreload_check)
-    return 0;
+    return 2;
 
   if (iauth) {
     int same = 1;

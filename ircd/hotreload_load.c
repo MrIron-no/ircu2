@@ -101,6 +101,13 @@ extern struct Listener *ListenerPollList;
 /** Map from the dump's descriptor numbers to the clients adopted for them. */
 static struct Client **fdmap;
 
+/** One bit per descriptor: set when the descriptor is not a client socket.
+ *
+ * Built once per apply by hr_build_reserved_fds() from the LISTENER records
+ * and #hotreload_fd, so that the per-client test is a bit lookup rather than
+ * a scan of every record for every client. */
+static unsigned char *reserved_fds;
+
 /** A client that must be exited once the rest of its records are applied. */
 struct hr_pending_exit {
   struct Client *cptr;          /**< Client to exit. */
@@ -296,6 +303,8 @@ static void hr_reset(void)
   claimed = 0;
   MyFree(fdmap);
   fdmap = 0;
+  MyFree(reserved_fds);
+  reserved_fds = 0;
   pending = 0;
 }
 
@@ -743,7 +752,7 @@ static void hr_set_targets(struct Client *cptr, const char *text)
 
 /** Find the listener a dumped client arrived on.
  * @param[in] port Port from the CLIENT record.
- * @return Best matching listener, or NULL when there are none at all.
+ * @return Matching listener, or NULL when the port is no longer configured.
  */
 static struct Listener *hr_find_listener(int port)
 {
@@ -753,10 +762,13 @@ static struct Listener *hr_find_listener(int port)
     if (listener->addr.port == port)
       return listener;
 
-  /* The port is no longer configured.  Any listener still gives the client a
-   * plausible provenance for /STATS and keeps the ref-count bookkeeping
-   * honest; with none configured at all the client simply has no listener. */
-  return ListenerPollList;
+  /* The port is no longer configured, so no listener describes where this
+   * client came from.  Handing it an arbitrary one would misreport its
+   * provenance in /STATS and, worse, feed the wrong port to attach_iline()'s
+   * Client-block port= match, letting a client in on a rule written for a
+   * port it never used.  NULL is the honest answer: adoption tolerates it and
+   * attach_iline() is NULL-safe. */
+  return 0;
 }
 
 /** Apply one of the per-client records that follow a CLIENT record.
@@ -891,9 +903,11 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
      * path, and attach_iline() reads the listener's port to match a Client
      * block's port= against it.  Without this the child would test a
      * different question than the one the real load will ask -- and used to
-     * dereference a NULL listener outright.  No ref-count: nothing in check
-     * mode ever calls close_connection() to release it, and the child exits
-     * without unwinding anything it built. */
+     * dereference a NULL listener outright.  No ref-count is taken: nothing
+     * in check mode ever calls close_connection() to release one, and the
+     * child exits without unwinding anything it built.  The check-mode
+     * teardown below therefore clears cli_listener() before free_client(),
+     * which would otherwise release a reference that was never taken. */
     cli_listener(cptr) = hr_find_listener((int)hr_get_int(rec, "port", 0));
   } else {
     listener = hr_find_listener((int)hr_get_int(rec, "port", 0));
@@ -948,6 +962,9 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
     if (check_only) {
       free_user(cli_user(cptr));
       cli_user(cptr) = 0;
+      /* Balances the borrowed, un-refcounted listener set above: free_client()
+       * calls release_listener() for a non-NULL cli_listener(). */
+      cli_listener(cptr) = 0;
       free_client(cptr);
       return 0;
     }
@@ -1057,22 +1074,39 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
  */
 static int hr_fd_is_reserved(int fd)
 {
-  unsigned int i;
-
-  if (fd < 0)
+  if (fd < 0 || fd >= MAXCONNECTIONS || !reserved_fds)
     return 0;
 
-  if (fd == hotreload_fd)
-    return 1;
+  return (reserved_fds[fd / 8] >> (fd % 8)) & 1;
+}
+
+/** Build the reserved descriptor bitmap for #reserved_fds.
+ *
+ * One pass over the records rather than one per client: the test above used
+ * to walk every record for every CLIENT record, which is O(clients x records)
+ * on a dump whose two dimensions grow together.  Descriptors outside
+ * [0, MAXCONNECTIONS) are ignored because no CLIENT record with such an fd
+ * ever reaches the test -- hr_apply_clients() has already rejected it.
+ */
+static void hr_build_reserved_fds(void)
+{
+  unsigned int i;
+  int fd;
+
+  MyFree(reserved_fds);
+  reserved_fds = (unsigned char *)MyCalloc((MAXCONNECTIONS + 7) / 8, 1);
 
   for (i = 0; i < lines.count; i++) {
     if (!hr_is(&records[i], "LISTENER"))
       continue;
-    if ((int)hr_get_int(&records[i], "fd", -1) == fd)
-      return 1;
+    fd = (int)hr_get_int(&records[i], "fd", -1);
+    if (fd >= 0 && fd < MAXCONNECTIONS)
+      reserved_fds[fd / 8] |= (unsigned char)(1 << (fd % 8));
   }
 
-  return 0;
+  if (hotreload_fd >= 0 && hotreload_fd < MAXCONNECTIONS)
+    reserved_fds[hotreload_fd / 8] |=
+      (unsigned char)(1 << (hotreload_fd % 8));
 }
 
 /** Rebuild every client in the dump, then its trailing per-client records.
@@ -1095,6 +1129,8 @@ static void hr_apply_clients(int check_only, unsigned int *nclients,
   *nexits = 0;
   *exits = (struct hr_pending_exit *)
     MyCalloc(lines.count + 1, sizeof(**exits));
+
+  hr_build_reserved_fds();
 
   for (i = 0; i < lines.count; i++) {
     struct hr_record *rec = &records[i];
@@ -1382,6 +1418,8 @@ int hotreload_apply(int check_only)
               nclients, nchannels);
     MyFree(fdmap);
     fdmap = 0;
+    MyFree(reserved_fds);
+    reserved_fds = 0;
     return 1;
   }
 

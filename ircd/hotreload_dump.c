@@ -415,8 +415,10 @@ static void hr_dump_client(FILE *out, struct Client *cptr)
   hr_rec_add(out, "privs", privs);
   hr_rec_add_int(out, "oper", IsAnOper(cptr) ? 1 : 0);
   hr_rec_add_int(out, "tls", IsTLS(cptr) ? 1 : 0);
-  /* Every TLS connection still here has been kernel-offloaded by the
-   * orchestration, so it is driven raw (IsTLSRaw) after the exec. */
+  /* Every client that reaches here passed hotreload_client_carriable(),
+   * which admits a TLS connection only when it is kernel-offloaded -- so a
+   * TLS client in the dump is by construction one the new image can drive
+   * raw (IsTLSRaw), with no library session to re-establish. */
   hr_rec_add_int(out, "raw", IsTLS(cptr) ? 1 : 0);
   if (cli_tls_fingerprint(cptr)[0])
     hr_rec_add(out, "tlsfp", cli_tls_fingerprint(cptr));

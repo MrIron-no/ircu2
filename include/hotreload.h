@@ -115,15 +115,16 @@ int hotreload_client_carriable(const struct Client *cptr);
  * The reload sheds every connection the dump cannot carry, and \a by may be
  * one of them -- an oper on a TLS session that is not kernel-offloaded kills
  * its own connection by typing RELOAD.  Nothing is shed until the pre-flight
- * child has approved the dump, so every abort path leaves \a by alive and
- * returns 0; the return value stays in the contract because the shed is what
- * frees \a by, and only the shed can.
+ * child has approved the dump, though, so as the code stands every abort
+ * returns before the shed can run and the return value is always 0.
  *
  * @param[in] reason Human readable reason for the reload, for the logs.
  * @param[in] by Local client that issued the reload, or NULL for a signal.
- * @return 1 when \a by was exited during the attempt, in which case the
- *   caller must return CPTR_KILLED and must not touch \a by again; 0
- *   otherwise.  Never returns at all once the exec succeeds.
+ * @return 0 on abort: nothing was shed and \a by is intact.  Never returns
+ *   at all after a successful pre-flight, because the exec replaces the
+ *   image.  The 1 return -- caller must answer CPTR_KILLED and never touch
+ *   \a by again -- is reserved for a future path that sheds before it
+ *   returns; m_reload.c keeps handling it as a fail-safe.
  */
 int server_reload(const char *reason, struct Client *by);
 

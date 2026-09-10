@@ -34,6 +34,7 @@
 #include "s_bsd.h"
 #include "s_misc.h"
 #include "send.h"
+#include "tls_ktls.h"
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <errno.h>
@@ -45,6 +46,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /** Descriptor holding the state dump we were execed with; -1 unless booted with -R. */
@@ -59,8 +61,6 @@ extern struct Listener *ListenerPollList;
 /** Interval between two waitpid() probes of the pre-flight child, in
  * microseconds. */
 #define HR_POLL_USEC 50000
-/** Number of poll intervals in one second, for the pre-flight deadline. */
-#define HR_POLLS_PER_SEC (1000000 / HR_POLL_USEC)
 /** Highest descriptor number hr_close_all_except() is ever asked to sweep. */
 #define HR_MAX_SWEEP_FD 65536
 
@@ -178,23 +178,22 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
 {
   char **argv_check = hr_build_argv(fdtext, 1);
   int seconds = feature_int(FEAT_RELOAD_TIMEOUT);
-  int deadline;
+  time_t deadline;
   int status = 0;
   int reaped = 0;
-  int waited;
   pid_t pid;
 
   /* Clamp the deadline here rather than trust the feature.  The wait below is
    * a blocking poll inside the event loop: nothing else is served while it
-   * runs, so an operator who sets RELOAD_TIMEOUT to zero (deadline 0, one
-   * probe, a healthy child reaped as a failure) or to something enormous
-   * (the whole server wedged behind a hung child) has broken the server with
-   * a config value.  One second to a minute is the usable range. */
+   * runs, so an operator who sets RELOAD_TIMEOUT to zero (no wait at all, a
+   * healthy child reaped as a failure) or to something enormous (the whole
+   * server wedged behind a hung child) has broken the server with a config
+   * value.  One to thirty seconds is the usable range -- half a minute of a
+   * frozen event loop is already as much as a network will tolerate. */
   if (seconds < 1)
     seconds = 1;
-  if (seconds > 60)
-    seconds = 60;
-  deadline = seconds * HR_POLLS_PER_SEC;
+  if (seconds > 30)
+    seconds = 30;
 
   pid = fork();
   if (pid == 0) {
@@ -210,7 +209,13 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
 
   MyFree(argv_check);
 
-  for (waited = 0; waited <= deadline; waited++) {
+  /* Wall clock, not a count of iterations: usleep() sleeps for at least the
+   * interval it is given and returns early on a signal, so counting probes
+   * makes the real deadline anything from a fraction of the configured time
+   * (a server taking signals) to well over it (a loaded box). */
+  deadline = time(NULL) + seconds;
+
+  do {
     pid_t done = waitpid(pid, &status, WNOHANG);
 
     if (done == pid) {
@@ -218,11 +223,18 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
       break;
     }
     if (done < 0 && errno != EINTR) {
+      /* The child is still out there and nothing else will ever reap it, so
+       * it would run on as an orphan of a server that has given up on it --
+       * and it holds the dump descriptor open. */
       ircd_snprintf(0, detail, len, "waitpid failed: %s", strerror(errno));
+      kill(pid, SIGKILL);
+      waitpid(pid, &status, 0);
       return 0;
     }
+    /* usleep() returning EINTR has slept for an unknown part of the interval;
+     * the loop condition re-reads the clock, so simply probe again. */
     usleep(HR_POLL_USEC);
-  }
+  } while (time(NULL) < deadline);
 
   if (!reaped) {
     kill(pid, SIGKILL);
@@ -490,6 +502,24 @@ int server_reload(const char *reason, struct Client *by)
   for (i = 0; i <= HighestFd; i++) {
     if (!(cptr = LocalClientArray[i]) || cptr == &me)
       continue;
+
+    /* The same predicate the dump filters on, applied again here because the
+     * flush_connections(0) above can change the answer: a write that hits
+     * EPIPE runs dead_link(), which marks the client dead and takes it off
+     * the poll set but leaves both the descriptor open and the Client in
+     * LocalClientArray.  Such a client is in no dump, so nothing in the new
+     * image will ever own its socket; carrying the descriptor across the exec
+     * would leak it for the life of the process with the peer left hanging on
+     * a connection nobody reads.  Skipping it here drops it through to
+     * hr_close_all_except() below, and the close puts a FIN on the wire. */
+    if (!hotreload_client_carriable(cptr)) {
+      /* A kernel-offloaded session gets its close_notify first: the peer's
+       * TLS stack reads a bare FIN as a truncation attack and reports it as
+       * an error rather than as a clean disconnect. */
+      if (IsTLS(cptr) && IsTLSRaw(cptr) && cli_fd(cptr) >= 0)
+        tls_ktls_send_close_notify(cli_fd(cptr));
+      continue;
+    }
 
     /* Free the library session but leave the socket, and the kernel record
      * state on it, exactly as it is: the new image drives it raw. */
