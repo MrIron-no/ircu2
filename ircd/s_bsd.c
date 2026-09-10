@@ -785,6 +785,34 @@ struct Client* adopt_connection(int fd, struct Listener* listener, int is_ws)
   return new_client;
 }
 
+/** Arrange for input already sitting in a client's recvQ to be parsed.
+ *
+ * A hot reload adopts a connection with its recvQ pre-populated from the state
+ * dump: a command the previous image had read off the socket but not yet
+ * parsed (typically one pipelined behind the RELOAD command itself) is
+ * restored into cli_recvQ() by the loader.  adopt_connection() arms readable
+ * interest, but a level-triggered engine only reports the socket readable when
+ * fresh bytes arrive on it; this input lives in the userspace recvQ with an
+ * empty socket behind it, so read_packet() would never be woken to drain it
+ * and the connection would fall silent from the handoff onward.
+ *
+ * Arm the per-connection process timer (the same one read_packet() uses to
+ * defer a throttled remainder) so read_packet() runs once from the event loop
+ * and consumes the backlog.  A partial, newline-less line is handled correctly
+ * too: read_packet() leaves it in the recvQ and the rest completes it on a
+ * later socket read.  No-op when the recvQ is empty or a timer is already
+ * pending.
+ * @param cptr Adopted client whose recvQ may hold unparsed input.
+ */
+void schedule_recvq_process(struct Client* cptr)
+{
+  if (DBufLength(&(cli_recvQ(cptr))) && !t_onqueue(&(cli_proc(cptr)))) {
+    cli_freeflag(cptr) |= FREEFLAG_TIMER;
+    timer_add(&(cli_proc(cptr)), client_timer_callback, cli_connect(cptr),
+              TT_RELATIVE, 1);
+  }
+}
+
 /** Determines whether to tell the events engine we're interested in
  * writable events.
  * @param cptr Client for which to decide this.

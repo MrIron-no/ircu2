@@ -1228,11 +1228,28 @@ static void hr_apply_clients(int check_only, unsigned int *nclients,
                 rec->type, i + 1);
   }
 
-  /* The send queues are complete now; tell the engine there is output. */
+  /* The send queues are complete now; tell the engine there is output, and
+   * schedule a parse of any input the dump carried in the recvQ.
+   *
+   * A command the previous image had already read off the socket but not yet
+   * parsed -- typically one pipelined behind the RELOAD itself, e.g. a PING
+   * whose PONG the client is now waiting for -- rides across in the RECVQ
+   * record and is restored into cli_recvQ() above.  adopt_connection() arms
+   * readable interest, but a level-triggered engine only reports readable when
+   * the *socket* has new bytes; this input sits in the userspace recvQ with an
+   * empty socket behind it, so nothing would ever wake read_packet() to drain
+   * it and the connection would go silent from the handoff onward.  Arming the
+   * per-connection process timer makes read_packet() run once from the event
+   * loop and consume it, exactly as the deferred-input path in read_packet()
+   * itself does. */
   if (!check_only)
     for (i = 0; i < MAXCONNECTIONS; i++)
-      if (fdmap[i] && MsgQLength(&cli_sendQ(fdmap[i])))
-        update_write(fdmap[i]);
+      if (fdmap[i]) {
+        if (MsgQLength(&cli_sendQ(fdmap[i])))
+          update_write(fdmap[i]);
+        if (DBufLength(&cli_recvQ(fdmap[i])))
+          schedule_recvq_process(fdmap[i]);
+      }
 }
 
 /** Apply the MEMBER and BAN records, then the INVITE records. */

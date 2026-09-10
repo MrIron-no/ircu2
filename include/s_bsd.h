@@ -66,6 +66,7 @@ extern void close_connection(struct Client *cptr);
 extern void add_connection(struct Listener* listener, int fd);
 extern struct Client* adopt_connection(int fd, struct Listener* listener,
                                        int is_ws);
+extern void schedule_recvq_process(struct Client* cptr);
 extern int  read_message(time_t delay);
 extern void init_server_identity(void);
 extern void close_connections(int close_stderr);

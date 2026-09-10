@@ -185,6 +185,12 @@ async def test_server_link_relinks_with_timestamps(ircd_tls_network):
         await hub_op.register("rl3hubop", "op", "Relink Oper")
         assert (await oper_up(hub_op)).command == "381"
         await leaf_client.register("rl3leaf", "l", "Relink Leaf")
+        # The relink is verified below by querying the leaf's LINKS. LINKS is
+        # hidden from non-opers by default (FEAT_HIS_LINKS, ircd/m_links.c),
+        # so a plain client sees only RPL_ENDOFLINKS with no server lines and
+        # could never observe the hub -- oper up here so the leaf side is
+        # checked with the same privilege the hub side uses (hub_op).
+        assert (await oper_up(leaf_client)).command == "381"
         await hub_client.register("rl3hub", "h", "Relink Hub")
 
         await connect_link(hub_op, LEAF_NAME, LEAF_SERVER_PORT)
