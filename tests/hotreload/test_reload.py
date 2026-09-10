@@ -15,9 +15,11 @@ serving with no visible disruption at all.
 from __future__ import annotations
 
 import asyncio
+import uuid
 
 import pytest
 
+from conftest import wait_for_port
 from hotreload.helpers import (
     HUB,
     HUB_PID_PATH,
@@ -169,6 +171,81 @@ async def test_message_during_handoff_delivered(ircd_tls_network):
         assert msg.params[-1] == "during-handoff", msg
     finally:
         await _disconnect_all(oper, a, b)
+
+
+async def test_issuer_throttled_pipelined_command_survives(ircd_tls_network):
+    """A command pipelined directly behind RELOAD in the same recvQ buffer
+    must still be delivered once the new image comes up, even when the
+    issuer was over its read throttle at the moment RELOAD was dispatched.
+
+    read_packet()'s drain loop (ircd/s_bsd.c) pops one line at a time from
+    recvQ with dbuf_getmsg() and dispatches it; RELOAD's dispatch calls
+    server_reload(), which execs and never returns to that loop, so
+    whatever is still sitting behind it in the same recvQ buffer is left
+    exactly as the dump captures it -- a RECVQ record (see the table atop
+    ircd/hotreload_dump.c). Flooding the issuer past the read throttle
+    first (`cli_since(cptr) - CurrentTime < 10`, FEAT_CLIENT_FLOOD) makes
+    this deterministic instead of a TCP-segment-boundary race: once
+    throttled, read_packet() defers *all* further draining to its own
+    per-connection timer (cli_proc) regardless of how the bytes arrive, so
+    RELOAD and the pipelined PING are guaranteed to still be sitting
+    together, undrained, when RELOAD is finally dispatched. The new image
+    must re-arm that timer on adoption (schedule_recvq_process(), called
+    from hotreload_load.c for every adopted client with a non-empty
+    recvQ) or the pipelined PING is never reprocessed: a level-triggered
+    engine has nothing to notify it about on a socket with no new bytes.
+    """
+    hub = ircd_tls_network["hub"]
+    host, port = hub["host"], hub["port"]
+
+    oper = IRCClient()
+    await oper.connect(host, port)
+    try:
+        await oper.register("rl12op", "op", "Throttled Reload Issuer")
+        assert (await oper_up(oper)).command == "381"
+
+        # Push cli_since just past the 10s throttle guard -- read_packet()
+        # adds ~2s of penalty per short command processed, so 10 lines are
+        # comfortably enough to trip it (5 process before the guard stops
+        # the drain) with only a small backlog left to work off afterward,
+        # keeping the test fast: draining leftover flood + RELOAD + the
+        # pipelined PING happens at roughly one command per ~2 real
+        # seconds once throttled, so a much larger burst would just make
+        # this test slow without testing anything more. Comfortably under
+        # the 1024-byte default FEAT_CLIENT_FLOOD recvQ-flood disconnect
+        # limit too (~110 bytes total). Written and drained as one blob,
+        # not via IRCClient.send()'s one-write-per-call, so nothing is
+        # awaited between lines.
+        flood = "".join(f"PING :flood{i}\r\n" for i in range(10)).encode()
+        oper._writer.write(flood)
+        await oper._writer.drain()
+
+        unique = f"carried-{uuid.uuid4().hex[:8]}"
+        # RELOAD and the PING behind it MUST be in the same write, sent
+        # back-to-back with nothing awaited in between: that is what
+        # guarantees they are still sitting together, undrained, in the
+        # issuer's recvQ at the moment RELOAD's dispatch execs the new
+        # image, exercising the exact carried-recvQ path the fix covers.
+        oper._writer.write(f"RELOAD\r\nPING :{unique}\r\n".encode())
+        await oper._writer.drain()
+
+        await asyncio.to_thread(wait_for_port, host, port, 30.0)
+
+        found = None
+        deadline = asyncio.get_running_loop().time() + 45.0
+        while asyncio.get_running_loop().time() < deadline:
+            remaining = deadline - asyncio.get_running_loop().time()
+            msg = await oper.recv(timeout=max(0.1, remaining))
+            if msg.command == "PONG" and unique in msg.params[-1]:
+                found = msg
+                break
+        assert found is not None, (
+            f"pipelined PING {unique!r} (sent behind a throttled RELOAD in "
+            f"the same write) never got a PONG after the reload -- the "
+            f"issuer's carried recvQ was not reprocessed"
+        )
+    finally:
+        await _disconnect_all(oper)
 
 
 async def test_server_link_relinks_with_timestamps(ircd_tls_network):
