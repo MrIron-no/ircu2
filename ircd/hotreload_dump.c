@@ -66,7 +66,8 @@
  *
  * GLINE      mask expire lastmod lifetime reason flags state
  * JUPE       server expire lastmod reason active local
- *            NOT YET EMITTED -- see hr_dump_jupes() for why.
+ *            expire is absolute, as stored; jupe_add() in the loader takes a
+ *            relative one, so hotreload_load.c converts it.
  * SLINE      pattern lastmod expire msgtype flags local
  * CONFIG     key value timestamp
  * STATS      max_clients max_connections <one key per ServerStatistics field>
@@ -304,6 +305,17 @@ static void hr_client_flags(struct Client *cptr, char *buf, size_t len)
 
   buf[0] = '\0';
   for (i = 0; i < nwords && pos + 16 < len; i++) {
+    /* The loader parses this as space separated hexadecimal words; without
+     * the separator two adjacent words would run together into one 32 digit
+     * number that strtoul() would saturate.  struct Flags is one word wide in
+     * this tree, so today nothing is ever appended and the output is
+     * unchanged. */
+    if (i > 0) {
+      if (pos + 17 >= len)
+        break;
+      buf[pos++] = ' ';
+      buf[pos] = '\0';
+    }
     snprintf(buf + pos, len - pos, "%016llx",
              (unsigned long long)flags.bits[i]);
     pos += 16;
@@ -350,7 +362,8 @@ static void hr_dump_client(FILE *out, struct Client *cptr)
   char caps[HR_CAPBUFLEN];
   char active[HR_CAPBUFLEN];
   char targets[2 * MAXTARGETS + 1];
-  char flags[16 * (sizeof(struct Flags) / sizeof(unsigned long)) + 1];
+  /* 16 hex digits plus a separating space per word of the flagset. */
+  char flags[17 * (sizeof(struct Flags) / sizeof(unsigned long)) + 1];
   char *umodes;
 
   client_privs_to_string(cptr, privs, sizeof(privs));
@@ -636,7 +649,8 @@ static void hr_member_status(const struct Membership *member, char *buf,
 {
   size_t pos = 0;
 
-  /* Keep this in step with the letter table at the top of the file. */
+  /* Keep this in step with the letter table at the top of the file, and with
+   * hr_memberflags[] in ircd/hotreload_load.c, which decodes these letters. */
 #define HR_MFLAG(bit, letter)                                           \
   do {                                                                  \
     if ((member->status & (bit)) && pos + 1 < len)                      \
@@ -805,21 +819,14 @@ static void hr_dump_glines(FILE *out)
 
 /** Write every jupe.
  *
- * BLOCKED: ircd/jupe.c keeps GlobalJupeList static and include/jupe.h
- * exports no way to walk it, so this file cannot reach the list.  Exporting
- * it is a two line change (drop the `static` on ircd/jupe.c:50 and add
- * `extern struct Jupe *GlobalJupeList;` to include/jupe.h), but both files
- * are outside this task's file scope, so the body below is compiled only
- * once that export lands and HOTRELOAD_JUPE_LIST_EXPORTED is defined.  Until
- * then no JUPE record is written and the jupes are rebuilt from the config
- * file and the net.burst after the reload rather than carried across.
+ * GlobalJupeList is walked directly, through the extern in include/jupe.h.
+ * expire= is the stored absolute ju_expire; the loader turns it back into the
+ * relative lifetime jupe_add() wants.
  *
  * @param[in] out Stream to write to.
  */
 static void hr_dump_jupes(FILE *out)
 {
-#ifdef HOTRELOAD_JUPE_LIST_EXPORTED
-  extern struct Jupe *GlobalJupeList;
   struct Jupe *jupe;
 
   for (jupe = GlobalJupeList; jupe; jupe = jupe->ju_next) {
@@ -832,9 +839,6 @@ static void hr_dump_jupes(FILE *out)
     hr_rec_add_int(out, "local", JupeIsLocal(jupe) ? 1 : 0);
     hr_rec_end(out);
   }
-#else
-  (void)out;
-#endif
 }
 
 /** Write every S-line.

@@ -764,6 +764,17 @@ struct Client* adopt_connection(int fd, struct Listener* listener, int is_ws)
     ++listener->ref_count;
   }
 
+  /* Arm readable interest by hand.  For a connection that arrives normally it
+   * is start_auth() that does this (see ircd/s_auth.c, which calls
+   * socket_events(..., SOCK_ACTION_SET | SOCK_EVENT_READABLE) once the client
+   * is on the auth query pile), and the TLS branch of add_connection() above
+   * does the same for a handshake that has yet to start.  An adopted
+   * connection skips auth entirely, so without this the engine is never told
+   * we want to read and the client goes silent until it happens to be woken
+   * for a write.  SOCK_ACTION_SET is 0, so this is the same form the TLS
+   * branch of add_connection() uses. */
+  socket_events(&cli_socket(new_client), SOCK_EVENT_READABLE);
+
   Count_newunknown(UserStats);
   return new_client;
 }
