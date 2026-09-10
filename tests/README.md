@@ -83,6 +83,44 @@ its own listener TLS context at config parse time.
 uv run pytest -v -s --timeout=60
 ```
 
+## Hot reload tests (`hotreload/`)
+
+Exercises `RELOAD` (and `SIGUSR2`): the daemon dumps its state, exec()s
+itself in place with the same PID, and adopts its listening and client
+sockets back from the new image, carrying registered plaintext and
+kernel-TLS-offloaded clients across without a disconnect. Uses the
+`ircd_tls_network` fixture (hub + leaf), so it shares the `tls` marker.
+
+```bash
+uv run pytest hotreload -v
+```
+
+- `test_reload.py` — plaintext client/channel/G-line survival, server
+  relinking with channel timestamps preserved, unregistered connections
+  and server links being shed, SIGUSR2, back-to-back reloads, and a
+  failed pre-flight leaving the old process serving.
+- `test_reload_tls.py` — kernel-TLS-offloaded clients (including
+  WebSocket-over-TLS) surviving a reload; a TLS session that is *not*
+  offloaded being closed gracefully instead; KeyUpdate after a reload
+  (kernel TLS cannot rekey, so the connection is closed, not wedged).
+- `test_reload_dump.py` — `RELOAD DUMP <name>` and the dump/reload/dump
+  round trip. Written against a RELOAD DUMP hardening fix
+  (plain-file-name-only, a `RELOAD_DUMP_DIR` feature, `PRIV_DIE`) that is
+  not yet merged into this branch; those tests are marked
+  `xfail(strict=True)` until it lands.
+
+**Host prerequisite for the TLS survival tests:** kernel TLS (kTLS) must
+be available on the *host* — the containers share the host kernel. Load
+the module once per boot:
+
+```bash
+sudo modprobe tls
+```
+
+Without it, `TLS_KTLS` sessions never offload and every reloaded TLS
+client is closed instead of carried over (the `test_tls_not_offloaded_*`
+path, not the survival path this suite mostly tests).
+
 ## Test Organization
 
 Each PR has its own directory:
