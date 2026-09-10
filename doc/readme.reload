@@ -236,6 +236,37 @@ the reload machinery itself; there is no reason to pass them by hand,
 and doing so on a real boot will make the server try to adopt file
 descriptors that do not mean what it expects.
 
+* Wire ABI stability.
+
+Most of the dump names things symbolically -- channel modes as their
+letters, capabilities and privileges by name, user modes as mode
+characters -- so those are self-describing and survive any renumbering.
+A handful of fields, though, are stored as their raw bit or enum values:
+the client flag bitset (enum Flag), a client's snomask (SNO_* bits), a
+G-line's flags (GLINE_*) and local state (enum GlineLocalState), an
+S-line's message type and status flags (the SLINE_* bits behind
+sl_msgtype_t / sl_flagtype_t), and a channel ban's flags (BAN_*).  For
+these, the number written by the old binary is read straight back by the
+new one, so the numeric value of every such bit or enumerator MUST stay
+identical across an upgrade.  Renumber a bit or reorder an enum and an
+old dump silently decodes into the wrong flags on the new image -- no
+error, no crash, just corruption.
+
+To keep that from happening by accident, CI guards these values.
+ircd/test/hotreload_abi_gen.c prints the compiled value of every guarded
+symbol; ircd/test/hotreload_abi.golden is the committed snapshot of that
+output; and tools/check-hotreload-abi.sh (run by the build workflow)
+fails the build if any guarded symbol loses its value or disappears.
+Adding a new flag at the end is allowed -- the check is append-safe and
+only reminds you to refresh the golden file.
+
+If you genuinely need to change one of these values, treat it as a dump
+format change: bump the dump version in ircd/hotreload_dump.c, add loader
+compatibility handling in ircd/hotreload_load.c so an old dump still
+decodes correctly, then regenerate the snapshot with
+`tools/check-hotreload-abi.sh --update` and commit it alongside the
+change.
+
 * Performing an upgrade.
 
 To upgrade a running server in place:

@@ -5,6 +5,14 @@ check_PROGRAMS = cidr_lookups_t hotreload_wire_t ircd_chattr_t ircd_in_addr_t ir
 
 TESTS = $(check_PROGRAMS)
 
+# Authoritative generator for the hot-reload dump ABI guard.  It is built on
+# demand (by tools/check-hotreload-abi.sh) but deliberately kept OUT of
+# check_PROGRAMS/TESTS so `make check` neither builds nor runs it.  It links
+# nothing beyond the headers - it only prints compiled constant values.
+EXTRA_PROGRAMS = hotreload_abi_gen
+hotreload_abi_gen_CPPFLAGS = $(AM_CPPFLAGS) -DIRCU2_BUILD
+hotreload_abi_gen_SOURCES = hotreload_abi_gen.c
+
 cidr_lookups_t_CPPFLAGS = $(AM_CPPFLAGS) -DIRCU2_BUILD
 cidr_lookups_t_SOURCES = cidr_lookups_t.c test_stub.c
 cidr_lookups_t_LDADD = ../cidr_lookups.o ../ircd_alloc.o ../ircd_string.o
