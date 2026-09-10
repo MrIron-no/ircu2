@@ -53,13 +53,15 @@
 #elif defined(__FreeBSD__)
 
 #include <sys/socket.h>
-#include <netinet/tcp.h>
+#include <netinet/in.h>         /* IPPROTO_TCP */
+#include <netinet/tcp.h>        /* TLS_GET_RECORD, TLS_SET_RECORD_TYPE */
+#include <sys/ktls.h>           /* struct tls_get_record */
 
 #ifdef TLS_GET_RECORD
 #define TLS_KTLS_SUPPORTED  1
 #define TLS_KTLS_CMSG_LEVEL IPPROTO_TCP
 #define TLS_KTLS_CMSG_GET   TLS_GET_RECORD
-#define TLS_KTLS_CMSG_SET   TLS_SET_RECORD
+#define TLS_KTLS_CMSG_SET   TLS_SET_RECORD_TYPE
 #endif
 
 #else
