@@ -93,6 +93,9 @@ services:
       - "16701:6701"
       - "14440:4440"
       - "14441:4441"
+      # tests/hotreload/test_reload_scale.py's blocked-sendq flood clients
+      # (Flood class, generous maxflood -- see tests/docker/ircd-tls-hub.conf).
+      - "16710:6710"
     networks:
       ircu-test-net:
         ipv4_address: 10.55.0.20

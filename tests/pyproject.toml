@@ -27,4 +27,5 @@ markers = [
     "limits: tests that need the dedicated limits server",
     "nf_compat: NETWORK_FEATURES A(prod)-B(NF=FALSE)-C(NF=TRUE) topology",
     "hotreload: RELOAD / exec-in-place connection-survival tests (hotreload/)",
+    "slow: large-scale / long-running tests (minutes, not seconds) -- excluded by default in a quick run, e.g. `pytest -m 'not slow'`",
 ]

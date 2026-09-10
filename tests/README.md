@@ -108,6 +108,18 @@ uv run pytest hotreload -v
   (plain-file-name-only, a `RELOAD_DUMP_DIR` feature, `PRIV_DIE`) that is
   not yet merged into this branch; those tests are marked
   `xfail(strict=True)` until it lands.
+- `test_reload_scale.py` — the same survival and dump-roundtrip
+  guarantees, but at a few hundred clients/channels instead of 2-3, plus a
+  test that genuinely blocks a client's server-side sendQ (kernel-level
+  throttle, not a config trick) before reloading. These are marked
+  `pytest.mark.slow` (minutes, not seconds) on top of the suite's `tls`/
+  `hotreload` markers — run them explicitly (`pytest hotreload -m slow
+  -v`, or just `pytest hotreload -v` to run everything) or exclude them
+  from a quick pass with `-m "not slow"`. They need the raised
+  `--with-maxcon`/`ulimit -n` headroom (4096, up from the historical 256)
+  in the root `Dockerfile` and the raised `Local` class `maxlinks` (500,
+  up from 100) in `tests/docker/ircd-tls-hub.conf` — both already in
+  place; a docker rebuild picks them up automatically.
 
 **Host prerequisite for the TLS survival tests:** kernel TLS (kTLS) must
 be available on the *host* — the containers share the host kernel. Load

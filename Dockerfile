@@ -44,7 +44,7 @@ RUN ./autogen.sh \
   export CFLAGS="-fsanitize=$SANITIZE -fno-omit-frame-pointer -g -O1"; \
   export LDFLAGS="-fsanitize=$SANITIZE"; \
   fi; \
-  ./configure --prefix=/opt/ircu --with-maxcon=256 --enable-debug --with-tls=${TLS_BACKEND} \
+  ./configure --prefix=/opt/ircu --with-maxcon=4096 --enable-debug --with-tls=${TLS_BACKEND} \
   && make
 
 # ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ RUN curl -fsSL \
   | tar xz --strip-components=1 \
   # The 2005-era config.guess/config.sub in the release tarball predate aarch64
   && cp /usr/share/misc/config.guess /usr/share/misc/config.sub . \
-  && ./configure --prefix=/opt/ircu --with-maxcon=256 --enable-debug \
+  && ./configure --prefix=/opt/ircu --with-maxcon=4096 --enable-debug \
   && make \
   && cp ircd/ircd /build/ircd
 
