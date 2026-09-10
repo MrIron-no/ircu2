@@ -27,11 +27,17 @@
  * daemon uses (gliter() in gline.c frees expired G-lines as it walks), so the
  * lists are walked with plain for loops here.
  *
- * By the time this runs the orchestration in hotreload.c has already squit
- * the server links, closed every unregistered connection and closed every
- * TLS connection that is not kernel-offloaded.  The client loop below still
- * filters on IsUser() && MyConnect() && cli_fd() >= 0 so that the dump is
- * correct even if that ever changes; servers are deliberately not handled.
+ * The dump runs twice per reload, and the first time it runs *before* the
+ * orchestration in hotreload.c has shed anything: the pre-flight child has to
+ * be given a dump while there is still a server to fall back on.  So the
+ * client loop below cannot assume the links are down and the uncarriable
+ * connections gone -- it decides for itself, with
+ * hotreload_client_carriable(), which is the same predicate the shed uses.
+ * That is what makes the pre-flight a valid test of the post-shed state, and
+ * what keeps the second dump honest once the shed has run.  Memberships and
+ * every other per-client record apply the same predicate, so a client the
+ * dump leaves out leaves nothing dangling behind it; servers are deliberately
+ * not handled.
  *
  * @section wireformat Record table
  *
@@ -409,8 +415,10 @@ static void hr_dump_client(FILE *out, struct Client *cptr)
   hr_rec_add(out, "privs", privs);
   hr_rec_add_int(out, "oper", IsAnOper(cptr) ? 1 : 0);
   hr_rec_add_int(out, "tls", IsTLS(cptr) ? 1 : 0);
-  /* Every TLS connection still here has been kernel-offloaded by the
-   * orchestration, so it is driven raw (IsTLSRaw) after the exec. */
+  /* Every client that reaches here passed hotreload_client_carriable(),
+   * which admits a TLS connection only when it is kernel-offloaded -- so a
+   * TLS client in the dump is by construction one the new image can drive
+   * raw (IsTLSRaw), with no library session to re-establish. */
   hr_rec_add_int(out, "raw", IsTLS(cptr) ? 1 : 0);
   if (cli_tls_fingerprint(cptr)[0])
     hr_rec_add(out, "tlsfp", cli_tls_fingerprint(cptr));
@@ -624,7 +632,7 @@ static void hr_dump_clients(FILE *out)
   for (fd = 0; fd <= HighestFd; fd++) {
     if (!(cptr = LocalClientArray[fd]))
       continue;
-    if (!IsUser(cptr) || !MyConnect(cptr) || cli_fd(cptr) < 0)
+    if (!hotreload_client_carriable(cptr))
       continue;
     if (!cli_user(cptr))
       continue;
@@ -707,7 +715,11 @@ static void hr_dump_channel(FILE *out, struct Channel *chptr)
   hr_rec_end(out);
 
   for (member = chptr->members; member; member = member->next_member) {
-    if (!MyUser(member->user))
+    /* The same predicate hr_dump_clients() uses, not MyUser(): a MEMBER
+     * record is keyed by descriptor, so one written for a client that has no
+     * CLIENT record would name an fd the loader has nothing to attach it to,
+     * and after the shed that fd is closed or belongs to somebody else. */
+    if (!hotreload_client_carriable(member->user))
       continue;
 
     hr_member_status(member, status, sizeof(status));
@@ -740,8 +752,11 @@ static void hr_dump_channels(FILE *out)
   struct Membership *member;
 
   for (chptr = GlobalChannelList; chptr; chptr = chptr->next) {
+    /* Carriable, not merely local: a channel whose only local member the
+     * dump is going to leave out would come back as an empty channel in the
+     * new image, held open by nobody. */
     for (member = chptr->members; member; member = member->next_member)
-      if (MyUser(member->user))
+      if (hotreload_client_carriable(member->user))
         break;
     if (!member)
       continue;                 /* nothing local here; the net keeps it */

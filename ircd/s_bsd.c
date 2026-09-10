@@ -514,8 +514,14 @@ void close_connection(struct Client *cptr)
     /* raw kTLS: no library session to run a shutdown, so emit the
      * close_notify alert straight through the kernel record layer.  Without
      * it the peer's TLS stack reports a truncation attack rather than an
-     * orderly close.  Best effort -- the close proceeds regardless. */
-    if (IsTLSRaw(cptr))
+     * orderly close.  Best effort -- the close proceeds regardless.
+     *
+     * Both flags are tested.  IsTLSRaw() alone would be enough if nothing
+     * could ever set it on a plaintext connection, but it is restored from a
+     * hot reload dump, and pushing a TLS alert down a plaintext socket would
+     * put five bytes of binary in front of whatever the peer reads next.
+     * IsTLS() is the flag that says there is a record layer to write to. */
+    if (IsTLS(cptr) && IsTLSRaw(cptr))
       tls_ktls_send_close_notify(cli_fd(cptr));
     close(cli_fd(cptr));
     socket_del(&(cli_socket(cptr))); /* queue a socket delete */

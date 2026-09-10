@@ -77,6 +77,11 @@
 #include <string.h>
 #include <unistd.h>
 
+/** Largest value con_ws_skip can legitimately hold: websocket_parse_frame()
+ * keeps only the low 32 bits of a frame's length, so no oversized frame it
+ * reports can leave more than this behind to drain. */
+#define HR_WS_SKIP_MAX 0xffffffffLL
+
 /** Lines of the dump, kept alive because the records alias them. */
 static struct hr_lines lines;
 /** One parsed record per line of #lines. */
@@ -95,6 +100,13 @@ extern struct Listener *ListenerPollList;
 
 /** Map from the dump's descriptor numbers to the clients adopted for them. */
 static struct Client **fdmap;
+
+/** One bit per descriptor: set when the descriptor is not a client socket.
+ *
+ * Built once per apply by hr_build_reserved_fds() from the LISTENER records
+ * and #hotreload_fd, so that the per-client test is a bit lookup rather than
+ * a scan of every record for every client. */
+static unsigned char *reserved_fds;
 
 /** A client that must be exited once the rest of its records are applied. */
 struct hr_pending_exit {
@@ -291,6 +303,8 @@ static void hr_reset(void)
   claimed = 0;
   MyFree(fdmap);
   fdmap = 0;
+  MyFree(reserved_fds);
+  reserved_fds = 0;
   pending = 0;
 }
 
@@ -738,7 +752,7 @@ static void hr_set_targets(struct Client *cptr, const char *text)
 
 /** Find the listener a dumped client arrived on.
  * @param[in] port Port from the CLIENT record.
- * @return Best matching listener, or NULL when there are none at all.
+ * @return Matching listener, or NULL when the port is no longer configured.
  */
 static struct Listener *hr_find_listener(int port)
 {
@@ -748,10 +762,13 @@ static struct Listener *hr_find_listener(int port)
     if (listener->addr.port == port)
       return listener;
 
-  /* The port is no longer configured.  Any listener still gives the client a
-   * plausible provenance for /STATS and keeps the ref-count bookkeeping
-   * honest; with none configured at all the client simply has no listener. */
-  return ListenerPollList;
+  /* The port is no longer configured, so no listener describes where this
+   * client came from.  Handing it an arbitrary one would misreport its
+   * provenance in /STATS and, worse, feed the wrong port to attach_iline()'s
+   * Client-block port= match, letting a client in on a rule written for a
+   * port it never used.  NULL is the honest answer: adoption tolerates it and
+   * attach_iline() is NULL-safe. */
+  return 0;
 }
 
 /** Apply one of the per-client records that follow a CLIENT record.
@@ -765,6 +782,7 @@ static int hr_apply_client_sub(struct hr_record *rec, struct Client *cptr,
 {
   unsigned char *data;
   const char *value;
+  long long ws_skip;
   size_t len = 0;
 
   if (hr_is(rec, "LINEBUF")) {
@@ -787,8 +805,13 @@ static int hr_apply_client_sub(struct hr_record *rec, struct Client *cptr,
   } else if (hr_is(rec, "SENDQ")) {
     if (!(data = hr_decode(rec, "data", &len)))
       return 0;
-    if (!check_only && len)
-      msgq_append_raw(&cli_sendQ(cptr), data, len);
+    /* A failure here is the buffer pool refusing to grow, not a bad record:
+     * the client keeps its connection and loses whatever output was still
+     * queued for it, which is worth a log line and nothing more. */
+    if (!check_only && len && !msgq_append_raw(&cli_sendQ(cptr), data, len))
+      log_write(LS_SYSTEM, L_ERROR, 0,
+                "hot reload: cannot restore %lu queued bytes for %s",
+                (unsigned long)len, cli_name(cptr));
     MyFree(data);
   } else if (hr_is(rec, "WS")) {
     if (!(data = hr_decode(rec, "buf", &len)))
@@ -801,7 +824,20 @@ static int hr_apply_client_sub(struct hr_record *rec, struct Client *cptr,
       memcpy(con->con_ws_handshake, data, len);
       con->con_ws_handshake[len] = '\0';
       con->con_ws_handshake_len = len;
-      con->con_ws_skip = (size_t)hr_get_int(rec, "skip", 0);
+      /* skip is what is left of an oversized frame's payload, so it is
+       * bounded by the largest payload websocket_parse_frame() will report:
+       * that parser reads the 64 bit length form but only keeps its low 32
+       * bits (see ircd/websocket.c), so nothing it produces exceeds
+       * HR_WS_SKIP_MAX.  Clamping to it stops a dump from parking the reader
+       * in the drain loop, throwing away real traffic, for a count no frame
+       * could ever have set.  handshake_len is bounded by the memcpy clamp
+       * just above, which is the buffer's own size. */
+      ws_skip = hr_get_int(rec, "skip", 0);
+      if (ws_skip < 0)
+        ws_skip = 0;
+      if (ws_skip > HR_WS_SKIP_MAX)
+        ws_skip = HR_WS_SKIP_MAX;
+      con->con_ws_skip = (size_t)ws_skip;
       con->con_ws_last_keepalive = (time_t)hr_get_int(rec, "keepalive", 0);
       /* Accept the mode as either the enum value or the same words the
        * CLIENT record's ws key uses; an absent or unrecognised mode leaves
@@ -863,6 +899,16 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
   if (check_only) {
     cptr = make_client(0, is_ws ? STAT_WEBSOCKET : STAT_UNKNOWN_USER);
     cli_fd(cptr) = -1;
+    /* The pre-flight child runs the same conf_check_client() as the real
+     * path, and attach_iline() reads the listener's port to match a Client
+     * block's port= against it.  Without this the child would test a
+     * different question than the one the real load will ask -- and used to
+     * dereference a NULL listener outright.  No ref-count is taken: nothing
+     * in check mode ever calls close_connection() to release one, and the
+     * child exits without unwinding anything it built.  The check-mode
+     * teardown below therefore clears cli_listener() before free_client(),
+     * which would otherwise release a reference that was never taken. */
+    cli_listener(cptr) = hr_find_listener((int)hr_get_int(rec, "port", 0));
   } else {
     listener = hr_find_listener((int)hr_get_int(rec, "port", 0));
     if (!(cptr = adopt_connection(fd, listener, is_ws))) {
@@ -885,9 +931,13 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
   ircd_strncpy(cli_user(cptr)->realhost, hr_str(rec, "realhost"), HOSTLEN);
   ircd_strncpy(cli_info(cptr), hr_str(rec, "info"), REALLEN);
 
-  /* adopt_connection() already took the peer's address from the socket,
-   * which is authoritative; in check mode there is no socket, so the dumped
-   * values are all there is. */
+  /* The dumped values win over what adopt_connection() read off the socket.
+   * They are not the same thing: for a WEBIRC or Cloudflare-proxied client
+   * the socket's peer is the proxy, while sockhost/sockip/ip hold the real
+   * client's address that the old image had already substituted, and that is
+   * what every ban, G-line and /WHOIS in the new image must see.  For an
+   * ordinary client the two agree, so nothing is lost by preferring the
+   * dump.  In check mode there is no socket and the dump is all there is. */
   value = hr_str(rec, "sockhost");
   if (*value)
     ircd_strncpy(cli_sockhost(cptr), value, HOSTLEN);
@@ -912,6 +962,9 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
     if (check_only) {
       free_user(cli_user(cptr));
       cli_user(cptr) = 0;
+      /* Balances the borrowed, un-refcounted listener set above: free_client()
+       * calls release_listener() for a non-NULL cli_listener(). */
+      cli_listener(cptr) = 0;
       free_client(cptr);
       return 0;
     }
@@ -967,10 +1020,12 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
 
   if (hr_get_int(rec, "tls", 0))
     SetTLS(cptr);
-  /* Only a kernel-offloaded session is driven raw.  This flag is the sole
-   * guard stopping the shutdown path from writing a close_notify onto a
-   * socket with no TLS backend, so it must never be set speculatively. */
-  if (hr_get_int(rec, "raw", 0))
+  /* Only a kernel-offloaded session is driven raw.  This flag is what makes
+   * close_connection() write a close_notify straight into the kernel record
+   * layer, so a raw flag on a connection that is not TLS at all would push a
+   * TLS alert down a plaintext socket; raw is meaningless without tls, and a
+   * dump that claims one without the other is ignored rather than trusted. */
+  if (hr_get_int(rec, "raw", 0) && IsTLS(cptr))
     SetTLSRaw(cptr);
 
   /* The TLS backend did not survive the exec: whatever blocked-direction and
@@ -1005,6 +1060,55 @@ static struct Client *hr_apply_client(struct hr_record *rec, int check_only)
   return cptr;
 }
 
+/** Test whether a descriptor belongs to something that is not a client.
+ *
+ * Every LISTENER record names an inherited listening socket, claimed or not,
+ * and hotreload_fd names the dump this process is reading.  A CLIENT record
+ * naming one of those describes a socket it does not own, and adopting it
+ * would hand a listening socket or the dump file to the client read path.
+ * Closing it would be worse: the listener or the dump would vanish from under
+ * the code that does own it, so the caller only ever skips such a record.
+ *
+ * @param[in] fd Descriptor a CLIENT record claims.
+ * @return Non-zero when \a fd is a listener's or the dump's.
+ */
+static int hr_fd_is_reserved(int fd)
+{
+  if (fd < 0 || fd >= MAXCONNECTIONS || !reserved_fds)
+    return 0;
+
+  return (reserved_fds[fd / 8] >> (fd % 8)) & 1;
+}
+
+/** Build the reserved descriptor bitmap for #reserved_fds.
+ *
+ * One pass over the records rather than one per client: the test above used
+ * to walk every record for every CLIENT record, which is O(clients x records)
+ * on a dump whose two dimensions grow together.  Descriptors outside
+ * [0, MAXCONNECTIONS) are ignored because no CLIENT record with such an fd
+ * ever reaches the test -- hr_apply_clients() has already rejected it.
+ */
+static void hr_build_reserved_fds(void)
+{
+  unsigned int i;
+  int fd;
+
+  MyFree(reserved_fds);
+  reserved_fds = (unsigned char *)MyCalloc((MAXCONNECTIONS + 7) / 8, 1);
+
+  for (i = 0; i < lines.count; i++) {
+    if (!hr_is(&records[i], "LISTENER"))
+      continue;
+    fd = (int)hr_get_int(&records[i], "fd", -1);
+    if (fd >= 0 && fd < MAXCONNECTIONS)
+      reserved_fds[fd / 8] |= (unsigned char)(1 << (fd % 8));
+  }
+
+  if (hotreload_fd >= 0 && hotreload_fd < MAXCONNECTIONS)
+    reserved_fds[hotreload_fd / 8] |=
+      (unsigned char)(1 << (hotreload_fd % 8));
+}
+
 /** Rebuild every client in the dump, then its trailing per-client records.
  * @param[in] check_only Non-zero for a dry run.
  * @param[out] nclients Receives the number of clients rebuilt.
@@ -1026,6 +1130,8 @@ static void hr_apply_clients(int check_only, unsigned int *nclients,
   *exits = (struct hr_pending_exit *)
     MyCalloc(lines.count + 1, sizeof(**exits));
 
+  hr_build_reserved_fds();
+
   for (i = 0; i < lines.count; i++) {
     struct hr_record *rec = &records[i];
     struct Client *cptr;
@@ -1044,11 +1150,48 @@ static void hr_apply_clients(int check_only, unsigned int *nclients,
       continue;
     }
 
+    /* Two CLIENT records naming the same descriptor: the second would adopt
+     * a socket the first is already serving, so both clients would read and
+     * write the same connection and the first would be dropped from
+     * LocalClientArray without ever being freed.  The first record wins;
+     * the descriptor is emphatically not closed, because it belongs to it. */
+    if (fdmap[fd]) {
+      log_write(LS_SYSTEM, L_ERROR, 0,
+                "hot reload: client %s claims fd %d, already held by %s; "
+                "skipping", hr_str(rec, "nick"), fd, cli_name(fdmap[fd]));
+      continue;
+    }
+
+    /* A descriptor that is also named by a LISTENER record, or that is the
+     * dump we are reading from, is not a client socket at all.  Adopting it
+     * would put a listening socket or the dump file into LocalClientArray;
+     * closing it would take the listener or the dump out from under the code
+     * that owns it, so this only skips. */
+    if (hr_fd_is_reserved(fd)) {
+      log_write(LS_SYSTEM, L_ERROR, 0,
+                "hot reload: client %s claims fd %d, which is a listener or "
+                "the dump itself; skipping", hr_str(rec, "nick"), fd);
+      continue;
+    }
+
     if (!(cptr = hr_apply_client(rec, check_only)))
       continue;
 
     fdmap[fd] = cptr;
     (*nclients)++;
+
+    /* Replaces the IPcheck_local_connect() that add_connection() does for a
+     * new connection: the address is already counted against its registry
+     * entry, so adopt it rather than charge for it twice.  Once per client,
+     * and *before* the checks below, exactly as add_connection() counts the
+     * client before register_user() reaches conf_check_client(): attach_iline()
+     * compares IPcheck_nr() against the Client block's maximum, and that
+     * count has to include this client or every host sits one connection
+     * under its real load and the last permitted client is let in twice.
+     * The rejection path below balances it -- exit_client() on a client with
+     * a registered IPcheck entry runs IPcheck_disconnect(). */
+    if (!check_only)
+      IPcheck_adopt(cptr);
 
     /* Re-check the client against the configuration we have just parsed, the
      * way rehash() re-checks every local client after a config reload. */
@@ -1065,12 +1208,6 @@ static void hr_apply_clients(int check_only, unsigned int *nclients,
       (*exits)[*nexits].reason = reason;
       (*nexits)++;
     }
-
-    /* Replaces the IPcheck_local_connect() add_connection() would do for a
-     * new connection: the address is already counted against its registry
-     * entry, so adopt it rather than charge for it twice.  Once per client. */
-    if (!check_only)
-      IPcheck_adopt(cptr);
   }
 
   /* The per-client records are keyed by descriptor, so a client that was
@@ -1281,6 +1418,8 @@ int hotreload_apply(int check_only)
               nclients, nchannels);
     MyFree(fdmap);
     fdmap = 0;
+    MyFree(reserved_fds);
+    reserved_fds = 0;
     return 1;
   }
 

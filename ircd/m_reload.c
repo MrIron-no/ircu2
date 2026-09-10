@@ -101,7 +101,24 @@
  * mo_reload - oper message handler
  *
  * parv[1] = "DUMP" (optional)
- * parv[2] = file to dump the state to, when parv[1] is "DUMP"
+ * parv[2] = file name to dump the state to, when parv[1] is "DUMP"
+ *
+ * RELOAD alone needs PRIV_RESTART.  RELOAD DUMP needs PRIV_RESTART *and*
+ * PRIV_DIE, because a state dump is not a lesser operation than a reload: the
+ * file it writes holds every local user's nick, host, address, account,
+ * operator privileges, silence list and queued output, and -- in cleartext --
+ * every channel's key, upass and apass, so the right to ask for one is the
+ * right to read the whole server's state, secrets included, off the disk.  The
+ * name is a plain file name below RELOAD_DUMP_DIR (see
+ * hotreload_dump_to_path()); the request is logged and noticed to opers
+ * whether or not it succeeds at writing anything.
+ *
+ * Failures answer with a fixed string.  The one exception is the name check,
+ * which the oper can act on and which reveals nothing about the filesystem;
+ * every other reason (a name that already exists, a symlink in the way, a
+ * directory that is not writable, an unreadable RELOAD_DUMP_DIR) is a probe
+ * of the server's filesystem if it is reported back, so it goes to the log
+ * and not to the client.
  */
 int mo_reload(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
@@ -119,12 +136,25 @@ int mo_reload(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   }
 
   if (parc >= 3 && ircd_strcmp(parv[1], "DUMP") == 0) {
+    if (!HasPriv(sptr, PRIV_DIE))
+      return send_reply(sptr, ERR_NOPRIVILEGES);
+
+    log_write(LS_SYSTEM, L_NOTICE, 0, "State dump to %s requested by %#C",
+              parv[2], sptr);
+    sendto_opmask_butone(0, SNO_OLDSNO, "%C requested a state dump to %s",
+                         sptr, parv[2]);
+
     if (hotreload_dump_to_path(parv[2]))
       sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :State dumped to %s", sptr,
                     parv[2]);
+    /* Exactly one notice either way.  Only the name check earns a reason: it
+     * is the oper's own mistake and it says nothing about what is on the
+     * disk. */
+    else if (EINVAL == errno)
+      sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Dump failed: file name must "
+                    "be a plain file name (no '/')", sptr);
     else
-      sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Dump failed: %s", sptr,
-                    strerror(errno));
+      sendcmdto_one(&me, CMD_NOTICE, sptr, "%C :Dump failed", sptr);
     return 0;
   }
 

@@ -34,6 +34,7 @@
 #include "s_bsd.h"
 #include "s_misc.h"
 #include "send.h"
+#include "tls_ktls.h"
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <errno.h>
@@ -42,8 +43,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /** Descriptor holding the state dump we were execed with; -1 unless booted with -R. */
@@ -58,10 +61,40 @@ extern struct Listener *ListenerPollList;
 /** Interval between two waitpid() probes of the pre-flight child, in
  * microseconds. */
 #define HR_POLL_USEC 50000
-/** Number of poll intervals in one second, for the pre-flight deadline. */
-#define HR_POLLS_PER_SEC (1000000 / HR_POLL_USEC)
 /** Highest descriptor number hr_close_all_except() is ever asked to sweep. */
 #define HR_MAX_SWEEP_FD 65536
+
+/** Test whether a local connection can be carried across a reload.
+ *
+ * This is the single rule the whole reload is built on, and both halves need
+ * the same answer: server_reload() sheds exactly the connections it says no
+ * for, and hotreload_dump() writes exactly the ones it says yes for.  Two
+ * copies of the rule would let the dump name a descriptor the shed had
+ * already closed, or drop a client that is still connected after the exec.
+ *
+ * A registered local user with a live descriptor is carriable, unless it is
+ * dying (IsDead) or its TLS record layer lives in the library rather than in
+ * the kernel: the library goes with the image, so a session that is not
+ * kernel-offloaded cannot be driven raw afterwards.  ircd_tls_offloaded()
+ * also reports a session left raw by an earlier reload as offloaded, because
+ * it has no library object to lose; see its contract in ircd_tls.h.
+ *
+ * @param[in] cptr Client to test.
+ * @return Non-zero when the dump can carry \a cptr across the exec.
+ */
+int hotreload_client_carriable(const struct Client *cptr)
+{
+  if (!cptr)
+    return 0;
+  if (!IsUser(cptr) || !MyConnect(cptr))
+    return 0;
+  if (cli_fd(cptr) < 0 || IsDead(cptr))
+    return 0;
+  if (IsTLS(cptr) && !ircd_tls_offloaded(cptr))
+    return 0;
+
+  return 1;
+}
 
 /** Test whether \a text is one or more decimal digits and nothing else.
  * @param[in] text String to inspect.
@@ -145,11 +178,22 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
 {
   char **argv_check = hr_build_argv(fdtext, 1);
   int seconds = feature_int(FEAT_RELOAD_TIMEOUT);
-  int deadline = seconds * HR_POLLS_PER_SEC;
+  time_t deadline;
   int status = 0;
   int reaped = 0;
-  int waited;
   pid_t pid;
+
+  /* Clamp the deadline here rather than trust the feature.  The wait below is
+   * a blocking poll inside the event loop: nothing else is served while it
+   * runs, so an operator who sets RELOAD_TIMEOUT to zero (no wait at all, a
+   * healthy child reaped as a failure) or to something enormous (the whole
+   * server wedged behind a hung child) has broken the server with a config
+   * value.  One to thirty seconds is the usable range -- half a minute of a
+   * frozen event loop is already as much as a network will tolerate. */
+  if (seconds < 1)
+    seconds = 1;
+  if (seconds > 30)
+    seconds = 30;
 
   pid = fork();
   if (pid == 0) {
@@ -165,7 +209,13 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
 
   MyFree(argv_check);
 
-  for (waited = 0; waited <= deadline; waited++) {
+  /* Wall clock, not a count of iterations: usleep() sleeps for at least the
+   * interval it is given and returns early on a signal, so counting probes
+   * makes the real deadline anything from a fraction of the configured time
+   * (a server taking signals) to well over it (a loaded box). */
+  deadline = time(NULL) + seconds;
+
+  do {
     pid_t done = waitpid(pid, &status, WNOHANG);
 
     if (done == pid) {
@@ -173,11 +223,18 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
       break;
     }
     if (done < 0 && errno != EINTR) {
+      /* The child is still out there and nothing else will ever reap it, so
+       * it would run on as an orphan of a server that has given up on it --
+       * and it holds the dump descriptor open. */
       ircd_snprintf(0, detail, len, "waitpid failed: %s", strerror(errno));
+      kill(pid, SIGKILL);
+      waitpid(pid, &status, 0);
       return 0;
     }
+    /* usleep() returning EINTR has slept for an unknown part of the interval;
+     * the loop condition re-reads the clock, so simply probe again. */
     usleep(HR_POLL_USEC);
-  }
+  } while (time(NULL) < deadline);
 
   if (!reaped) {
     kill(pid, SIGKILL);
@@ -211,6 +268,32 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
  * image while keeping the pid, the descriptor table and this process' place
  * in the supervision tree.
  *
+ * @section order Why the pre-flight runs before anything is shed
+ *
+ * Shedding is irreversible: an SQUIT is on the wire and a killed TLS client
+ * is gone whether or not the reload that wanted it gone ever happens.  So
+ * every check that can fail runs first, while a failure still costs nothing:
+ *
+ *   1. SPATH must be executable and a temporary file must be creatable.
+ *      Both are one syscall, and both are what a reload usually trips over:
+ *      a half-finished install, a full or read-only temporary directory.
+ *   2. A dump of the current state is written and handed to the pre-flight
+ *      child, which is this binary execed with "-K": it reads the dump,
+ *      rebuilds every client and channel in memory and exits without ever
+ *      touching a socket.  It is the only way to learn that the binary at
+ *      SPATH cannot serve this dump while there is still a working server to
+ *      fall back on.  The dump names the connections that are here now
+ *      rather than the ones that will be, and that is exactly what makes it
+ *      a valid test: hotreload_dump() writes only what
+ *      hotreload_client_carriable() accepts, which is the same set the shed
+ *      below keeps.
+ *   3. Only once the child has said yes does anything get shed.
+ *   4. The dump is then written a second time over the same temporary file,
+ *      because the first is stale the moment the shed runs: it names
+ *      descriptors that are now closed and send queues that have since taken
+ *      the QUIT and ERROR lines.  The image that execs reads dump #2, which
+ *      is the state as it actually is.
+ *
  * Why the descriptor keep set is exactly what it is: execv() carries over
  * every descriptor that is not close-on-exec, and the new image knows nothing
  * about the ones it is not told about, so anything left open leaks for the
@@ -238,9 +321,11 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
  *
  * @param[in] reason Human readable reason for the reload, for the logs.
  * @param[in] by Local client that issued the reload, or NULL for a signal.
- * @return 1 when \a by was exited by the shedding walk and the reload then
- *   aborted, so that the caller returns CPTR_KILLED instead of touching a
- *   freed client; 0 otherwise.  Does not return once the exec succeeds.
+ * @return 1 when \a by was exited by the shedding walk, so that the caller
+ *   returns CPTR_KILLED instead of touching a freed client; 0 otherwise.
+ *   Every abort path now returns before the shed, so an abort always returns
+ *   0 and \a by is always still alive; once the shed has run the only way
+ *   out of this function is the exec, or exit(8) when the exec fails.
  */
 int server_reload(const char *reason, struct Client *by)
 {
@@ -269,10 +354,80 @@ int server_reload(const char *reason, struct Client *by)
   log_write(LS_SYSTEM, L_WARNING, 0, "Reloading server: %s", reason);
   sendto_opmask_butone(0, SNO_OLDSNO, "Reloading server: %s", reason);
 
-  /* Shed everything the dump cannot carry.  exit_client() on one entry of
-   * LocalClientArray can take remote clients with it, but never another
-   * local connection, so walking by index is safe; the slot is re-read
-   * afterwards all the same. */
+  /* 1. The cheap checks, before anything is spent.  An SPATH that cannot be
+   * executed is the one failure the pre-flight child cannot report usefully:
+   * it comes back as "exit status 127" from a fork we need not have made,
+   * and it is exactly what a half-finished install looks like. */
+  if (access(SPATH, X_OK)) {
+    log_write(LS_SYSTEM, L_ERROR, 0,
+              "Reload aborted: %s is not executable", SPATH);
+    sendto_opmask_butone(0, SNO_OLDSNO,
+                         "Reload aborted: %s is not executable", SPATH);
+    reloading = 0;
+    return 0;                   /* nothing shed, so `by' is untouched */
+  }
+
+  if (!(f = tmpfile())) {
+    log_write(LS_SYSTEM, L_ERROR, 0,
+              "Reload aborted: cannot create state file: %s", strerror(errno));
+    sendto_opmask_butone(0, SNO_OLDSNO,
+                         "Reload aborted: cannot create state file: %s",
+                         strerror(errno));
+    reloading = 0;
+    return 0;                   /* nothing shed, so `by' is untouched */
+  }
+
+  dumpfd = fileno(f);
+
+  /* tmpfile() hands back a close-on-exec descriptor; the whole point of this
+   * one is that it survives the exec. */
+  if ((flags = fcntl(dumpfd, F_GETFD)) >= 0)
+    fcntl(dumpfd, F_SETFD, flags & ~FD_CLOEXEC);
+
+  /* 2. Dump #1, and the pre-flight that reads it.  hotreload_dump() filters
+   * on hotreload_client_carriable(), so this already describes the state the
+   * shed below will leave behind, minus the QUIT and ERROR lines the shed
+   * itself queues. */
+  if (!hotreload_dump(f)) {
+    log_write(LS_SYSTEM, L_ERROR, 0, "Reload aborted: state dump failed");
+    sendto_opmask_butone(0, SNO_OLDSNO, "Reload aborted: state dump failed");
+    fclose(f);
+    reloading = 0;
+    return 0;                   /* nothing shed, so `by' is untouched */
+  }
+
+  fflush(f);
+  lseek(dumpfd, 0, SEEK_SET);
+
+  ircd_snprintf(0, fdtext, sizeof(fdtext), "%d", dumpfd);
+
+  if (!hr_preflight(fdtext, detail, sizeof(detail))) {
+    log_write(LS_SYSTEM, L_ERROR, 0,
+              "Reload aborted: pre-flight check failed (%s)", detail);
+    sendto_opmask_butone(0, SNO_OLDSNO,
+                         "Reload aborted: pre-flight check failed (%s)",
+                         detail);
+    fclose(f);
+    reloading = 0;
+    return 0;                   /* back to the event loop; nothing was lost */
+  }
+
+  /* Logged as well as noticed: the notice below only reaches a send queue,
+   * and this process execs before the event loop ever drains one, so the log
+   * is the only place an operator can see afterwards that the pre-flight
+   * passed.  Flushing it instead is not an option -- dump #2 holds a copy of
+   * every send queue, and the new image would send it twice. */
+  log_write(LS_SYSTEM, L_NOTICE, 0,
+            "Reload pre-flight ok, shedding links and non-carriable "
+            "connections");
+  sendto_opmask_butone(0, SNO_OLDSNO,
+                       "Reload pre-flight ok, shedding links and "
+                       "non-carriable connections");
+
+  /* 3. Shed everything the dump cannot carry.  Nothing below returns to the
+   * event loop.  exit_client() on one entry of LocalClientArray can take
+   * remote clients with it, but never another local connection, so walking
+   * by index is safe; the slot is re-read afterwards all the same. */
   for (i = 0; i <= HighestFd; i++) {
     if (!(cptr = LocalClientArray[i]) || cptr == &me)
       continue;
@@ -312,62 +467,31 @@ int server_reload(const char *reason, struct Client *by)
       continue;                 /* it went; nothing else to do with the slot */
   }
 
-  /* Push the ERROR and QUIT lines written above out to the wire before the
-   * dump records whatever is left in the send queues. */
+  /* Push the ERROR and QUIT lines written above out to the wire before dump
+   * #2 records whatever is left in the send queues. */
   flush_connections(0);
 
-  if (!(f = tmpfile())) {
-    log_write(LS_SYSTEM, L_ERROR, 0,
-              "Reload aborted: cannot create state file: %s", strerror(errno));
-    sendto_opmask_butone(0, SNO_OLDSNO,
-                         "Reload aborted: cannot create state file: %s",
-                         strerror(errno));
-    reloading = 0;
-    return by_exited;
+  /* 4. Dump #2, over the same temporary file.  There is no way back from
+   * here -- the links are already down -- so a failure at this point is
+   * fatal rather than an abort: better a supervisor restart, which the
+   * clients survive as a reconnect, than an exec into a truncated dump that
+   * the new image would adopt half of. */
+  /* fseek() rather than a raw lseek(): it moves the stdio stream and the
+   * descriptor offset together, and unlike rewind() it reports a failure. */
+  if (ftruncate(dumpfd, 0) || fseek(f, 0L, SEEK_SET)) {
+    log_write(LS_SYSTEM, L_CRIT, 0,
+              "Reload: cannot rewind state file after shedding: %s",
+              strerror(errno));
+    exit(8);
   }
 
-  dumpfd = fileno(f);
-
-  /* tmpfile() hands back a close-on-exec descriptor; the whole point of this
-   * one is that it survives the exec. */
-  if ((flags = fcntl(dumpfd, F_GETFD)) >= 0)
-    fcntl(dumpfd, F_SETFD, flags & ~FD_CLOEXEC);
-
   if (!hotreload_dump(f)) {
-    log_write(LS_SYSTEM, L_ERROR, 0, "Reload aborted: state dump failed");
-    sendto_opmask_butone(0, SNO_OLDSNO, "Reload aborted: state dump failed");
-    fclose(f);
-    reloading = 0;
-    return by_exited;
+    log_write(LS_SYSTEM, L_CRIT, 0,
+              "Reload: state dump failed after shedding, cannot continue");
+    exit(8);
   }
 
   fflush(f);
-  lseek(dumpfd, 0, SEEK_SET);
-
-  ircd_snprintf(0, fdtext, sizeof(fdtext), "%d", dumpfd);
-
-  if (!hr_preflight(fdtext, detail, sizeof(detail))) {
-    log_write(LS_SYSTEM, L_ERROR, 0,
-              "Reload aborted: pre-flight check failed (%s)", detail);
-    sendto_opmask_butone(0, SNO_OLDSNO,
-                         "Reload aborted: pre-flight check failed (%s)",
-                         detail);
-    fclose(f);
-    reloading = 0;
-    return by_exited;           /* back to the event loop; nothing was lost */
-  }
-
-  /* Logged as well as noticed: the notice below only reaches a send queue,
-   * and this process execs before the event loop ever drains one, so the log
-   * is the only place an operator can see afterwards that the pre-flight
-   * passed.  Flushing it instead is not an option -- the dump already holds
-   * a copy of every send queue, and the new image would send it twice. */
-  log_write(LS_SYSTEM, L_NOTICE, 0, "Reload pre-flight ok, exec'ing %s", SPATH);
-  sendto_opmask_butone(0, SNO_OLDSNO, "Reload pre-flight ok, exec'ing %s",
-                       SPATH);
-
-  /* The pre-flight child read the dump to EOF through the file offset it
-   * shares with us. */
   lseek(dumpfd, 0, SEEK_SET);
 
   for (listener = ListenerPollList; listener; listener = listener->next)
@@ -378,6 +502,24 @@ int server_reload(const char *reason, struct Client *by)
   for (i = 0; i <= HighestFd; i++) {
     if (!(cptr = LocalClientArray[i]) || cptr == &me)
       continue;
+
+    /* The same predicate the dump filters on, applied again here because the
+     * flush_connections(0) above can change the answer: a write that hits
+     * EPIPE runs dead_link(), which marks the client dead and takes it off
+     * the poll set but leaves both the descriptor open and the Client in
+     * LocalClientArray.  Such a client is in no dump, so nothing in the new
+     * image will ever own its socket; carrying the descriptor across the exec
+     * would leak it for the life of the process with the peer left hanging on
+     * a connection nobody reads.  Skipping it here drops it through to
+     * hr_close_all_except() below, and the close puts a FIN on the wire. */
+    if (!hotreload_client_carriable(cptr)) {
+      /* A kernel-offloaded session gets its close_notify first: the peer's
+       * TLS stack reads a bare FIN as a truncation attack and reports it as
+       * an error rather than as a clean disconnect. */
+      if (IsTLS(cptr) && IsTLSRaw(cptr) && cli_fd(cptr) >= 0)
+        tls_ktls_send_close_notify(cli_fd(cptr));
+      continue;
+    }
 
     /* Free the library session but leave the socket, and the kernel record
      * state on it, exactly as it is: the new image drives it raw. */
@@ -418,24 +560,75 @@ int server_reload(const char *reason, struct Client *by)
   log_reopen();
   log_write(LS_SYSTEM, L_CRIT, 0, "execv(%s) failed after reload: %m", SPATH);
   exit(8);
+
+  /* NOTREACHED.  by_exited is read here only so that the shedding walk's
+   * bookkeeping is not dead code to the compiler. */
+  return by_exited;
 }
 
-/** Write a state dump to a file, for debugging.
- * @param[in] path File to write the dump to.
- * @return Non-zero on success, zero on failure.
+/** Write a state dump to a file below RELOAD_DUMP_DIR, for debugging.
+ *
+ * A state dump holds every local user's nick, host, address, account,
+ * operator privileges, silence list and pending send queue, so the file it
+ * lands in must be chosen by the administrator and not by whoever types the
+ * command.  Three rules do that:
+ *
+ *   - \a name is a plain file name.  Anything holding a '/', and the two
+ *     directory names "." and "..", is refused, so the dump cannot be steered
+ *     out of the configured directory by a relative or absolute path;
+ *   - the directory is RELOAD_DUMP_DIR, or the working directory (DPATH) when
+ *     that feature is unset.  It is never taken from the command;
+ *   - the file is created with O_EXCL | O_NOFOLLOW and mode 0600, so an
+ *     existing file, a symlink planted in the directory, or a file whose
+ *     permissions someone widened beforehand all fail rather than being
+ *     written through.  O_EXCL means a dump never overwrites, which also
+ *     rules out truncating a file the server itself needs.
+ *
+ * @param[in] name Plain file name to write the dump to.
+ * @return Non-zero on success, zero on failure with errno set.
  */
-int hotreload_dump_to_path(const char *path)
+int hotreload_dump_to_path(const char *name)
 {
+  const char *dir;
+  char path[1024];
   FILE *f;
   int ok;
+  int fd;
 
-  if (!(f = fopen(path, "w")))
+  if (!name || !*name || strchr(name, '/') || !strcmp(name, ".")
+      || !strcmp(name, "..")) {
+    errno = EINVAL;
+    return 0;
+  }
+
+  dir = feature_str(FEAT_RELOAD_DUMP_DIR);
+  if (!dir || !*dir)
+    dir = ".";                  /* DPATH: the daemon's working directory */
+
+  ircd_snprintf(0, path, sizeof(path), "%s/%s", dir, name);
+
+  fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+  if (fd < 0)
     return 0;                   /* errno is the caller's to report */
+
+  if (!(f = fdopen(fd, "w"))) {
+    int saved = errno;
+
+    close(fd);
+    errno = saved;
+    return 0;
+  }
 
   ok = hotreload_dump(f);
 
   if (fclose(f))
     ok = 0;
+
+  /* EINVAL is reserved for the name check above, which is the one failure
+   * m_reload.c reports back to the oper by name; a write error that happened
+   * to leave EINVAL behind must not be dressed up as a bad file name. */
+  if (!ok && EINVAL == errno)
+    errno = EIO;
 
   return ok;
 }
