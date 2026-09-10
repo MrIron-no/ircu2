@@ -239,7 +239,11 @@ async def ban_list(client: IRCClient, channel: str, timeout: float = 10.0) -> li
             raise asyncio.TimeoutError(f"MODE {channel} b never reached 368")
         msg = await client.recv(timeout=remaining)
         if msg.command == "367":
-            masks.append(msg.params[1])
+            # RPL_BANLIST is ":server 367 <nick> <channel> <banmask> <who>
+            # <when>" (ircd/s_err.c format "%s %s %s %Tu" plus the auto-
+            # prepended requester nick), so the ban mask is params[2]; params[1]
+            # is the channel name.
+            masks.append(msg.params[2])
         elif msg.command == "368":
             return masks
 
