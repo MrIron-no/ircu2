@@ -69,6 +69,8 @@ struct Client;
  */
 extern void SetRemoteNumNick(struct Client* cptr, const char* yxx);
 extern int  SetLocalNumNick(struct Client* cptr);
+extern int  SetLocalNumNickAt(struct Client* cptr, unsigned int index);
+extern unsigned int LocalNumNickIndex(const struct Client* cptr);
 extern void RemoveYXXClient(struct Client* server, const char* yxx);
 extern void SetServerYXX(struct Client* cptr, 
                          struct Client* server, const char* yxx);

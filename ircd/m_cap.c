@@ -62,6 +62,83 @@ static struct capabilities {
 
 #define CAPAB_LIST_LEN	(sizeof(capab_list) / sizeof(struct capabilities))
 
+/** Write the names of the capabilities in \a set into \a buf.
+ * Names are separated by spaces and the result is always NUL terminated;
+ * it is truncated at a whole name if it does not fit.
+ * @param[in] set Capability bit mask to describe.
+ * @param[out] buf Buffer to write the names to.
+ * @param[in] len Size of \a buf in bytes.
+ */
+void
+cap_set_to_string(capset_t set, char *buf, size_t len)
+{
+  size_t pos = 0;
+  unsigned int i;
+
+  assert(0 != buf);
+
+  if (0 == len)
+    return;
+  buf[0] = '\0';
+
+  /* capab_list is qsort()ed at run time, so never assume an order here. */
+  for (i = 0; i < CAPAB_LIST_LEN; i++) {
+    size_t nlen;
+
+    if (!CapHas(set, capab_list[i].cap))
+      continue;
+
+    nlen = capab_list[i].namelen;
+    if (pos + nlen + (pos ? 1 : 0) >= len)
+      break;                            /* Would not fit; stop on a whole name */
+    if (pos)
+      buf[pos++] = ' ';
+    memcpy(buf + pos, capab_list[i].name, nlen);
+    pos += nlen;
+    buf[pos] = '\0';
+  }
+}
+
+/** Translate a list of capability names into a bit mask.
+ * Names that are not known are ignored.
+ * @param[in] names Space separated list of capability names, may be NULL.
+ * @return Bit mask of the recognized capabilities.
+ */
+capset_t
+cap_set_from_string(const char *names)
+{
+  const char *p = names;
+  capset_t set = 0;
+  unsigned int i;
+
+  if (!names)
+    return set;
+
+  while (*p) {
+    const char *start;
+    size_t nlen;
+
+    while (' ' == *p)
+      p++;
+    if (!*p)
+      break;
+
+    start = p;
+    while (*p && ' ' != *p)
+      p++;
+    nlen = p - start;
+
+    for (i = 0; i < CAPAB_LIST_LEN; i++)
+      if ((size_t)capab_list[i].namelen == nlen
+          && 0 == ircd_strncmp(capab_list[i].name, start, nlen)) {
+        CapSet(set, capab_list[i].cap);
+        break;
+      }
+  }
+
+  return set;
+}
+
 void cap_set_value(enum Capab cap, const char *value)
 {
   if (cap >= _E_CAP_LAST_CAP || !value)

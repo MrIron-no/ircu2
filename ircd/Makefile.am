@@ -19,6 +19,10 @@ ircd_SOURCES = \
 	fileio.c \
 	gline.c \
 	hash.c \
+	hotreload.c \
+	hotreload_dump.c \
+	hotreload_load.c \
+	hotreload_wire.c \
 	ircd.c \
 	ircd_alloc.c \
 	ircd_crypt.c \
@@ -87,6 +91,7 @@ ircd_SOURCES = \
 	m_pseudo.c \
 	m_quit.c \
 	m_rehash.c \
+	m_reload.c \
 	m_reset.c \
 	m_restart.c \
 	m_rping.c \
@@ -143,6 +148,7 @@ ircd_SOURCES = \
 	send.c \
 	sline.c \
 	tls_io.c \
+	tls_ktls.c \
 	uping.c \
 	userload.c \
 	websocket.c \

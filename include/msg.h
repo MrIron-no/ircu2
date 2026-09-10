@@ -272,6 +272,10 @@ struct Client;
 #define TOK_RESTART             "RESTART"
 #define CMD_RESTART		MSG_RESTART, TOK_RESTART
 
+#define MSG_RELOAD              "RELOAD"        /* RELO */
+#define TOK_RELOAD              "RELOAD"
+#define CMD_RELOAD		MSG_RELOAD, TOK_RELOAD
+
 #define MSG_CLOSE               "CLOSE"         /* CLOS */
 #define TOK_CLOSE               "CLOSE"
 #define CMD_CLOSE		MSG_CLOSE, TOK_CLOSE

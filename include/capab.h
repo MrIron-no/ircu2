@@ -85,4 +85,10 @@ void cap_new(enum Capab cap);
 /** Send CAP DEL to clients with cap-notify capability */
 void cap_del(enum Capab cap);
 
+/** Write the names of the capabilities in a set to a buffer */
+void cap_set_to_string(capset_t set, char *buf, size_t len);
+
+/** Translate a space separated list of capability names into a bit mask */
+capset_t cap_set_from_string(const char *names);
+
 #endif /* INCLUDED_capab_h */
