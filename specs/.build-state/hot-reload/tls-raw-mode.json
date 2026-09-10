@@ -1,13 +1,20 @@
 {
   "name": "Raw-mode kTLS I/O",
-  "status": "in_progress",
+  "status": "completed",
   "agentType": "builder",
   "startedAt": "2026-09-10T14:08:05",
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T14:08:05",
-  "description": null,
-  "commitSha": null,
-  "filesChanged": [],
+  "completedAt": "2026-09-10T14:26:02",
+  "lastUpdated": "2026-09-10T14:26:02",
+  "description": "Raw-mode kTLS I/O (6ea3710): tls_ktls.c, tls_io.c raw branches, s_bsd.c guards, close_notify on close; tests 9/9; reviewed APPROVED; merged (Makefile.am conflict resolved by orchestrator).",
+  "commitSha": "3660c3a31ec3c3173774d4c5a2d78d18c6bbcf7f",
+  "filesChanged": [
+    "ircd/s_bsd.c",
+    "ircd/test/Makefile.am",
+    "ircd/test/tls_io_t.c",
+    "ircd/test/tls_ktls_t.c",
+    "ircd/tls_io.c",
+    "ircd/tls_ktls.c"
+  ],
   "dependsOn": [
     "foundation"
   ]

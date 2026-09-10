@@ -1,10 +1,10 @@
 {
   "name": "Dump loader and adoption",
-  "status": "pending",
+  "status": "in_progress",
   "agentType": "builder",
-  "startedAt": null,
+  "startedAt": "2026-09-10T14:26:02",
   "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
+  "lastUpdated": "2026-09-10T14:26:02",
   "description": null,
   "commitSha": null,
   "filesChanged": [],

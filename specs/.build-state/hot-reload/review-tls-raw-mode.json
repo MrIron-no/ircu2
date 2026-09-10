@@ -1,11 +1,11 @@
 {
   "name": "Review raw mode",
-  "status": "pending",
+  "status": "completed",
   "agentType": "reviewer",
   "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
-  "description": null,
+  "completedAt": "2026-09-10T14:26:02",
+  "lastUpdated": "2026-09-10T14:26:02",
+  "description": "APPROVED: 0 critical, 0 important, 3 minor (malformed-but-present cmsg treated as data; comment wording; loader must only set IsTLSRaw for offloaded sessions).",
   "commitSha": null,
   "filesChanged": [],
   "dependsOn": [
