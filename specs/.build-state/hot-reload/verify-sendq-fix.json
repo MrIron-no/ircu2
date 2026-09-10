@@ -1,0 +1,11 @@
+{
+  "name": "Verify sendq fix 10x",
+  "status": "in_progress",
+  "agentType": "tester",
+  "startedAt": "2026-09-11T00:35:08",
+  "lastUpdated": "2026-09-11T00:35:08",
+  "description": "Run blocked-sendq repro 10x for the intermittent-bug fix; characterize keyupdate-after-reload test.",
+  "dependsOn": [
+    "hotreload-debug-3"
+  ]
+}
