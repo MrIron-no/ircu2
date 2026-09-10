@@ -708,6 +708,66 @@ void add_connection(struct Listener* listener, int fd) {
     start_auth(new_client);
 }
 
+/** Adopt an already established connection inherited across a hot reload.
+ *
+ * The socket is live and past every gate add_connection() guards: the peer was
+ * admitted, throttle-checked, authenticated and (where applicable) TLS
+ * negotiated by the process we replaced.  So this deliberately does none of
+ * that -- no IPcheck, no ircd_tls_accept(), no start_auth(), no handshake
+ * timer -- it only rebuilds the local Client and re-registers the descriptor
+ * with the event engine.  The dump's own records restore the client's state,
+ * and hotreload_load.c does the IPcheck_adopt() that replaces the throttle
+ * check.  It lives here because client_sock_callback() is static to this file.
+ *
+ * @param[in] fd Inherited descriptor for the connection.
+ * @param[in] listener Listener the connection arrived on; may be NULL.
+ * @param[in] is_ws Non-zero if the connection is a WebSocket client.
+ * @return New client, or NULL on failure.  On failure \a fd is left open:
+ *   the caller decides whether to close it or report it.
+ */
+struct Client* adopt_connection(int fd, struct Listener* listener, int is_ws)
+{
+  struct irc_sockaddr addr;
+  struct Client      *new_client;
+
+  if (!os_set_nonblocking(fd))
+    return NULL;
+
+  /* Same rationale as add_connection(): drop any IP source route. */
+  os_disable_options(fd);
+
+  if (!os_get_peername(fd, &addr))
+    return NULL;
+
+  new_client = make_client(0, is_ws ? STAT_WEBSOCKET : STAT_UNKNOWN_USER);
+
+  /*
+   * Copy ascii address to 'sockhost' just in case. Then we have something
+   * valid to put into error messages...
+   */
+  ircd_ntoa_r(cli_sock_ip(new_client), &addr.addr);
+  strcpy(cli_sockhost(new_client), cli_sock_ip(new_client));
+  memcpy(&cli_ip(new_client), &addr.addr, sizeof(cli_ip(new_client)));
+
+  cli_fd(new_client) = fd;
+  if (!socket_add(&(cli_socket(new_client)), client_sock_callback,
+		  (void*) cli_connect(new_client), SS_CONNECTED, 0, fd)) {
+    ++ServerStats->is_bad_socket;
+    cli_fd(new_client) = -1;
+    free_client(new_client);
+    return NULL;
+  }
+  cli_freeflag(new_client) |= FREEFLAG_SOCKET;
+
+  if (listener) {
+    cli_listener(new_client) = listener;
+    ++listener->ref_count;
+  }
+
+  Count_newunknown(UserStats);
+  return new_client;
+}
+
 /** Determines whether to tell the events engine we're interested in
  * writable events.
  * @param cptr Client for which to decide this.
