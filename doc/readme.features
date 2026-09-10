@@ -100,6 +100,32 @@ lines consume the same flood budget.  A reasonable value is 1024 bytes.
 Class maxflood overrides this per class; setting maxflood above
 CLIENT_FLOOD also exempts that class from input throttling.
 
+RELOAD_TIMEOUT
+ * Type: integer
+ * Default: 15
+
+Seconds the server waits for the pre-flight check of a RELOAD (see
+doc/readme.reload) to finish before giving up and aborting the reload,
+leaving the running server untouched.  The wait blocks the event loop, so
+this is clamped to the range 1-30 regardless of what is configured here:
+a value of 0 would fail every reload outright, and a very large value
+could wedge the server behind one hung child; half a minute of a frozen
+event loop is already as much as a network will tolerate.
+
+RELOAD_DUMP_DIR
+ * Type: string
+ * Default: none (the server's own working directory, DPATH)
+
+Directory under which "RELOAD DUMP <name>" (see doc/readme.reload) writes
+state dump files.  This feature can only be set from an F: line in
+ircd.conf; it is read-only at runtime and cannot be changed with /SET, so
+the one directory a dump can land in is an administrator's choice and not
+that of whichever oper happens to request the dump.  A state dump holds
+every local user's nick, host, IP address, account, operator privileges,
+silence list and queued output, and every channel's key, upass and apass,
+all in cleartext, so this should be a directory only the server
+administrator can read.
+
 CLIENT_TAG_FLOOD
  * Type: integer
  * Default: 8192
@@ -992,6 +1018,24 @@ When TRUE, TLS connections whose Port or Connect block does not set
 "tls systemca" and does not set "tls cacertfile" or "tls cacertdir"
 will load the operating system's trusted CA certificate store.  Per-block
 TLS trust settings are documented in doc/example.conf.
+
+TLS_KTLS
+ * Type: boolean
+ * Default: TRUE
+
+When TRUE, this server's OpenSSL backend hands each TLS session's record
+layer to the kernel (kernel TLS, "kTLS") once the handshake has produced
+keys, on platforms and ciphers that support it -- see doc/readme.reload
+for the full platform requirements.  A GnuTLS backend ignores this
+feature entirely; GnuTLS opts into kTLS system-wide, through
+"[global] ktls = true" in its own configuration file, not per session.
+A session that ends up kernel-offloaded survives a hot RELOAD; one that
+does not is closed and must reconnect.  The one reason to set this to
+FALSE is a kernel without TLS-transmit rekey support (Linux older than
+6.14): there, a peer-initiated TLS 1.3 KeyUpdate on an offloaded
+connection ends the connection outright, so an operator who must support
+KeyUpdate-heavy clients on such a kernel should disable kTLS altogether
+and accept that every TLS client reconnects on every RELOAD instead.
 
 NETWORK_FEATURES
  * Type: boolean

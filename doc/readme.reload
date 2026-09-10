@@ -1,0 +1,254 @@
+RELOAD documentation, last updated on 10 Sep 2026
+
+* Overview.
+
+RELOAD installs a new ircd binary and puts it into service without
+disconnecting the server's registered local clients.  It is meant for
+routine ircd upgrades: replace the binary at the configured SPATH, then
+ask the running server to re-exec itself.  The same code path is also
+reachable by sending the running process SIGUSR2.
+
+A reload is not free of disruption.  Server links are always dropped and
+have to reconnect and re-burst -- expect a brief netsplit on every
+occasion, and the network will see this server part and rejoin.  Channel
+timestamps are carried across the reload, so the re-burst does not
+net-ride any channel: no deopping, no ban wipe.  A *client* disconnect is
+not expected, and is the one thing this feature exists to avoid; the
+exceptions are listed under "What is dropped", below.
+
+* Command.
+
+  RELOAD
+  RELOAD DUMP <name>
+
+Plain RELOAD requires the RESTART privilege.  It logs the request, then
+attempts the sequence described below.  If the sequence aborts, the
+command returns to the caller normally; if it succeeds, the process
+execs and the command never returns -- the connection that issued it is
+one of the ones carried across, unless it happens to be a TLS session
+that could not be offloaded to the kernel, in which case typing RELOAD
+closes that oper's own connection along with every other non-carriable
+one.
+
+RELOAD DUMP is documented in its own section, below.
+
+* The reload sequence.
+
+1. Cheap sanity checks.  The configured server binary (SPATH) must be
+   executable, and a temporary file must be creatable.  Either failure
+   aborts immediately -- this is what a half finished install or a full
+   or read-only temp directory looks like.
+
+2. The server writes a full dump of its state to the temporary file (see
+   "What is carried", below), then forks a pre-flight child: the same
+   binary, executed with internal flags that tell it to read the dump,
+   rebuild every client and channel in memory, and exit -- without ever
+   opening a listening socket or writing to a client.  This is a dry run
+   of the new binary against the exact state the real reload would hand
+   it.
+
+3. The server waits for the pre-flight child to finish, for up to
+   RELOAD_TIMEOUT seconds (default 15; the server clamps this feature to
+   the 1-30 range, because the wait blocks the event loop and nothing
+   else is served while it runs).
+
+   If the pre-flight child fails -- it does not exist inside the
+   deadline, it is killed by a signal, or it exits with a non-zero
+   status -- the reload is aborted right here.  Nothing has been shed:
+   every server link, every client, every listener is exactly as it was
+   before RELOAD was typed.  The reason is logged and sent to opers via
+   server notice, e.g. "Reload aborted: pre-flight check failed (exit
+   status 1)".  This is the server's insurance against execing into a
+   binary that cannot actually serve its own state -- a bad install, an
+   incompatible dump format, a typo'd SPATH.
+
+4. Only once the pre-flight has said yes does the server shed anything.
+   Server links are SQUIT.  Connections that are not yet registered
+   users -- still in the connect/handshake phase, including WEBIRC and
+   WebSocket handshakes -- are closed.  TLS sessions whose record layer
+   is still living in the TLS library rather than in the kernel are
+   closed too, with a notice asking the client to reconnect.  Any LIST
+   in progress on a surviving client is cancelled.
+
+5. A second dump is written over the same file, this time reflecting the
+   state as it actually is after the shed (send queues now hold the
+   QUIT/ERROR lines just queued, closed connections are gone).  A
+   failure at this point is unrecoverable -- there is no way back once
+   the links are down -- so the server exits outright rather than exec
+   into a truncated dump; a process supervisor restarting it is a clean
+   cold boot that every remaining client sees as a reconnect.
+
+6. Every file descriptor the new image will need -- the surviving client
+   sockets, the listening sockets, and the dump itself -- is kept; every
+   other descriptor (the event engine, log files, the resolver socket,
+   any iauth child's pipes, the pid file lock) is closed, so nothing
+   leaks across the exec.
+
+7. The server execv()s the same binary at the same path, with the same
+   process id, passing the descriptor number of the dump on the command
+   line.  The new image reads the dump before it touches the
+   configuration file, reclaims the inherited listening sockets by
+   address and port instead of re-binding them (so there is no window
+   where new connections are refused), re-reads ircd.conf exactly as a
+   REHASH would, and then rebuilds every carried client and channel from
+   the dump.  Each client is re-run through the same authorization check
+   REHASH performs (matching Client/I-line blocks); one that no longer
+   passes is disconnected with "No longer authorized".  An already-opered
+   client keeps the operator privileges recorded in the dump rather than
+   having them re-derived from the current Operator blocks -- the same
+   behaviour REHASH already has for existing opers.
+
+Because the process id, the descriptor table, and the client and
+listener sockets never change, a supervisor watching the pid (systemd,
+docker's own pid-1 handling) sees this as the same, continuously running
+service throughout.
+
+Whatever arrives on a client or listener socket during the roughly one
+second the handoff takes simply waits in the kernel's socket receive
+buffer; nothing is lost or read twice.
+
+* What is carried across a reload.
+
+  - Every registered local user: nick, user modes, snomask, channels and
+    per-channel status (op, voice, delayed-join), bans they have set,
+    topics, pending invites, silence list, away message, negotiated
+    IRCv3 capabilities, account name/id/flags, and operator status and
+    privileges.
+  - G-lines, jupes, S-lines, and netconf entries.
+  - The network time offset.
+  - Server statistics (connection counts, message and byte counters,
+    and the rest of the numbers /STATS reports).
+  - Each client's unsent output (sendQ) and unprocessed input (recvQ),
+    so nothing queued at the moment of reload is dropped.
+
+* What is dropped, and why.
+
+  - Server links.  A server connection cannot be hot-reloaded; it is
+    SQUIT and must reconnect and re-burst on its own.  Because channel
+    creation timestamps are part of the dump, the re-burst does not
+    net-ride channels back to a pre-op state.
+
+  - Unregistered and handshaking connections: anything that has not yet
+    become a registered user, including connections mid-WEBIRC or
+    mid-WebSocket handshake.  There is no user state yet worth carrying,
+    and the new image has no way to resume a handshake it did not start.
+
+  - TLS sessions whose record layer is not kernel-offloaded at the
+    moment of reload.  The library object that holds the session's keys
+    and record state lives in this process' memory, not in the kernel,
+    and it does not survive the exec.  Such a client gets a clean TLS
+    close and must reconnect.  See "Kernel TLS requirements", below, for
+    how to make a session offloadable so it survives instead.
+
+  - A LIST in progress is ended; the client must issue LIST again
+    afterwards.
+
+  - Whowas history, IPcheck's clone/throttle history, and the rolling
+    userload averages.  These are caches and statistics windows, not
+    user-visible state, and are rebuilt/restarted fresh.
+
+  - Anything in flight that is neither a client nor a server socket:
+    outstanding DNS lookups, ident lookups, iauth exchanges, SASL
+    exchanges in progress, and UPING requests.  These belong to
+    connections that are themselves not carried (they are pre-registration
+    activity) or to helper processes that die with the old image.
+
+* Kernel TLS requirements.
+
+A TLS client's session survives a reload only when its record layer has
+been handed off to the kernel ("kernel TLS", kTLS) before the reload
+runs -- otherwise the session state lives in the TLS library and is lost
+with the old process image.  What is needed for that hand-off to happen
+depends on platform and TLS backend:
+
+  - Linux: the "tls" kernel module must be loaded ("sudo modprobe tls"),
+    and either OpenSSL 3.x built with kTLS support, or GnuTLS with
+    "[global] ktls = true" set in the system-wide GnuTLS configuration
+    file (GnuTLS has no per-session switch for this -- it is a
+    library-wide opt-in, so ircu's TLS_KTLS feature has no effect on a
+    GnuTLS build).
+
+  - FreeBSD: the kern.ipc.tls.enable sysctl must be set to 1.
+
+  - OpenBSD's libtls has no kernel TLS offload at all.  A server built
+    against libtls always sheds its TLS clients on reload; they simply
+    reconnect.
+
+Only sessions negotiated with AES-GCM or ChaCha20-Poly1305 on TLS 1.2 or
+TLS 1.3 can be offloaded; anything else stays in the library and is
+dropped on reload regardless of platform.
+
+The TLS_KTLS feature (boolean, default TRUE) controls whether this
+server's OpenSSL backend asks for kTLS offload at all; turn it off and
+no session on this server is ever eligible to survive a reload. There is
+one reason to do that: on a kernel without TLS-transmit rekey support
+(Linux older than 6.14), a peer-initiated TLS 1.3 KeyUpdate on an
+offloaded connection cannot be serviced by the kernel and ends the
+connection outright. An operator whose clients send KeyUpdate and who
+cannot yet run a kernel with rekey support should set TLS_KTLS to FALSE
+and accept that every TLS client reconnects on every reload, rather than
+risk that same disconnect landing on any TLS 1.3 KeyUpdate at an
+arbitrary moment.
+
+* RELOAD DUMP: writing a state dump to disk.
+
+  RELOAD DUMP <name>
+
+This writes the same state dump a reload would use to a file on disk,
+for inspection or debugging, without actually reloading. It is not a
+lesser command than RELOAD: the file it produces holds enough to
+reconstruct the server's entire client state, so the requirements
+around it are correspondingly strict.
+
+  - The caller needs both the RESTART privilege and the DIE privilege.
+    A dump is at least as sensitive as the ability to shut the server
+    down, so both are required together.
+  - <name> must be a plain file name: it must not contain a '/', and it
+    must not be "." or "..".  This is enforced so the command can never
+    be used to write outside the configured directory.
+  - The file is created below the directory named by the RELOAD_DUMP_DIR
+    feature.  That feature can only be set from ircd.conf (an F: line);
+    it cannot be changed with /SET at runtime, so the directory a dump
+    can land in is an administrator's choice, not the requesting oper's.
+    If RELOAD_DUMP_DIR is unset, the dump lands in the server's own
+    working directory (DPATH).
+  - The file is opened O_EXCL and O_NOFOLLOW, mode 0600: it is refused
+    outright if a file of that name already exists, or if that name is a
+    symlink.  A dump never overwrites anything.
+  - Every RELOAD DUMP request is logged and announced to opers via
+    server notice, whether or not it actually succeeds at writing
+    anything.
+
+WARNING: a state dump is written in cleartext and contains sensitive
+data -- every local user's real IP address, account name, and operator
+privileges; every client's queued but unsent message bytes; and every
+channel's key, upass and apass. Treat a dump file exactly as you would
+treat the server's own configuration secrets, and delete it once you are
+done with it. This is also why RELOAD_DUMP_DIR should point somewhere
+only the server administrator can read.
+
+* Internal flags: -R and -K.
+
+The command line the new image is exec'd with carries "-R <fd>" (and,
+for the pre-flight child only, "-K") to tell it that it is starting from
+a hot-reload state dump rather than a cold boot. These flags are set by
+the reload machinery itself; there is no reason to pass them by hand,
+and doing so on a real boot will make the server try to adopt file
+descriptors that do not mean what it expects.
+
+* Performing an upgrade.
+
+To upgrade a running server in place:
+
+  1. Build or install the new ircd binary at the path this server was
+     configured with (SPATH).
+  2. Issue /RELOAD as an operator with the RESTART privilege, or send
+     the running process SIGUSR2.
+
+The server will run the sequence above against the new binary. If the
+new binary cannot serve the current state -- an incompatible dump
+format, a build that is missing something the old process's clients
+depend on -- the pre-flight step catches it and the reload aborts with
+the old binary still running, untouched. If it succeeds, the upgrade is
+live within about a second, with every registered client's connection
+intact.
