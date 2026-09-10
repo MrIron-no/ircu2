@@ -230,6 +230,41 @@ const char *dbuf_map(const struct DBuf* dyn, unsigned int* length)
   return dyn->head->start;
 }
 
+/** Copy data out of a DBuf without consuming it.
+ *
+ * Unlike dbuf_get(), which is destructive, and dbuf_map(), which only ever
+ * exposes the first chunk, this walks the whole chain and leaves it exactly
+ * as it found it.  Used by the hot reload dumper, which has to serialize a
+ * connection's unparsed input while the connection stays live.
+ *
+ * @param[in] dyn Buffer to copy from.
+ * @param[out] buf Buffer to write to.
+ * @param[in] length Maximum number of bytes to copy.
+ * @return Number of bytes actually copied.
+ */
+unsigned int dbuf_copyout(const struct DBuf *dyn, char *buf,
+                          unsigned int length)
+{
+  const struct DBufBuffer *db;
+  unsigned int copied = 0;
+  unsigned int chunk;
+
+  assert(0 != dyn);
+  assert(0 != buf);
+
+  for (db = dyn->head; db && length > 0; db = db->next)
+  {
+    chunk = db->end - db->start;
+    if (chunk > length)
+      chunk = length;
+
+    memcpy(buf + copied, db->start, chunk);
+    copied += chunk;
+    length -= chunk;
+  }
+  return copied;
+}
+
 /** Discard data from a DBuf.
  * @param[in,out] dyn DBuf to drop data from.
  * @param[in] length Number of bytes to discard.
