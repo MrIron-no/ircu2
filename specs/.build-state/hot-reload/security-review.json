@@ -1,0 +1,14 @@
+{
+  "name": "Security review",
+  "status": "completed",
+  "agentType": "security-reviewer",
+  "startedAt": "2026-09-10T16:31:16",
+  "completedAt": "2026-09-10T17:14:27",
+  "lastUpdated": "2026-09-10T17:14:27",
+  "description": "Two audit passes. Pass 1: C1 arbitrary file write/exfil via RELOAD DUMP, I1 preflight NULL deref, I2 shed-before-validate, I3 unbounded wait, I4 IPcheck off-by-one. Pass 2 re-audit after fix: 3 more importants (runtime-settable dump dir, keep-set predicate drift/fd leak, O(n^2) reserved-fd scan). All fixed across 226be92+5255dc5, both APPROVED; merged f12d268.",
+  "commitSha": "f12d268959dea5e8202033d7debea6d790af8294",
+  "filesChanged": [],
+  "dependsOn": [
+    "hotreload-orchestration"
+  ]
+}

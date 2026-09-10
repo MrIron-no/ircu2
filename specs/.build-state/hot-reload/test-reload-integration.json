@@ -4,8 +4,8 @@
   "agentType": "tester",
   "startedAt": "2026-09-10T16:12:36",
   "completedAt": null,
-  "lastUpdated": "2026-09-10T16:12:36",
-  "description": null,
+  "lastUpdated": "2026-09-10T17:14:27",
+  "description": "Suite written (tests/hotreload/, 20 tests + keyupdate kTLS-aware). Found 3 product bugs: #1/#2 RELOAD issuer deaf after its own successful reload; #3 leaf<->hub link asymmetry after relink. Debugger hotreload-debug-1 dispatched on the security-fix branch. 5 tests xfail pending re-run against merged DUMP contract.",
   "commitSha": null,
   "filesChanged": [],
   "dependsOn": [
