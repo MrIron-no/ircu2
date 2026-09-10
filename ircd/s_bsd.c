@@ -39,6 +39,7 @@
 #include "ircd_string.h"
 #include "ircd_tls.h"
 #include "tls_io.h"
+#include "tls_ktls.h"
 #include "ircd.h"
 #include "list.h"
 #include "listener.h"
@@ -294,8 +295,12 @@ unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf)
   /* A TLS client whose session was torn down (a fatal error already freed it)
    * must never fall through to the plaintext os_sendv_nonb path, or queued
    * data would leak in the clear.  The backend marks such a client dead; keep
-   * the invariant here too. */
-  if (IsTLS(cptr) && !s_tls(&cli_socket(cptr))) {
+   * the invariant here too.
+   *
+   * raw kTLS: a hot-reloaded connection legitimately has no library session --
+   * the kernel holds the keys and encrypts what we write -- so "no s_tls" is
+   * its normal state, not a torn-down one.  Nothing leaks in the clear. */
+  if (IsTLS(cptr) && !IsTLSRaw(cptr) && !s_tls(&cli_socket(cptr))) {
     SetFlag(cptr, FLAG_DEADSOCKET);
     return 0;
   }
@@ -316,7 +321,11 @@ unsigned int deliver_it(struct Client *cptr, struct MsgQ *buf)
      * actually blocked (WANT_WRITE/EAGAIN). Treating TLS short writes as
      * FLAG_BLOCKED busy-loops on ET_WRITE while POLLOUT stays ready.
      */
-    if (!IsTLS(cptr) && bytes_written < bytes_count)
+    /* raw kTLS goes out through os_sendv_nonb() like a plain socket, so a
+     * short write there does mean a full send buffer and must set
+     * FLAG_BLOCKED -- the TLS exemption above applies only to library-driven
+     * sessions, whose short writes come from record framing instead. */
+    if ((!IsTLS(cptr) || IsTLSRaw(cptr)) && bytes_written < bytes_count)
       SetFlag(cptr, FLAG_BLOCKED);
     break;
   case IO_BLOCKED:
@@ -502,6 +511,12 @@ void close_connection(struct Client *cptr)
       ircd_tls_close(s_tls(&cli_socket(cptr)), NULL);
       s_tls(&cli_socket(cptr)) = NULL;
     }
+    /* raw kTLS: no library session to run a shutdown, so emit the
+     * close_notify alert straight through the kernel record layer.  Without
+     * it the peer's TLS stack reports a truncation attack rather than an
+     * orderly close.  Best effort -- the close proceeds regardless. */
+    if (IsTLSRaw(cptr))
+      tls_ktls_send_close_notify(cli_fd(cptr));
     close(cli_fd(cptr));
     socket_del(&(cli_socket(cptr))); /* queue a socket delete */
     cli_fd(cptr) = -1;
@@ -705,6 +720,11 @@ void update_write(struct Client* cptr)
    * write), so that decision is delegated to tls_io.c, which owns the single
    * TLS-aware interest rule.  Plaintext connections never consult the TLS
    * module.  Readable interest is managed separately.
+   *
+   * raw kTLS connections take the TLS branch as well: tls_want_writable()
+   * recognises them and returns the plaintext answer.  Keeping the decision in
+   * that one function means the loader can flip a client into raw mode and
+   * simply call update_write() here without a second rule to keep in step.
    */
   int want_write = IsTLS(cptr)
     ? tls_want_writable(cptr)
@@ -764,8 +784,9 @@ static int read_packet(struct Client *cptr, int socket_ready)
   }
 
   /* A TLS client whose session was torn down must not read plaintext off the
-   * socket; treat it as a fatal read (its FLAG_DEADSOCKET is already set). */
-  if (IsTLS(cptr) && !s_tls(&cli_socket(cptr)))
+   * socket; treat it as a fatal read (its FLAG_DEADSOCKET is already set).
+   * raw kTLS has no library session by design -- see deliver_it(). */
+  if (IsTLS(cptr) && !IsTLSRaw(cptr) && !s_tls(&cli_socket(cptr)))
     return 0;
 
   if (socket_ready &&

@@ -27,9 +27,13 @@
 #include "msgq.h"
 #include "tls_io.h"
 
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/uio.h>
+#include <unistd.h>
 
 extern struct Client me;
 
@@ -42,6 +46,29 @@ void kill_highest_sendq(int servers_too) { (void)servers_too; }
 int send_reply(struct Client *to, int reply, ...) { (void)to; (void)reply; return 0; }
 void server_panic(const char *message) { (void)message; }
 const char *visible_username(const struct Client *cptr) { (void)cptr; return ""; }
+
+/* Raw kTLS mode writes through os_sendv_nonb().  Stubbed rather than linked:
+ * os_generic.o drags in report_error() and the daemon's error-message globals,
+ * i.e. most of s_bsd.o, for one function.  The counter lets the raw-mode test
+ * prove the plaintext path was taken -- and the scripted tls_backend_write()
+ * below asserts if it is reached without a script, so a raw send that wrongly
+ * went through the TLS backend aborts the test rather than passing quietly. */
+static int plain_sendv_calls;
+IOResult os_sendv_nonb(int fd, struct MsgQ *buf, unsigned int *count_in,
+                       unsigned int *count_out)
+{
+  struct iovec iov[64];
+  int i, n;
+
+  (void)fd;
+  ++plain_sendv_calls;
+  *count_in = 0;
+  *count_out = 0;
+  n = msgq_mapiov(buf, iov, sizeof(iov) / sizeof(iov[0]), count_in);
+  for (i = 0; i < n; ++i)                /* a socket that accepts everything */
+    *count_out += iov[i].iov_len;
+  return *count_out ? IO_SUCCESS : IO_BLOCKED;
+}
 
 /* --- settable policy predicates (real ones live in s_conf.c) --- */
 static int fake_cert_required;
@@ -249,6 +276,117 @@ static void test_interest_truth_table(void)
 
   assert(cases == 36);
   printf("Passed: interest truth table (%d cases)\n", cases);
+}
+
+/* Raw kTLS mode (a session hot-reloaded across an exec: IsTLS but no library
+ * session, the kernel owning the record layer) has no cross-direction blocking
+ * to model -- a raw write is a plain socket write and a raw read a plain
+ * recvmsg.  So the interest rule must fall back to the plaintext one and
+ * ignore con_tls_want_rd/wr entirely, whatever stale values they hold.  Were
+ * they still consulted, a leftover WANT_READ from before the reload would pin
+ * writable interest off and park the send queue forever. */
+static void test_interest_raw_mode(void)
+{
+  struct Client *c = fix();
+
+  SetTLS(c);
+  SetTLSRaw(c);
+
+  /* queued output with a write "blocked waiting to read": plaintext says
+   * writable, and raw mode must agree. */
+  enq(c, "MSG", 0);
+  cli_tls_want_wr(c) = IRCD_TLS_WANT_READ;
+  cli_tls_want_rd(c) = IRCD_TLS_WANT_NONE;
+  assert(tls_want_writable(c) == 1);
+  assert(tls_desired_events(c) ==
+         (SOCK_EVENT_READABLE | SOCK_EVENT_WRITABLE));
+
+  /* empty queue with a read "blocked waiting to write": plaintext says not
+   * writable, and raw mode must agree. */
+  c = fix();
+  SetTLS(c);
+  SetTLSRaw(c);
+  cli_tls_want_rd(c) = IRCD_TLS_WANT_WRITE;
+  cli_tls_want_wr(c) = IRCD_TLS_WANT_WRITE;
+  assert(tls_want_writable(c) == 0);
+  assert(tls_desired_events(c) == SOCK_EVENT_READABLE);
+
+  /* an active /LIST still asserts writable, exactly as for plaintext */
+  con_listing(&conn) = (struct ListingArgs *)&lst;
+  assert(tls_want_writable(c) == 1);
+  con_listing(&conn) = 0;
+
+  printf("Passed: raw kTLS mode follows the plaintext interest rule\n");
+}
+
+/* Raw mode must bypass the TLS core's I/O entirely: a raw send is a plain
+ * os_sendv_nonb() with no con_rexmit bookkeeping (the kernel record layer does
+ * its own framing, and there is no library session to report a short record),
+ * and a raw read goes through tls_ktls_recv() on the fd.  The scripted
+ * tls_backend_write()/read() above abort if reached without a script, so any
+ * leak back into the TLS path fails this test rather than passing quietly. */
+static void test_raw_io_bypasses_tls_backend(void)
+{
+  struct Client *c = fix();
+  unsigned int out, len = 0;
+  int sv[2];
+  char buf[64];
+  unsigned int n = 0;
+
+  SetTLS(c);
+  SetTLSRaw(c);
+  cli_tls_want_wr(c) = IRCD_TLS_WANT_READ;   /* stale pre-reload state */
+  cli_tls_want_rd(c) = IRCD_TLS_WANT_WRITE;
+
+  len += enq(c, "M1", 0);
+  len += enq(c, "M2", 0);
+  plain_sendv_calls = 0;
+  assert(sendv_and_consume(c, &out) == IO_SUCCESS);
+  assert(plain_sendv_calls == 1);
+  assert(out == len);
+  assert(MsgQLength(&cli_sendQ(c)) == 0);
+  assert(conn.con_rexmit == NULL && conn.con_rexmit_len == 0);
+  /* the stale markers are left untouched: raw mode neither reads nor writes
+   * them, and tls_want_writable() ignores them */
+  assert(cli_tls_want_wr(c) == IRCD_TLS_WANT_READ);
+
+  /* raw read: real bytes off a real fd, via tls_ktls_recv() */
+  if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+    printf("FAILED: socketpair\n");
+    exit(1);
+  }
+  con_fd(&conn) = sv[0];
+  assert(write(sv[1], "PONG\r\n", 6) == 6);
+  assert(tls_io_recv(c, buf, sizeof(buf), &n) == IO_SUCCESS);
+  assert(n == 6 && !memcmp(buf, "PONG\r\n", 6));
+  /* untouched, like con_tls_want_wr above: raw mode neither reads nor writes
+   * the blocked-direction markers.  A real adopted connection has them at
+   * IRCD_TLS_WANT_NONE from the start; the stale values here only prove that
+   * nothing on this path consults them. */
+  assert(cli_tls_want_rd(c) == IRCD_TLS_WANT_WRITE);
+
+  /* raw-mode EOF contract: a peer close (or a close_notify record, which
+   * tls_ktls_recv reports the same way) must reach read_packet() as the
+   * plaintext EOF does -- os_recv_nonb() turns a 0-byte recv into IO_FAILURE
+   * with errno 0, and read_packet()'s IO_FAILURE arm returns 0 to close the
+   * link.  A 0-byte IO_SUCCESS would instead be treated as "nothing to do"
+   * and spin on the level-triggered readable event forever. */
+  close(sv[1]);
+  n = 0xdeadbeef;
+  errno = EINVAL;
+  assert(tls_io_recv(c, buf, sizeof(buf), &n) == IO_FAILURE);
+  assert(n == 0);
+  assert(errno == 0);                  /* exactly os_recv_nonb's EOF signal */
+  /* and, like the plaintext EOF, without marking the socket dead first:
+   * read_packet() returns 0 and client_sock_callback() runs exit_client_msg()
+   * with "EOF from client".  A dead flag here would only matter if something
+   * reached deliver_it() in between, which nothing does. */
+  assert(!HasFlag(c, FLAG_DEADSOCKET));
+  assert(drop_calls == 0);             /* no library session to drop */
+  close(sv[0]);
+  con_fd(&conn) = -1;
+
+  printf("Passed: raw kTLS I/O bypasses the TLS backend\n");
 }
 
 /* --- B: tls_io_sendv drain ------------------------------------------------ */
@@ -681,6 +819,8 @@ main(int argc, char *argv[])
   msgq_init(&con_sendQ(&conn));   /* so the first fix()'s MsgQClear is safe */
 
   test_interest_truth_table();
+  test_interest_raw_mode();
+  test_raw_io_bypasses_tls_backend();
 
   test_sendv_clean_write();
   test_sendv_short_write_drained_in_call();
