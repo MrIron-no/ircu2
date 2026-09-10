@@ -77,6 +77,8 @@ extern int jupe_activate(struct Client *cptr, struct Client *sptr,
 extern int jupe_deactivate(struct Client *cptr, struct Client *sptr,
 			   struct Jupe *jupe, time_t lastmod,
 			   unsigned int flags);
+/** Head of the global jupe list (exported for the hot-reload dump). */
+extern struct Jupe *GlobalJupeList;
 extern struct Jupe* jupe_find(char *server);
 extern void jupe_free(struct Jupe *jupe);
 extern void jupe_burst(struct Client *cptr);

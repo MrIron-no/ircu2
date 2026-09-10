@@ -47,7 +47,7 @@
 #include <string.h>
 
 /** List of jupes. */
-static struct Jupe *GlobalJupeList = 0;
+struct Jupe *GlobalJupeList = 0;
 
 /** Allocate a new jupe with the given parameters.
  * @param[in] server Server name to jupe.
