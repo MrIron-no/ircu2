@@ -51,9 +51,10 @@ void ircd_tls_close(void *ctx, const char *message)
 
 int ircd_tls_offloaded(const struct Client *cptr)
 {
-  /* No TLS support, so nothing is ever kernel-offloaded. */
-  (void)cptr;
-  return 0;
+  /* No TLS support, so no session is ever built here and nothing is ever
+   * kernel-offloaded.  The raw case is answered all the same, to keep the
+   * contract in ircd_tls.h identical across backends. */
+  return (cptr && IsTLSRaw(cptr)) ? 1 : 0;
 }
 
 void ircd_tls_detach(struct Client *cptr)

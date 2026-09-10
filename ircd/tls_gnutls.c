@@ -395,6 +395,11 @@ int ircd_tls_offloaded(const struct Client *cptr)
   if (!cptr)
     return 0;
 
+  /* A raw session has no gnutls_session_t to ask: the kernel holds its record
+   * state, which is exactly why it was left raw.  See ircd_tls.h. */
+  if (IsTLSRaw(cptr))
+    return 1;
+
   tls = s_tls(&cli_socket(cptr));
   if (!tls)
     return 0;

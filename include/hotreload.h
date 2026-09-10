@@ -39,6 +39,7 @@
 #define INCLUDED_stddef_h
 #endif
 
+struct Client;
 struct irc_in_addr;
 
 /** One parsed record of a state dump: a type and its key/value pairs. */
@@ -98,8 +99,21 @@ int  hotreload_apply(int check_only);                      /* 1 ok, 0 failure */
 
 /* orchestration (hotreload.c) */
 
-/** Dump state and exec this server in place, keeping connections open. */
-void server_reload(const char *reason);
+/** Dump state and exec this server in place, keeping connections open.
+ *
+ * The reload sheds every connection the dump cannot carry, and \a by may be
+ * one of them -- an oper on a TLS session that is not kernel-offloaded kills
+ * its own connection by typing RELOAD.  When the reload then aborts (the
+ * pre-flight check failing is the designed outcome, not an accident) this
+ * function returns to a caller whose client is already freed, so it says so.
+ *
+ * @param[in] reason Human readable reason for the reload, for the logs.
+ * @param[in] by Local client that issued the reload, or NULL for a signal.
+ * @return 1 when \a by was exited during the attempt, in which case the
+ *   caller must return CPTR_KILLED and must not touch \a by again; 0
+ *   otherwise.  Never returns at all once the exec succeeds.
+ */
+int server_reload(const char *reason, struct Client *by);
 /** Write a state dump to a file, for debugging; returns 1 on success. */
 int  hotreload_dump_to_path(const char *path);             /* 1 ok */
 

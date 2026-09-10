@@ -30,6 +30,7 @@
 #include "crule.h"
 #include "destruct_event.h"
 #include "hash.h"
+#include "hotreload.h"
 #include "ircd_alloc.h"
 #include "ircd_events.h"
 #include "ircd_features.h"
@@ -125,7 +126,9 @@ static struct Timer ping_timer; /**< timer structure for check_pings() */
 static struct Timer destruct_event_timer; /**< timer structure for exec_expired_destruct_events() */
 
 /** Daemon information. */
-static struct Daemon thisServer  = { 0, 0, 0, 0, 0, 0, -1 };
+/* Not static, and declared in ircd.h: server_reload() in hotreload.c re-execs
+ * this server with its own command line, and takes argc/argv from here. */
+struct Daemon thisServer  = { 0, 0, 0, 0, 0, 0, -1 };
 
 /** Non-zero until we want to exit. */
 int running = 1;
@@ -493,7 +496,7 @@ static void check_pings(struct Event* ev) {
  * @param[in,out] argv Command-lne arguments.
  */
 static void parse_command_line(int argc, char** argv) {
-  const char *options = "d:f:h:nktvx:c:";
+  const char *options = "d:f:h:nktvx:c:R:K";
   int opt;
 
   if (thisServer.euid != thisServer.uid)
@@ -511,6 +514,9 @@ static void parse_command_line(int argc, char** argv) {
     case 'd':  dpath      = optarg;                    break;
     case 'f':  configfile = optarg;                    break;
     case 'h':  ircd_strncpy(cli_name(&me), optarg, HOSTLEN); break;
+    /* Both of these are written by server_reload(), never by a human. */
+    case 'R':  hotreload_fd = atoi(optarg);            break;
+    case 'K':  hotreload_check = 1;                    break;
     case 'v':
       printf("ircd %s\n", version);
       printf("Event engines: ");
@@ -556,6 +562,8 @@ static void parse_command_line(int argc, char** argv) {
              "\n -c clispec\t search for client/kill blocks matching client"
              "\n\t\t clispec is comma-separated list of user@host,"
              "\n\t\t user@ip, $Rrealname, and port number"
+             "\n -R <fd>\t resume from hot-reload state (internal)"
+             "\n -K\t\t pre-flight check only (internal)"
              "\n\nServer not started.\n");
       exit(1);
     }
@@ -681,6 +689,22 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  /* The dump has to be in memory before init_conf() runs, because
+   * inetport() asks hotreload_claim_listener() for each listening socket it
+   * is about to bind.  Nothing is initialised this early, so complain on
+   * stderr as well as through log_write(), which has no log file to write to
+   * until log_init() below.
+   */
+  if (hotreload_fd >= 0 && !hotreload_read(hotreload_fd)) {
+    fprintf(stderr, "Hot reload state unreadable, cold booting\n");
+    log_write(LS_SYSTEM, L_CRIT, 0, "Hot reload state unreadable, cold booting");
+    hotreload_fd = -1;
+    /* A pre-flight child must never cold boot: that would put a second live
+     * server beside the parent that forked it.  Fail the check instead. */
+    if (hotreload_check)
+      _exit(1);
+  }
+
   if (!set_userid_if_needed())
     return 3;
 
@@ -692,12 +716,21 @@ int main(int argc, char **argv) {
   if (!init_connection_limits())
     return 9;
 
-  close_connections(!(thisServer.bootopt & (BOOT_DEBUG | BOOT_TTY | BOOT_CHKCONF)));
-
-  /* daemon_init() must be before event_init() because kqueue() FDs
-   * are, perversely, not inherited across fork().
+  /* A hot reload was handed its predecessor's listening and client sockets
+   * across the exec, so neither of these may run: close_connections() would
+   * close every one of them, and daemon_init() would fork -- changing the
+   * process id that the supervisor is watching, which is the one thing
+   * exec-in-place exists to avoid.  Gate on hotreload_fd rather than on
+   * BOOT_TTY: -n is not necessarily given in production.
    */
-  daemon_init(thisServer.bootopt & BOOT_TTY);
+  if (hotreload_fd < 0) {
+    close_connections(!(thisServer.bootopt & (BOOT_DEBUG | BOOT_TTY | BOOT_CHKCONF)));
+
+    /* daemon_init() must be before event_init() because kqueue() FDs
+     * are, perversely, not inherited across fork().
+     */
+    daemon_init(thisServer.bootopt & BOOT_TTY);
+  }
 
 #ifdef DEBUGMODE
   /* Must reserve fd 2... */
@@ -757,14 +790,28 @@ int main(int argc, char **argv) {
   }
 
   debug_init(thisServer.bootopt & BOOT_TTY);
-  if (check_pid()) {
+
+  /* Skipped in pre-flight: the parent that forked us still holds the write
+   * lock on the pid file, so check_pid() could only fail and exit(2) -- and
+   * were it to succeed it would have stolen the lock from a live server.
+   * thisServer.pid_fd stays -1, which makes write_pidfile() below a no-op,
+   * so the pre-flight child never rewrites the parent's pid either.
+   */
+  if (!hotreload_check && check_pid()) {
     Debug((DEBUG_FATAL, "Failed to acquire PID file lock after fork"));
     exit(2);
   }
 
   init_server_identity();
 
-  uping_init();
+  /* Skipped in pre-flight: this binds the fixed UPING UDP port that the
+   * parent is already bound to.  The failure is not fatal, but the socket is
+   * opened with SO_REUSEADDR, so a success would be worse than the failure --
+   * it would divert the running server's UPING datagrams to a child that is
+   * about to exit.  A pre-flight child never serves UPING either way.
+   */
+  if (!hotreload_check)
+    uping_init();
 
   stats_init();
 
@@ -802,6 +849,27 @@ int main(int argc, char **argv) {
 
   write_pidfile();
   init_counters();
+
+  /* Last, because hotreload_apply() needs init_server_identity() (it refuses
+   * a dump written by a differently named or numbered server) and
+   * IPcheck_init() to have run.
+   */
+  if (hotreload_fd >= 0) {
+    int ok = hotreload_apply(hotreload_check);
+
+    /* _exit(), not exit(): the pre-flight child inherited the parent's
+     * stdio buffers and atexit handlers along with its image, and running
+     * either of those would flush the parent's state a second time. */
+    if (hotreload_check)
+      _exit(ok ? 0 : 1);
+
+    close(hotreload_fd);
+    hotreload_fd = -1;
+
+    if (!ok)
+      log_write(LS_SYSTEM, L_CRIT, 0,
+                "Hot reload apply failed; continuing as cold boot");
+  }
 
   Debug((DEBUG_NOTICE, "Server ready..."));
   log_write(LS_SYSTEM, L_NOTICE, 0, "Server Ready");

@@ -90,6 +90,7 @@
 #include "msg.h"
 #include "numeric.h"
 #include "numnicks.h"
+#include "s_misc.h"
 #include "send.h"
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
@@ -109,7 +110,11 @@ int mo_reload(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 
   if (parc < 2) {
     log_write(LS_SYSTEM, L_NOTICE, 0, "Server RELOAD by %#C", sptr);
-    server_reload("received RELOAD");
+    /* A reload that aborts comes back here, and it may have shed this very
+     * connection on the way (a TLS session the dump cannot carry).  When it
+     * says so, cptr is already freed and only CPTR_KILLED is safe. */
+    if (server_reload("received RELOAD", cptr))
+      return CPTR_KILLED;
     return 0;
   }
 
