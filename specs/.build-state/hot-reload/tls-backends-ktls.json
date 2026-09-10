@@ -1,13 +1,19 @@
 {
   "name": "kTLS in the TLS backends",
-  "status": "pending",
+  "status": "completed",
   "agentType": "builder",
-  "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
-  "description": null,
-  "commitSha": null,
-  "filesChanged": [],
+  "startedAt": "2026-09-10T14:08:05",
+  "completedAt": "2026-09-10T14:16:41",
+  "lastUpdated": "2026-09-10T14:16:41",
+  "description": "kTLS enable per session, ircd_tls_offloaded/ircd_tls_detach in all backends (9426229); reviewed APPROVED; merged.",
+  "commitSha": "39b91b8e989ce0c4b374ed622a8c3864f006b322",
+  "filesChanged": [
+    "include/ircd_tls.h",
+    "ircd/tls_gnutls.c",
+    "ircd/tls_libtls.c",
+    "ircd/tls_none.c",
+    "ircd/tls_openssl.c"
+  ],
   "dependsOn": [
     "foundation"
   ]

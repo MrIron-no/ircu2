@@ -1,11 +1,11 @@
 {
   "name": "Review kTLS backends",
-  "status": "pending",
+  "status": "completed",
   "agentType": "reviewer",
   "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
-  "description": null,
+  "completedAt": "2026-09-10T14:16:41",
+  "lastUpdated": "2026-09-10T14:16:41",
+  "description": "APPROVED: 0 critical, 0 important, 2 minor (gnutls <3.7.3 branch inspected only; no unit test for offloaded/detach).",
   "commitSha": null,
   "filesChanged": [],
   "dependsOn": [
