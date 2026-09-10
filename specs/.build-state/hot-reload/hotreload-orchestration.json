@@ -1,12 +1,12 @@
 {
   "name": "Orchestration and boot hooks",
-  "status": "in_progress",
+  "status": "completed",
   "agentType": "builder",
   "startedAt": "2026-09-10T15:14:22",
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T15:14:22",
-  "description": null,
-  "commitSha": null,
+  "completedAt": "2026-09-10T16:12:36",
+  "lastUpdated": "2026-09-10T16:12:36",
+  "description": "Orchestration (ff9922e) + fix (df0e17e: CPTR_KILLED on issuer exit, raw counts as offloaded) reviewed APPROVED; merged. Live docker: PID stable across 3 RELOADs + SIGUSR2; abort path survives.",
+  "commitSha": "968d0b79fd659c7d223a9ce51bf06c185c2f47a9",
   "filesChanged": [],
   "dependsOn": [
     "review-dump-load"
