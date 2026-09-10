@@ -1,11 +1,11 @@
 {
   "name": "Final Validation",
-  "status": "pending",
+  "status": "completed",
   "agentType": "validator",
   "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
-  "description": null,
+  "completedAt": "2026-09-10T19:33:03",
+  "lastUpdated": "2026-09-10T19:33:03",
+  "description": "Validator: overall PASS. 40/40 criteria. Build 0 warnings on openssl/gnutls/libtls; unit 9/9 incl hotreload_wire_t+tls_ktls_t; docker hotreload 20 passed 1 env-skip; tls keyupdate/rehash/s2s 4 passed. Diff 83 files +9860/-80.",
   "commitSha": null,
   "filesChanged": [],
   "dependsOn": [
