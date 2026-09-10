@@ -1366,8 +1366,16 @@ int hotreload_apply(int check_only)
               "hot reload: server identity changed (%s/%s vs %s/%s), refusing",
               hr_str(&records[0], "server"), hr_str(&records[0], "numeric"),
               cli_name(&me), cli_yxx(&me));
-    if (!check_only)
+    if (!check_only) {
+      /* Real successor image: close the inherited client and unclaimed
+       * listener sockets this dump named before discarding the records, so
+       * they do not leak for the life of the process (main() skips
+       * close_connections() whenever hotreload_fd >= 0).  The pre-flight
+       * child shares these fds with the live parent and must not touch
+       * them; it just _exit()s. */
+      hr_close_named_fds(lines.count);
       hr_reset();
+    }
     return 0;
   }
 
