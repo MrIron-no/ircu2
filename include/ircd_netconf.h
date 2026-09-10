@@ -76,6 +76,11 @@ extern int config_set(const char *key, const char *value, time_t timestamp);
 extern const char *config_get(const char *key);
 extern void config_register_callback(const char *key_prefix, config_callback_f callback);
 extern void config_unregister_callback(const char *key_prefix);
+/** Configuration iteration callback function type */
+typedef void (*config_iter_f)(const char *key, const char *value, time_t ts,
+                              void *ctx);
+
+extern void config_foreach(config_iter_f fn, void *ctx);
 extern void config_burst(struct Client *cptr);
 extern void config_stats(struct Client *sptr, const struct StatDesc *sd, char *param);
 extern int netconf_int(enum NetConf key);

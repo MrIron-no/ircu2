@@ -291,6 +291,26 @@ void config_burst(struct Client *cptr)
          config_count(), cli_name(cptr)));
 }
 
+/** Call \a fn once for every configuration entry, in list order.
+ *
+ * The list is walked read-only: the callback must not add or remove entries.
+ * Exists so that code outside this file (the hot reload dumper) can
+ * enumerate the network configuration without config_list being exported.
+ *
+ * @param[in] fn Callback to invoke per entry.
+ * @param[in] ctx Opaque pointer handed back to \a fn.
+ */
+void config_foreach(config_iter_f fn, void *ctx)
+{
+  struct ConfigEntry *entry;
+
+  if (!fn)
+    return;
+
+  for (entry = config_list; entry; entry = entry->next)
+    (*fn)(entry->key, entry->value, entry->timestamp, ctx);
+}
+
 /** Generate configuration statistics for /STATS C
  * @param[in] sptr Client requesting statistics
  * @param[in] sd Stats descriptor (unused)
