@@ -382,6 +382,39 @@ int SetLocalNumNick(struct Client *cptr)
   return 1;
 }
 
+/** Register numeric of a (local) client in a specific slot.
+ * Behaves like SetLocalNumNick(), except that the caller picks the slot in
+ * our client_list; used when adopting clients across a hot reload so that
+ * their numnicks are preserved.
+ * @param[in] cptr %User being registered.
+ * @param[in] index Slot in our client_list to claim.
+ * @return Non-zero if the slot was claimed, zero if it was occupied or out of range.
+ */
+int SetLocalNumNickAt(struct Client *cptr, unsigned int index)
+{
+  struct Client**     client_list = cli_serv(&me)->client_list;
+  unsigned int        mask        = cli_serv(&me)->nn_mask;
+
+  assert(cli_user(cptr)->server == &me);
+
+  if (index > mask || client_list[index])
+    return 0;
+
+  client_list[index] = cptr;  /* Reserve the numeric ! */
+
+  inttobase64(cli_yxx(cptr), index, 3);
+  return 1;
+}
+
+/** Return the client_list slot held by a (local) client.
+ * @param[in] cptr %User whose numnick should be decoded.
+ * @return Index into our client_list.
+ */
+unsigned int LocalNumNickIndex(const struct Client *cptr)
+{
+  return base64toint(cli_yxx(cptr)) & cli_serv(&me)->nn_mask;
+}
+
 /** Mark servers whose name matches the given (compiled) mask by
  * setting their FLAG_MAP flag.
  * @param[in] cmask Compiled mask for server names.

@@ -179,6 +179,8 @@ enum Flag
     FLAG_HIDDENHOST,                /**< user's host is hidden */
     FLAG_CAP302,                    /**< client supports IRCv3.2 */
     FLAG_TLS,                       /**< user is using TLS */
+    FLAG_TLS_RAW,                   /**< TLS session is kernel-offloaded and
+                                       driven raw after a hot reload */
     FLAG_SPAMHOLD,                  /**< user is the sender or recipient of a message on hold */
     FLAG_HIDEIDLE,                  /**< Hide idle time from non-opers */
     FLAG_COMMONCHANS,               /**< only accepts messages from users in common channels */
@@ -667,6 +669,8 @@ struct Client {
 #define IsPingSent(x)           HasFlag(x, FLAG_PINGSENT)
 /** Return non-zero if the client is using TLS. */
 #define IsTLS(x)                HasFlag(x, FLAG_TLS)
+/** Return non-zero if the client's TLS session is kernel-offloaded and driven raw. */
+#define IsTLSRaw(x)             HasFlag(x, FLAG_TLS_RAW)
 /** Return non-zero if the client is (re-)negotiating TLS. */
 #define IsNegotiatingTLS(x)     HasFlag(x, FLAG_NEGOTIATING_TLS)
 /** Return non-zero if the client is the sender or recipient of a message on hold (spamfilter) */
@@ -729,6 +733,8 @@ struct Client {
 #define SetPingSent(x)          SetFlag(x, FLAG_PINGSENT)
 /** Mark a client as using TLS. */
 #define SetTLS(x)               SetFlag(x, FLAG_TLS)
+/** Mark a client's TLS session as kernel-offloaded and driven raw. */
+#define SetTLSRaw(x)            SetFlag(x, FLAG_TLS_RAW)
 /** Mark a client as (re-)negotiating TLS. */
 #define SetNegotiatingTLS(x)    SetFlag(x, FLAG_NEGOTIATING_TLS)
 /** Mark a client as being the sender or recipient of a message on hold (spamfilter). */
@@ -778,6 +784,8 @@ struct Client {
 #define ClearHub(x)              ClrFlag(x, FLAG_HUB)
 /** Mark a client's TLS negotation as complete. */
 #define ClearNegotiatingTLS(x)   ClrFlag(x, FLAG_NEGOTIATING_TLS)
+/** Clear the client's kernel-offloaded raw TLS flag. */
+#define ClearTLSRaw(x)           ClrFlag(x, FLAG_TLS_RAW)
 /** Clear the client's spam hold flag. */
 #define ClearSpamHold(x)         ClrFlag(x, FLAG_SPAMHOLD)
 /** Remove mode +c (only accepts messages from common channels) from the client. */
@@ -861,5 +869,8 @@ extern void client_add_sendq(struct Connection* con,
 extern void client_set_privs(struct Client *client, struct ConfItem *oper,
 			     int forceOper);
 extern int client_report_privs(struct Client* to, struct Client* client);
+extern void client_privs_to_string(const struct Client* cptr, char* buf,
+                                  size_t len);
+extern int client_privs_from_string(struct Client* cptr, const char* names);
 
 #endif /* INCLUDED_client_h */

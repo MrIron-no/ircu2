@@ -23,6 +23,7 @@
  */
 #include "config.h"
 
+#include "hotreload.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
 #include "ircd_events.h"
@@ -49,6 +50,7 @@ static struct tag_SignalCounter {
   unsigned int alrm; /**< Received SIGALRM count. */
   unsigned int hup;  /**< Received SIGHUP count. */
   unsigned int chld; /**< Received SIGCHLD count. */
+  unsigned int usr2; /**< Received SIGUSR2 count. */
 } SignalCounter;
 
 /** Event generator for SIGHUP. */
@@ -59,6 +61,8 @@ static struct Signal sig_int;
 static struct Signal sig_term;
 /** Event generator for SIGCHLD. */
 static struct Signal sig_chld;
+/** Event generator for SIGUSR2. */
+static struct Signal sig_usr2;
 /** List of active child process callback requests. */
 static struct ChildRecord *children;
 /** List of inactive (free) child records. */
@@ -102,6 +106,20 @@ static void sighup_callback(struct Event* ev)
 
   ++SignalCounter.hup;
   rehash(&me, 1);
+}
+
+/** Signal callback for SIGUSR2.
+ * @param[in] ev Signal event descriptor.
+ */
+static void sigusr2_callback(struct Event* ev)
+{
+  assert(0 != ev_signal(ev));
+  assert(ET_SIGNAL == ev_type(ev));
+  assert(SIGUSR2 == sig_signal(ev_signal(ev)));
+  assert(SIGUSR2 == ev_data(ev));
+
+  ++SignalCounter.usr2;
+  server_reload("caught signal: SIGUSR2");
 }
 
 /** Signal callback for SIGINT.
@@ -244,6 +262,7 @@ void setup_signals(void)
   sigaction(SIGALRM, &act, 0);
 
   signal_add(&sig_hup, sighup_callback, 0, SIGHUP);
+  signal_add(&sig_usr2, sigusr2_callback, 0, SIGUSR2);
   signal_add(&sig_int, sigint_callback, 0, SIGINT);
   signal_add(&sig_term, sigterm_callback, 0, SIGTERM);
   signal_add(&sig_chld, sigchld_callback, 0, SIGCHLD);

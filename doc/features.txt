@@ -214,3 +214,24 @@ Target limiting:
   ERR_TARGETTOOFAST 349
 
 
+
+Configuration features:
+-----------------------
+
+TLS_KTLS
+ * Type: boolean
+ * Default: TRUE
+
+When TRUE (default), TLS sessions are offloaded to the kernel TLS record
+layer after the handshake on backends and platforms that support it
+(OpenSSL 3.x on Linux and FreeBSD, GnuTLS with system ktls enabled).
+Offloaded sessions survive a hot RELOAD.  Note: on kernels without TLS
+rekey support a peer-initiated TLS 1.3 KeyUpdate terminates an offloaded
+connection.
+
+RELOAD_TIMEOUT
+ * Type: integer
+ * Default: 15
+
+Seconds the server waits for the pre-flight check of a RELOAD before
+aborting the reload and continuing to serve.  Default 15.

@@ -166,6 +166,7 @@ extern int mo_privs(struct Client*, struct Client*, int, char*[]);
 extern int mo_rehash(struct Client*, struct Client*, int, char*[]);
 extern int mo_reset(struct Client*, struct Client*, int, char*[]);
 extern int mo_restart(struct Client*, struct Client*, int, char*[]);
+extern int mo_reload(struct Client*, struct Client*, int, char*[]);
 extern int mo_rping(struct Client*, struct Client*, int, char*[]);
 extern int mo_set(struct Client*, struct Client*, int, char*[]);
 extern int mo_settime(struct Client*, struct Client*, int, char*[]);

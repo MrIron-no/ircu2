@@ -719,6 +719,35 @@ static void ip_registry_disconnect(struct Client *cptr)
   }
 }
 
+/** Register a connection that is being adopted rather than newly accepted.
+ * The registry entry for \a cptr is created if it does not exist yet, and its
+ * connected counter is bumped, so that a later ip_registry_disconnect() call
+ * balances out.  No throttle or clone check is performed.
+ * @param[in] cptr Client that has been adopted.
+ */
+static void ip_registry_adopt(struct Client *cptr)
+{
+  struct IPRegistryEntry* entry;
+
+  if (ip_registry_is_exempt(&cli_ip(cptr))) {
+    Debug((DEBUG_DNS, "IPcheck adopting exempt connection from %s.", ircd_ntoa(&cli_ip(cptr))));
+    return;
+  }
+
+  entry = ip_registry_find(&cli_ip(cptr));
+  if (0 == entry) {
+    entry = ip_registry_new_entry();    /* Starts out with connected == 1 */
+    ip_registry_canonicalize(&entry->addr, &cli_ip(cptr));
+    ip_registry_add(entry);
+    Debug((DEBUG_DNS, "IPcheck added new registry for adopted connection from %s.", ircd_ntoa(&entry->addr)));
+    return;
+  }
+
+  if (0 == ++entry->connected)          /* Check for overflow */
+    entry->connected--;
+  Debug((DEBUG_DNS, "IPcheck adopting connection from %s.", ircd_ntoa(&entry->addr)));
+}
+
 /** Find number of clients from a particular IP address.
  * @param[in] addr Address to look up.
  * @return Number of clients known to be connected from that address.
@@ -750,6 +779,16 @@ int IPcheck_remote_connect(struct Client *cptr, int is_burst)
   assert(0 != cptr);
   assert(!IsIPChecked(cptr));
   return ip_registry_check_remote(cptr, is_burst);
+}
+
+/** Register an adopted (hot-reloaded) connection without throttling.
+ * @param[in] cptr Client that has been adopted.
+ */
+void IPcheck_adopt(struct Client *cptr)
+{
+  assert(0 != cptr);
+  ip_registry_adopt(cptr);
+  SetIPChecked(cptr);
 }
 
 /** Handle a client being rejected during connection through no fault

@@ -274,3 +274,90 @@ client_report_privs(struct Client *to, struct Client *client)
 
   return 0;
 }
+
+/** Write the privilege names held by \a cptr into \a buf.
+ * Names are separated by spaces, in the same order as client_report_privs()
+ * reports them.  The result is always NUL terminated, and is truncated at a
+ * whole name if it does not fit.
+ * @param[in] cptr Client whose privileges should be listed.
+ * @param[out] buf Buffer to write the names to.
+ * @param[in] len Size of \a buf in bytes.
+ */
+void
+client_privs_to_string(const struct Client *cptr, char *buf, size_t len)
+{
+  size_t pos = 0;
+  int i;
+
+  assert(0 != cptr);
+  assert(0 != buf);
+
+  if (0 == len)
+    return;
+  buf[0] = '\0';
+
+  for (i = 0; privtab[i].name; i++) {
+    size_t nlen;
+
+    if (!HasPriv(cptr, privtab[i].priv))
+      continue;
+
+    nlen = strlen(privtab[i].name);
+    if (pos + nlen + (pos ? 1 : 0) >= len)
+      break;                            /* Would not fit; stop on a whole name */
+    if (pos)
+      buf[pos++] = ' ';
+    memcpy(buf + pos, privtab[i].name, nlen);
+    pos += nlen;
+    buf[pos] = '\0';
+  }
+}
+
+/** Set the privileges of \a cptr from a list of privilege names.
+ * All of the client's privileges are cleared first.  Names that are not
+ * known are ignored, but counted.
+ * @param[in,out] cptr Client whose privileges should be set.
+ * @param[in] names Space separated list of privilege names, may be NULL.
+ * @return Number of unrecognized names in \a names.
+ */
+int
+client_privs_from_string(struct Client *cptr, const char *names)
+{
+  const char *p = names;
+  int unknown = 0;
+  int i;
+
+  assert(0 != cptr);
+
+  memset(cli_privs(cptr), 0, sizeof(struct Privs));
+
+  if (!names)
+    return 0;
+
+  while (*p) {
+    const char *start;
+    size_t nlen;
+
+    while (' ' == *p)
+      p++;
+    if (!*p)
+      break;
+
+    start = p;
+    while (*p && ' ' != *p)
+      p++;
+    nlen = p - start;
+
+    for (i = 0; privtab[i].name; i++)
+      if (strlen(privtab[i].name) == nlen
+          && 0 == ircd_strncmp(privtab[i].name, start, nlen))
+        break;
+
+    if (privtab[i].name)
+      SetPriv(cptr, privtab[i].priv);
+    else
+      unknown++;
+  }
+
+  return unknown;
+}
