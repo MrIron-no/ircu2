@@ -1,12 +1,12 @@
 {
   "name": "Code Review",
-  "status": "pending",
+  "status": "completed",
   "agentType": "reviewer",
   "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
-  "description": null,
-  "commitSha": null,
+  "completedAt": "2026-09-10T19:23:46",
+  "lastUpdated": "2026-09-10T19:23:46",
+  "description": "Holistic review APPROVED after one fix: predicate single-source-of-truth, IsTLS/IsTLSRaw matrix, wire key symmetry, adoption bookkeeping, abort-path fd hygiene all verified. One Important fd-leak on the loader identity-mismatch abort path fixed directly (e6a3ae0). 0 warnings, unit 9/9.",
+  "commitSha": "e6a3ae08f9f69cd69939bb4115ab9dde094291d4",
   "filesChanged": [],
   "dependsOn": [
     "foundation",
