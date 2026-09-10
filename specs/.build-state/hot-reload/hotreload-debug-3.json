@@ -3,8 +3,8 @@
   "agentType": "tester",
   "dependsOn": [],
   "status": "completed",
-  "lastUpdated": "2026-09-11T00:35:08",
-  "description": "Root cause: carried blocked sendQ dribbles out app-paced through the 2KB CLIENT_TCP_WINDOW send buffer; against a slow reader the tail+PONG wedge in a TCP zero-window persist that doesn't recover before ping timeout -> silent. Fix: grow SO_SNDBUF to hold the whole backlog on adoption (os_set_sockbufs in hotreload_load.c), kernel owns delivery like a server link; kqueue-safe. Debugger was cut off pre-verification; fix committed by orchestrator (8830e53), merged bf84d45. Empirical 10x verification dispatched (verify-sendq-fix). Also flagged: test_tls_keyupdate_after_reload_closes_cleanly needs characterization (flaky vs kernel-6.14 env).",
+  "lastUpdated": "2026-09-11T01:03:24",
+  "description": "Root cause: carried blocked sendQ dribbles out app-paced through the 2KB CLIENT_TCP_WINDOW send buffer; against a slow reader the tail+PONG wedge in a TCP zero-window persist that doesn't recover before ping timeout -> silent. Fix: grow SO_SNDBUF to hold the whole backlog on adoption (os_set_sockbufs in hotreload_load.c), kernel owns delivery like a server link; kqueue-safe. Debugger was cut off pre-verification; fix committed by orchestrator (8830e53), merged bf84d45. Empirical 10x verification dispatched (verify-sendq-fix). Also flagged: test_tls_keyupdate_after_reload_closes_cleanly needs characterization (flaky vs kernel-6.14 env). CONFIRMED by debugger's full report: instrumented kernel evidence (server Send-Q stuck ~1.3KB, client open window, ~24B/89s = zero-window persist); 3 alt hypotheses disproven; TCP_NODELAY negative, SO_SNDBUF positive; 5/5 green. Independent 10x verification still running (docker contention with debugger tainted its earlier attempt; now clean).",
   "completedAt": "2026-09-11T00:35:08",
   "commitSha": "bf84d45"
 }
