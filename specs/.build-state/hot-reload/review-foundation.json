@@ -1,11 +1,11 @@
 {
   "name": "Review foundation",
-  "status": "pending",
+  "status": "completed",
   "agentType": "reviewer",
   "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
-  "description": null,
+  "completedAt": "2026-09-10T14:05:46",
+  "lastUpdated": "2026-09-10T14:05:46",
+  "description": "APPROVED: 0 critical, 0 important, 2 minor (unused numnicks.h include in m_reload.c; features docs belong in doc/readme.features).",
   "commitSha": null,
   "filesChanged": [],
   "dependsOn": [
