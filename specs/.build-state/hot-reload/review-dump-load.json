@@ -1,11 +1,11 @@
 {
   "name": "Review dump and load",
-  "status": "pending",
+  "status": "completed",
   "agentType": "reviewer",
-  "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T13:47:19",
-  "description": null,
+  "startedAt": "2026-09-10T14:48:54",
+  "completedAt": "2026-09-10T15:03:58",
+  "lastUpdated": "2026-09-10T15:03:58",
+  "description": "Dump APPROVED; loader CHANGES REQUIRED: 1 critical (no READABLE on adopted sockets), 4 important (member letters, local umodes, jupe expire unit, gline mask size), 1 minor (flags separator). Fix loop iteration 1 dispatched.",
   "commitSha": null,
   "filesChanged": [],
   "dependsOn": [
