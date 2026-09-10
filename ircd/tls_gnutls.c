@@ -388,6 +388,54 @@ int ircd_tls_check_peer_hostname(struct Client *cptr, const char *name)
   return res ? 0 : 1;
 }
 
+int ircd_tls_offloaded(const struct Client *cptr)
+{
+  gnutls_session_t tls;
+
+  if (!cptr)
+    return 0;
+
+  tls = s_tls(&cli_socket(cptr));
+  if (!tls)
+    return 0;
+
+#if GNUTLS_VERSION_NUMBER >= 0x030703
+  {
+    /* GnuTLS has no per-session enable for kernel TLS: offload is opted into
+     * system-wide through the gnutls configuration file ("[global] ktls =
+     * true"), so ircd_tls_accept()/ircd_tls_connect() have nothing to set and
+     * FEAT_TLS_KTLS cannot turn it on for this backend.  All that is possible
+     * here is reporting what the library decided. */
+    gnutls_transport_ktls_enable_flags_t flags;
+
+    flags = gnutls_transport_is_ktls_enabled(tls);
+    return ((flags & GNUTLS_KTLS_SEND) && (flags & GNUTLS_KTLS_RECV)) ? 1 : 0;
+  }
+#else
+  return 0;
+#endif
+}
+
+void ircd_tls_detach(struct Client *cptr)
+{
+  gnutls_session_t tls;
+
+  if (!cptr)
+    return;
+
+  tls = s_tls(&cli_socket(cptr));
+  if (!tls)
+    return;
+
+  s_tls(&cli_socket(cptr)) = NULL;
+  /* No gnutls_bye(): nothing may reach the wire.  gnutls_deinit() does not
+   * touch the transport descriptor set by gnutls_transport_set_int(), and the
+   * session object is this backend's only per-session allocation (the session
+   * pointer set on handshake completion is a marker value, not memory), so
+   * this mirrors ircd_tls_close()/tls_backend_drop() minus the wire traffic. */
+  gnutls_deinit(tls);
+}
+
 void ircd_tls_close(void *ctx, const char *message)
 {
   /* Match OpenSSL SSL_is_init_finished() / libtls tls_close(): only send
