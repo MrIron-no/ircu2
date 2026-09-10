@@ -1,12 +1,12 @@
 {
   "name": "Docker integration tests",
-  "status": "in_progress",
+  "status": "completed",
   "agentType": "tester",
   "startedAt": "2026-09-10T16:12:36",
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T17:14:27",
-  "description": "Suite written (tests/hotreload/, 20 tests + keyupdate kTLS-aware). Found 3 product bugs: #1/#2 RELOAD issuer deaf after its own successful reload; #3 leaf<->hub link asymmetry after relink. Debugger hotreload-debug-1 dispatched on the security-fix branch. 5 tests xfail pending re-run against merged DUMP contract.",
-  "commitSha": null,
+  "completedAt": "2026-09-10T18:14:40",
+  "lastUpdated": "2026-09-10T19:12:37",
+  "description": "Suite complete on merged branch a44e6cc: 20 passed, 1 env-skip (multi-prefix). BUG A regression test added (test_issuer_throttled_pipelined_command_survives), committed f64e71f. All previously-failing tests green.",
+  "commitSha": "28035ca",
   "filesChanged": [],
   "dependsOn": [
     "hotreload-orchestration"

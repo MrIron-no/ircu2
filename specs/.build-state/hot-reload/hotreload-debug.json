@@ -1,0 +1,12 @@
+{
+  "name": "Debug RELOAD survivor bugs",
+  "status": "completed",
+  "agentType": "debugger",
+  "completedAt": "2026-09-10T19:04:13",
+  "lastUpdated": "2026-09-10T19:04:13",
+  "commitSha": "a44e6cc",
+  "description": "Two passes. Pass 1 falsely concluded 'already fixed' (thin tests didn't trigger). Pass 2 proved BUG A: throttle-deferred RELOAD lets a pipelined command land in issuer con_recvQ; carried across but never reprocessed on a level-triggered engine with empty socket -> silent forever. Fix: schedule_recvq_process() arms con_proc on adoption for non-empty recvQ (s_bsd.c/s_bsd.h/hotreload_load.c). BUG B + ban_list were test bugs (HIS_LINKS non-oper, RPL_BANLIST param). Reviewed APPROVED (mechanism); merged a44e6cc. Owed: 1 regression test for BUG A.",
+  "dependsOn": [
+    "test-reload-integration"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Review debug-2 fix",
+  "status": "completed",
+  "agentType": "reviewer",
+  "completedAt": "2026-09-10T19:12:37",
+  "lastUpdated": "2026-09-10T19:12:37",
+  "description": "Mechanism APPROVED (schedule_recvq_process correct, check-mode-safe, no UAF/flood-bypass); one blocker = missing BUG A regression test, now added f64e71f.",
+  "dependsOn": [
+    "hotreload-debug"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "Documentation",
+  "status": "completed",
+  "agentType": "docs",
+  "startedAt": "2026-09-10T17:53:30",
+  "completedAt": "2026-09-10T17:58:18",
+  "lastUpdated": "2026-09-10T17:58:18",
+  "description": "doc/readme.reload (operator guide), readme.features entries (TLS_KTLS, RELOAD_TIMEOUT, RELOAD_DUMP_DIR moved from features.txt), example.conf. Committed 04e2db9.",
+  "commitSha": "04e2db9",
+  "filesChanged": [],
+  "dependsOn": [
+    "hotreload-orchestration"
+  ]
+}
