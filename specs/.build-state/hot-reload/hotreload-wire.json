@@ -1,13 +1,17 @@
 {
   "name": "Dump wire format",
-  "status": "in_progress",
+  "status": "completed",
   "agentType": "builder",
   "startedAt": "2026-09-10T14:08:05",
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T14:08:05",
-  "description": null,
-  "commitSha": null,
-  "filesChanged": [],
+  "completedAt": "2026-09-10T14:20:40",
+  "lastUpdated": "2026-09-10T14:20:40",
+  "description": "Wire format encoder/parser/base64/read_all/close_all_except (f48eddf) with hotreload_wire_t 8/8; reviewed APPROVED; merged.",
+  "commitSha": "e7a0385ce96a15e69735911bbf28beb936ef47df",
+  "filesChanged": [
+    "ircd/hotreload_wire.c",
+    "ircd/test/Makefile.am",
+    "ircd/test/hotreload_wire_t.c"
+  ],
   "dependsOn": [
     "foundation"
   ]
