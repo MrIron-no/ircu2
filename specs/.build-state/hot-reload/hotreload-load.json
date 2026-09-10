@@ -1,12 +1,12 @@
 {
   "name": "Dump loader and adoption",
-  "status": "in_progress",
+  "status": "completed",
   "agentType": "builder",
   "startedAt": "2026-09-10T14:26:02",
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T15:03:58",
-  "description": "Loader (703d2ee) merged a1cec8d pending fix loop iteration 1 (critical: READABLE interest).",
-  "commitSha": null,
+  "completedAt": "2026-09-10T15:14:22",
+  "lastUpdated": "2026-09-10T15:14:22",
+  "description": "Loader (703d2ee) + fix iteration (5c1b4a1) reviewed APPROVED; merged c17ac8e.",
+  "commitSha": "c17ac8e1fd66517cee5622952ee057f05a806686",
   "filesChanged": [],
   "dependsOn": [
     "hotreload-wire",
