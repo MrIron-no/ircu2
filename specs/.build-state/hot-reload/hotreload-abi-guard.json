@@ -1,0 +1,11 @@
+{
+  "name": "CI ABI guard for dump bit values",
+  "status": "completed",
+  "agentType": "builder",
+  "startedAt": "2026-09-10T20:41:59",
+  "lastUpdated": "2026-09-10T22:04:13",
+  "description": "DONE + verified (da2e764); merged 54c3192. Guards 90 raw bit/enum symbols; append-safe checker in build.yml; catches reorder, passes append.",
+  "dependsOn": [],
+  "commitSha": "da2e764",
+  "completedAt": "2026-09-10T22:04:13"
+}

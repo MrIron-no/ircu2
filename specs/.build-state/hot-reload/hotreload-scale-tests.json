@@ -1,0 +1,10 @@
+{
+  "name": "Scale and blocked-sendq reload tests",
+  "status": "completed",
+  "agentType": "tester",
+  "startedAt": "2026-09-10T20:41:59",
+  "lastUpdated": "2026-09-10T22:04:13",
+  "description": "Committed 4f29ecf. 300 clients/30 channels survive reload, 3.08s pause; dump roundtrip at 150 passes. Blocked-sendq test found a REAL intermittent bug (carried blocked sendQ -> client silent after reload, ~40-50%); left red as repro. Infra: Dockerfile maxcon 4096, Flood class/port. Also flagged test_tls_keyupdate_after_reload_closes_cleanly failing (claimed pre-existing/kernel-6.14).",
+  "dependsOn": [],
+  "completedAt": "2026-09-10T22:04:13"
+}

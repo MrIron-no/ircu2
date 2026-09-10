@@ -1,0 +1,8 @@
+{
+  "name": "hotreload-debug-3",
+  "agentType": "tester",
+  "dependsOn": [],
+  "status": "in_progress",
+  "lastUpdated": "2026-09-10T22:04:13",
+  "description": "Root-cause + fix the blocked-sendq silence bug (send-interest path after adoption). Dispatched on 4f29ecf with the red repro. Suspects: double socket_events on fresh fd dropping EPOLLIN/OUT, or carried FLAG_BLOCKED never cleared."
+}
