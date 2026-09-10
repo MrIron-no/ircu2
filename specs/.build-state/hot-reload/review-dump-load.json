@@ -1,0 +1,15 @@
+{
+  "name": "Review dump and load",
+  "status": "pending",
+  "agentType": "reviewer",
+  "startedAt": null,
+  "completedAt": null,
+  "lastUpdated": "2026-09-10T13:47:19",
+  "description": null,
+  "commitSha": null,
+  "filesChanged": [],
+  "dependsOn": [
+    "hotreload-dump",
+    "hotreload-load"
+  ]
+}

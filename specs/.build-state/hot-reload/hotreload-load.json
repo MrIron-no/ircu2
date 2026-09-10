@@ -1,0 +1,17 @@
+{
+  "name": "Dump loader and adoption",
+  "status": "pending",
+  "agentType": "builder",
+  "startedAt": null,
+  "completedAt": null,
+  "lastUpdated": "2026-09-10T13:47:19",
+  "description": null,
+  "commitSha": null,
+  "filesChanged": [],
+  "dependsOn": [
+    "hotreload-wire",
+    "tls-raw-mode",
+    "review-hotreload-wire",
+    "review-tls-raw-mode"
+  ]
+}

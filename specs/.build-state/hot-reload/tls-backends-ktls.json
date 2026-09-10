@@ -1,0 +1,14 @@
+{
+  "name": "kTLS in the TLS backends",
+  "status": "pending",
+  "agentType": "builder",
+  "startedAt": null,
+  "completedAt": null,
+  "lastUpdated": "2026-09-10T13:47:19",
+  "description": null,
+  "commitSha": null,
+  "filesChanged": [],
+  "dependsOn": [
+    "foundation"
+  ]
+}

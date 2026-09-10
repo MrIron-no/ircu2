@@ -6,6 +6,7 @@ playwright: false
 frontend-design: false
 spec-version: 1
 created: 2026-09-10T12:00:00
+branch: feat/hot-reload
 ---
 
 # Plan: Hot reload with connection survival

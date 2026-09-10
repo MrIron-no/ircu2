@@ -1,0 +1,14 @@
+{
+  "name": "Final Validation",
+  "status": "pending",
+  "agentType": "validator",
+  "startedAt": null,
+  "completedAt": null,
+  "lastUpdated": "2026-09-10T13:47:19",
+  "description": null,
+  "commitSha": null,
+  "filesChanged": [],
+  "dependsOn": [
+    "review-all"
+  ]
+}

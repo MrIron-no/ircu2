@@ -1,0 +1,21 @@
+{
+  "name": "Code Review",
+  "status": "pending",
+  "agentType": "reviewer",
+  "startedAt": null,
+  "completedAt": null,
+  "lastUpdated": "2026-09-10T13:47:19",
+  "description": null,
+  "commitSha": null,
+  "filesChanged": [],
+  "dependsOn": [
+    "foundation",
+    "tls-backends-ktls",
+    "tls-raw-mode",
+    "hotreload-wire",
+    "hotreload-dump",
+    "hotreload-load",
+    "hotreload-orchestration",
+    "test-reload-integration"
+  ]
+}
