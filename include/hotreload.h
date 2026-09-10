@@ -99,13 +99,25 @@ int  hotreload_apply(int check_only);                      /* 1 ok, 0 failure */
 
 /* orchestration (hotreload.c) */
 
+/** Test whether a local connection can be carried across a reload.
+ *
+ * The one rule both halves of a reload work from: server_reload() sheds
+ * exactly what this rejects, and hotreload_dump() writes exactly what it
+ * accepts.  See hotreload.c for why they must not diverge.
+ *
+ * @param[in] cptr Client to test.
+ * @return Non-zero when the dump can carry \a cptr across the exec.
+ */
+int hotreload_client_carriable(const struct Client *cptr);
+
 /** Dump state and exec this server in place, keeping connections open.
  *
  * The reload sheds every connection the dump cannot carry, and \a by may be
  * one of them -- an oper on a TLS session that is not kernel-offloaded kills
- * its own connection by typing RELOAD.  When the reload then aborts (the
- * pre-flight check failing is the designed outcome, not an accident) this
- * function returns to a caller whose client is already freed, so it says so.
+ * its own connection by typing RELOAD.  Nothing is shed until the pre-flight
+ * child has approved the dump, so every abort path leaves \a by alive and
+ * returns 0; the return value stays in the contract because the shed is what
+ * frees \a by, and only the shed can.
  *
  * @param[in] reason Human readable reason for the reload, for the logs.
  * @param[in] by Local client that issued the reload, or NULL for a signal.
@@ -114,8 +126,19 @@ int  hotreload_apply(int check_only);                      /* 1 ok, 0 failure */
  *   otherwise.  Never returns at all once the exec succeeds.
  */
 int server_reload(const char *reason, struct Client *by);
-/** Write a state dump to a file, for debugging; returns 1 on success. */
-int  hotreload_dump_to_path(const char *path);             /* 1 ok */
+
+/** Write a state dump to a file below RELOAD_DUMP_DIR, for debugging.
+ *
+ * \a name must be a plain file name: empty, "." , ".." and anything holding
+ * a '/' are refused with errno EINVAL, so the caller's argument can never
+ * steer the dump out of the configured directory.  The file is created
+ * O_EXCL | O_NOFOLLOW with mode 0600, so an existing file or a planted
+ * symlink is a failure rather than a target.
+ *
+ * @param[in] name Plain file name to write the dump to.
+ * @return Non-zero on success; zero on failure, with errno set.
+ */
+int  hotreload_dump_to_path(const char *name);             /* 1 ok */
 
 extern int hotreload_fd;      /**< -1 unless booted with -R */
 extern int hotreload_check;   /**< 1 when booted with -K */

@@ -626,7 +626,12 @@ int
 msgq_append_raw(struct MsgQ *mq, const void *data, size_t len)
 {
   const char *src = (const char *)data;
-  size_t chunk_max = (size_t)1 << MB_MAX_SHIFT;
+  /* One byte under the biggest bucket.  msgq_alloc() rounds a request up to
+   * the next power of two and stops at 1 << MB_MAX_SHIFT, so a buffer asked
+   * for with exactly that length has room for indices 0 .. (1 << MB_MAX_SHIFT)
+   * - 1 and no more -- while the NUL below is written at mb->msg[chunk].
+   * Chunking one byte short keeps that terminator inside the allocation. */
+  size_t chunk_max = ((size_t)1 << MB_MAX_SHIFT) - 1;
 
   assert(0 != mq);
 

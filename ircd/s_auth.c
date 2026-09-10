@@ -39,6 +39,7 @@
 #include "class.h"
 #include "client.h"
 #include "IPcheck.h"
+#include "hotreload.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
 #include "ircd_chattr.h"
@@ -1698,6 +1699,16 @@ int iauth_do_spawn(struct IAuth *iauth, int automatic)
 int auth_spawn(int argc, char *argv[])
 {
   int ii;
+
+  /* The pre-flight child (ircd -R fd -K) parses the same configuration as the
+   * server it is checking, IAuth block and all, but it exists only to prove
+   * the dump loads and it exits as soon as it has.  Spawning the iauth
+   * program from it would start a second copy alongside the running server's,
+   * both talking to whatever backend it authenticates against, and would then
+   * orphan it moments later when the child exits.  Nothing in check mode ever
+   * authenticates a client, so there is nothing for it to do either. */
+  if (hotreload_check)
+    return 0;
 
   if (iauth) {
     int same = 1;

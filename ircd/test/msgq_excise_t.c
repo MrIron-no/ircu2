@@ -295,6 +295,48 @@ test_append_raw_empty_is_noop(void)
   printf("Passed: append_raw of zero bytes is a no-op\n");
 }
 
+/* Every chunk msgq_append_raw() cuts must leave room for the NUL it writes
+ * one past the chunk's last byte.  msgq_raw_alloc() rounds a request up to a
+ * power of two and caps it at the largest pool bucket, so a chunk of exactly
+ * that bucket size gets a buffer with no room for the terminator and the
+ * append writes one byte past the allocation.  Read the chunk size back out
+ * of the queue -- the first iovec is the first MsgBuf -- and ask the
+ * allocator for the same size, which is what the append did. */
+static void
+test_append_raw_chunk_leaves_room_for_nul(void)
+{
+  struct MsgQ mq;
+  struct iovec iov[16];
+  unsigned char in[40000];
+  struct MsgBuf *mb;
+  unsigned int mapped = 0;
+  unsigned int chunk;
+  int n;
+
+  fill_pseudo_random(in, sizeof(in));
+
+  msgq_init(&mq);
+  assert(msgq_append_raw(&mq, in, sizeof(in)));
+  assert(MsgQCount(&mq) > 1);           /* big enough to have been chunked */
+
+  n = msgq_mapiov(&mq, iov, sizeof(iov) / sizeof(iov[0]), &mapped);
+  assert(n > 1);
+
+  chunk = (unsigned int)iov[0].iov_len; /* the size the append asked for */
+  assert(chunk > 0);
+
+  mb = msgq_raw_alloc(0, chunk);
+  assert(mb);
+  /* Strictly greater: msg[chunk] is the terminator, so the buffer must hold
+   * chunk + 1 bytes. */
+  assert((1u << mb->power) > chunk);
+  msgq_clean(mb);
+
+  MsgQClear(&mq);
+  printf("Passed: append_raw chunk of %u fits its NUL in a %u byte buffer\n",
+         chunk, 1u << mb->power);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -308,6 +350,7 @@ main(int argc, char *argv[])
   test_append_raw_roundtrip();
   test_append_raw_spans_buckets();
   test_append_raw_empty_is_noop();
+  test_append_raw_chunk_leaves_room_for_nul();
 
   printf("All msgq tests passed.\n");
   return 0;

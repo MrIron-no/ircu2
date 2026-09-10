@@ -498,7 +498,14 @@ enum AuthorizationCheckResult attach_iline(struct Client* cptr)
     /* If you change any of this logic, please make corresponding
      * changes in conf_debug_iline() below.
      */
-    if (aconf->address.port && aconf->address.port != cli_listener(cptr)->addr.port)
+    /* A client need not have a listener: a connection adopted across a hot
+     * reload has one only when the port it arrived on is still configured,
+     * and a server with no Port blocks at all leaves every adopted client
+     * without one.  A Client block that names a port cannot match a client
+     * whose port is unknown, so it is skipped rather than dereferenced. */
+    if (aconf->address.port
+        && (!cli_listener(cptr)
+            || aconf->address.port != cli_listener(cptr)->addr.port))
       continue;
     if (aconf->username && match(aconf->username, cli_username(cptr)))
       continue;

@@ -313,6 +313,10 @@ static struct FeatureDesc {
   F_B(HAS_FERGUSON_FLUSHER, 0, 0, 0),
   F_I(CLIENT_FLOOD, 0, 1024, 0),
   F_I(RELOAD_TIMEOUT, 0, 15, 0),
+  /* Unset means "the server's DPATH", which is the working directory the
+   * daemon chdir()s into at startup; hotreload_dump_to_path() spells that
+   * ".".  Local opers only: it names a path on the server's filesystem. */
+  F_S(RELOAD_DUMP_DIR, FEAT_NULL | FEAT_CASE | FEAT_MYOPER, 0, 0),
   F_I(CLIENT_TAG_FLOOD, 0, 8192, 0),
   F_I(SERVER_PORT, FEAT_OPER, 4400, 0),
   F_B(NODEFAULTMOTD, 0, 1, 0),
