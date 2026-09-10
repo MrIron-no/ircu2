@@ -23,6 +23,10 @@ struct Daemon
   int          pid_fd;      /**< File descriptor for process id file. */
 };
 
+/** This server's own Daemon record, owned by ircd.c.  A hot reload needs the
+ * command line inside it verbatim to build the vector it re-execs with. */
+extern struct Daemon thisServer;
+
 /*
  * Macros
  */

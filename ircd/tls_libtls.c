@@ -445,9 +445,11 @@ int ircd_tls_check_peer_hostname(struct Client *cptr, const char *name)
 
 int ircd_tls_offloaded(const struct Client *cptr)
 {
-  /* libtls exposes no kernel TLS offload, so a session is never offloaded. */
-  (void)cptr;
-  return 0;
+  /* A raw session carried over from an earlier hot reload is driven through
+   * kernel record state and has no libtls object left; see ircd_tls.h.  Short
+   * of that, libtls exposes no kernel TLS offload of its own, so a live
+   * session is never offloaded. */
+  return (cptr && IsTLSRaw(cptr)) ? 1 : 0;
 }
 
 void ircd_tls_detach(struct Client *cptr)

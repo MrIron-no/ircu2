@@ -55,10 +55,6 @@ int hotreload_check = 0;
  * hotreload_load.c reaches it the same way. */
 extern struct Listener *ListenerPollList;
 
-/** The command line this server was started with.  ircd.c owns it; the
- * reload needs it verbatim to build the vector it re-execs with. */
-extern struct Daemon thisServer;
-
 /** Interval between two waitpid() probes of the pre-flight child, in
  * microseconds. */
 #define HR_POLL_USEC 50000
@@ -241,8 +237,12 @@ static int hr_preflight(const char *fdtext, char *detail, size_t len)
  * the process fd limit is higher.
  *
  * @param[in] reason Human readable reason for the reload, for the logs.
+ * @param[in] by Local client that issued the reload, or NULL for a signal.
+ * @return 1 when \a by was exited by the shedding walk and the reload then
+ *   aborted, so that the caller returns CPTR_KILLED instead of touching a
+ *   freed client; 0 otherwise.  Does not return once the exec succeeds.
  */
-void server_reload(const char *reason)
+int server_reload(const char *reason, struct Client *by)
 {
   static int reloading;
   struct Listener *listener;
@@ -257,11 +257,12 @@ void server_reload(const char *reason)
   long ceiling;
   int dumpfd;
   int flags;
+  int by_exited = 0;
   int i;
 
   if (reloading) {
     sendto_opmask_butone(0, SNO_OLDSNO, "Reload already in progress");
-    return;
+    return 0;                   /* nothing was shed, so `by' is untouched */
   }
   reloading = 1;
 
@@ -279,23 +280,24 @@ void server_reload(const char *reason)
     if (IsDead(cptr) || cli_fd(cptr) < 0) {
       /* Already on its way out: the dump would name a descriptor that is
        * gone, or one the event loop is about to close. */
+      if (cptr == by)
+        by_exited = 1;
       exit_client(cptr, cptr, &me, "Server reloading");
     } else if (!IsUser(cptr)) {
       /* Servers, servers in handshake, unregistered users and connections
        * still inside the WEBIRC or websocket handshake.  For a server this
        * sends the SQUIT and removes its remote users; the link comes back on
        * its own once the new image is serving. */
+      if (cptr == by)
+        by_exited = 1;
       exit_client(cptr, cptr, &me, "Server reloading");
-    } else if (IsTLS(cptr) && !IsTLSRaw(cptr) && !ircd_tls_offloaded(cptr)) {
+    } else if (IsTLS(cptr) && !ircd_tls_offloaded(cptr)) {
       /* The record layer for this session lives in the TLS library, and the
-       * library goes with the image.
-       *
-       * IsTLSRaw is the survivor of an earlier reload: it has no library
-       * session left for ircd_tls_offloaded() to look at (that is what
-       * ircd_tls_detach() did to it), but the kernel record state it is
-       * driven through is still on the socket, and it only ever became raw
-       * because it was fully offloaded when the last dump was written.  It
-       * carries over again unchanged. */
+       * library goes with the image.  A session left raw by an earlier reload
+       * has no library object at all, and ircd_tls_offloaded() reports it as
+       * offloaded for exactly that reason; see its contract in ircd_tls.h. */
+      if (cptr == by)
+        by_exited = 1;
       exit_client(cptr, cptr, &me,
                   "Server reloading (TLS session cannot be carried over, "
                   "please reconnect)");
@@ -321,7 +323,7 @@ void server_reload(const char *reason)
                          "Reload aborted: cannot create state file: %s",
                          strerror(errno));
     reloading = 0;
-    return;
+    return by_exited;
   }
 
   dumpfd = fileno(f);
@@ -336,7 +338,7 @@ void server_reload(const char *reason)
     sendto_opmask_butone(0, SNO_OLDSNO, "Reload aborted: state dump failed");
     fclose(f);
     reloading = 0;
-    return;
+    return by_exited;
   }
 
   fflush(f);
@@ -352,7 +354,7 @@ void server_reload(const char *reason)
                          detail);
     fclose(f);
     reloading = 0;
-    return;                     /* back to the event loop; nothing was lost */
+    return by_exited;           /* back to the event loop; nothing was lost */
   }
 
   /* Logged as well as noticed: the notice below only reaches a send queue,

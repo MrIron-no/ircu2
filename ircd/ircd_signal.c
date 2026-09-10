@@ -119,7 +119,7 @@ static void sigusr2_callback(struct Event* ev)
   assert(SIGUSR2 == ev_data(ev));
 
   ++SignalCounter.usr2;
-  server_reload("caught signal: SIGUSR2");
+  server_reload("caught signal: SIGUSR2", NULL);
 }
 
 /** Signal callback for SIGINT.

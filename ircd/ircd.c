@@ -126,8 +126,8 @@ static struct Timer ping_timer; /**< timer structure for check_pings() */
 static struct Timer destruct_event_timer; /**< timer structure for exec_expired_destruct_events() */
 
 /** Daemon information. */
-/* Not static: server_reload() in hotreload.c re-execs this server with its
- * own command line, and takes argc/argv from here. */
+/* Not static, and declared in ircd.h: server_reload() in hotreload.c re-execs
+ * this server with its own command line, and takes argc/argv from here. */
 struct Daemon thisServer  = { 0, 0, 0, 0, 0, 0, -1 };
 
 /** Non-zero until we want to exit. */
@@ -703,7 +703,6 @@ int main(int argc, char **argv) {
      * server beside the parent that forked it.  Fail the check instead. */
     if (hotreload_check)
       _exit(1);
-    hotreload_check = 0;
   }
 
   if (!set_userid_if_needed())

@@ -193,9 +193,17 @@ void ircd_tls_close(void *ctx, const char *message);
  * session (a common outcome: TX offload succeeds, RX does not) is reported as
  * not offloaded.
  *
+ * A raw session (IsTLSRaw()) is always reported as offloaded, whatever the
+ * backend: it is the survivor of an earlier hot reload, so its record state
+ * lives in the kernel on the socket and there is no library object left to
+ * ask -- ircd_tls_detach() freed it before the exec.  It became raw only
+ * because it was fully offloaded when that dump was written, and it carries
+ * over again unchanged.
+ *
  * @param[in] cptr Locally connected client to query.
- * \returns 1 if both directions are kernel-offloaded, 0 otherwise (including
- *   when \a cptr has no TLS session, or the backend/platform cannot offload).
+ * \returns 1 if both directions are kernel-offloaded, or \a cptr is raw; 0
+ *   otherwise (including when \a cptr has no TLS session, or the
+ *   backend/platform cannot offload).
  */
 int ircd_tls_offloaded(const struct Client *cptr);
 
