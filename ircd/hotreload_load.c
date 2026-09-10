@@ -49,6 +49,7 @@
 #include "ircd_handler.h"
 #include "ircd_log.h"
 #include "ircd_netconf.h"
+#include "ircd_osdep.h"
 #include "ircd_reply.h"
 #include "ircd_string.h"
 #include "ircd_tls.h"
@@ -1245,8 +1246,39 @@ static void hr_apply_clients(int check_only, unsigned int *nclients,
   if (!check_only)
     for (i = 0; i < MAXCONNECTIONS; i++)
       if (fdmap[i]) {
-        if (MsgQLength(&cli_sendQ(fdmap[i])))
+        unsigned int sendq = MsgQLength(&cli_sendQ(fdmap[i]));
+
+        if (sendq) {
+          /* A carried send queue has to go back out the socket after the
+           * exec, and it can be large -- a slow-link client accumulates
+           * exactly the backlog this reload must now deliver.  The kernel
+           * send buffer on a client socket is only CLIENT_TCP_WINDOW
+           * (a deliberately tiny 2 KB, sized to bound a *fresh* client's
+           * footprint, inherited from the listener), so send_queued() can
+           * hand the kernel little more than a segment at a time: the rest
+           * dribbles out one writable event per MTU, application-paced.
+           *
+           * Against a reader whose own receive window is small that paced
+           * trickle loses the race that keeps the window open -- the last
+           * chunk (and the client's next PONG queued behind it) wedges in a
+           * TCP zero-window persist that, with no fresh data to clock it,
+           * does not recover inside the ping timeout, so the connection goes
+           * silent though the socket is neither dropped nor reset.  It is
+           * intermittent because it turns on whether the socket happens to
+           * be writable the instant the backlog is re-armed.
+           *
+           * Give the socket enough send buffer to hold the whole backlog so
+           * the kernel owns the delivery and drains it without the
+           * application in the loop, exactly as a SERVER_TCP_WINDOW server
+           * link would.  The kernel clamps the request to net.core.wmem_max
+           * (SO_SNDBUFFORCE is not used), so an oversized queue cannot demand
+           * unbounded memory; the receive size is left at CLIENT_TCP_WINDOW.
+           * This is a plain SO_SNDBUF change, so it applies unchanged under
+           * every event engine, kqueue included. */
+          os_set_sockbufs(cli_fd(fdmap[i]), sendq + CLIENT_TCP_WINDOW,
+                          CLIENT_TCP_WINDOW);
           update_write(fdmap[i]);
+        }
         if (DBufLength(&cli_recvQ(fdmap[i])))
           schedule_recvq_process(fdmap[i]);
       }
