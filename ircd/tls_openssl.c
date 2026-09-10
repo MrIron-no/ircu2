@@ -503,6 +503,80 @@ fail:
   return 6;
 }
 
+/** Ask OpenSSL to hand \a tls to the kernel TLS record layer once the
+ * handshake has produced keys.
+ *
+ * The option is set per session rather than on the SSL_CTX so a runtime
+ * "SET TLS_KTLS" takes effect for new connections without a rehash; sessions
+ * already created keep whatever they were built with.  Whether offload
+ * actually happens is decided by OpenSSL and the kernel (cipher, TLS version,
+ * BIO type); ircd_tls_offloaded() reports the outcome.
+ */
+static void openssl_enable_ktls(SSL *tls)
+{
+#ifdef SSL_OP_ENABLE_KTLS
+  if (feature_bool(FEAT_TLS_KTLS))
+    SSL_set_options(tls, SSL_OP_ENABLE_KTLS);
+#else
+  (void)tls;
+#endif
+}
+
+/** Non-zero if the kernel holds the send-side record state for \a tls. */
+static int openssl_ktls_send(SSL *tls)
+{
+#ifdef BIO_get_ktls_send
+  return BIO_get_ktls_send(SSL_get_wbio(tls)) ? 1 : 0;
+#else
+  (void)tls;
+  return 0;
+#endif
+}
+
+/** Non-zero if the kernel holds the receive-side record state for \a tls. */
+static int openssl_ktls_recv(SSL *tls)
+{
+#ifdef BIO_get_ktls_recv
+  return BIO_get_ktls_recv(SSL_get_rbio(tls)) ? 1 : 0;
+#else
+  (void)tls;
+  return 0;
+#endif
+}
+
+int ircd_tls_offloaded(const struct Client *cptr)
+{
+  SSL *tls;
+
+  if (!cptr)
+    return 0;
+
+  tls = s_tls(&cli_socket(cptr));
+  if (!tls)
+    return 0;
+
+  return openssl_ktls_send(tls) && openssl_ktls_recv(tls);
+}
+
+void ircd_tls_detach(struct Client *cptr)
+{
+  SSL *tls;
+
+  if (!cptr)
+    return;
+
+  tls = s_tls(&cli_socket(cptr));
+  if (!tls)
+    return;
+
+  s_tls(&cli_socket(cptr)) = NULL;
+  /* Quiet shutdown makes SSL_free() write nothing to the wire, and
+   * SSL_set_fd() attached the BIO with BIO_NOCLOSE, so the descriptor and any
+   * kernel TLS state hanging off it survive untouched. */
+  SSL_set_quiet_shutdown(tls, 1);
+  SSL_free(tls);
+}
+
 void ircd_tls_close(void *ctx, const char *message)
 {
   SSL *ssl = ctx;
@@ -551,6 +625,8 @@ void *ircd_tls_accept(struct Listener *listener, int fd)
     return NULL;
   }
 
+  openssl_enable_ktls(tls);
+
   if (listener && listener->tls_ciphers && !listener->tls_ctx)
     ssl_set_ciphers(NULL, tls, listener->tls_ciphers);
 
@@ -578,6 +654,8 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd)
     ssl_log_error("unable to create SSL session");
     return NULL;
   }
+
+  openssl_enable_ktls(tls);
 
   if (aconf && aconf->tls_ciphers && !aconf->tls_ctx)
     ssl_set_ciphers(NULL, tls, aconf->tls_ciphers);
@@ -745,6 +823,8 @@ IOResult tls_backend_handshake(struct Client *cptr, struct tls_peer *peer,
         log_write(LS_SYSTEM, L_ERROR, 0, "X509_digest failed for %C", cptr);
       X509_free(cert);
     }
+    Debug((DEBUG_DEBUG, "kTLS offload for %C: send=%d recv=%d", cptr,
+           openssl_ktls_send(tls), openssl_ktls_recv(tls)));
     return IO_SUCCESS;
   }
 

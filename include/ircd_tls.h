@@ -184,6 +184,35 @@ void *ircd_tls_connect(struct ConfItem *aconf, int fd);
  */
 void ircd_tls_close(void *ctx, const char *message);
 
+/** ircd_tls_offloaded() reports whether \a cptr's TLS session has been handed
+ * to the kernel TLS record layer in both directions.
+ *
+ * Only a fully offloaded session (send *and* receive) can survive an
+ * exec-in-place hot reload, because the kernel — not the userspace library —
+ * then holds the record-layer keys and sequence numbers.  A half-offloaded
+ * session (a common outcome: TX offload succeeds, RX does not) is reported as
+ * not offloaded.
+ *
+ * @param[in] cptr Locally connected client to query.
+ * \returns 1 if both directions are kernel-offloaded, 0 otherwise (including
+ *   when \a cptr has no TLS session, or the backend/platform cannot offload).
+ */
+int ircd_tls_offloaded(const struct Client *cptr);
+
+/** ircd_tls_detach() releases \a cptr's TLS session object without touching
+ * the connection.
+ *
+ * Unlike ircd_tls_close() no close_notify is sent, and unlike every teardown
+ * path the file descriptor is left open: the kernel keeps the offloaded record
+ * state on the socket so the re-executed daemon can keep using it.  Only the
+ * library-side session object is freed, and s_tls(&cli_socket(cptr)) is set to
+ * NULL.  This function touches no client flags, no message queue, and no
+ * socket events; the caller owns all of that.
+ *
+ * @param[in] cptr Locally connected client whose session object to free.
+ */
+void ircd_tls_detach(struct Client *cptr);
+
 /** Return non-zero if \a aconf needs its own outbound TLS context. */
 int conf_tls_needs_custom_ctx(const struct ConfItem *aconf);
 

@@ -49,6 +49,21 @@ void ircd_tls_close(void *ctx, const char *message)
   return;
 }
 
+int ircd_tls_offloaded(const struct Client *cptr)
+{
+  /* No TLS support, so nothing is ever kernel-offloaded. */
+  (void)cptr;
+  return 0;
+}
+
+void ircd_tls_detach(struct Client *cptr)
+{
+  /* No TLS support: there is never a session object to free.  Clearing the
+   * pointer keeps the contract identical to the real backends. */
+  if (cptr)
+    s_tls(&cli_socket(cptr)) = NULL;
+}
+
 void ircd_tls_conf_free(struct ConfItem *aconf)
 {
   (void)aconf;

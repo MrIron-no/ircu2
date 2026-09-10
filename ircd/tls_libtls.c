@@ -443,6 +443,30 @@ int ircd_tls_check_peer_hostname(struct Client *cptr, const char *name)
   return tls_peer_cert_contains_name(tls, name) == 1 ? 0 : 1;
 }
 
+int ircd_tls_offloaded(const struct Client *cptr)
+{
+  /* libtls exposes no kernel TLS offload, so a session is never offloaded. */
+  (void)cptr;
+  return 0;
+}
+
+void ircd_tls_detach(struct Client *cptr)
+{
+  struct tls *tls;
+
+  if (!cptr)
+    return;
+
+  tls = s_tls(&cli_socket(cptr));
+  if (!tls)
+    return;
+
+  s_tls(&cli_socket(cptr)) = NULL;
+  /* No tls_close(): no close_notify may reach the wire, and tls_free() leaves
+   * the descriptor passed to tls_accept_socket()/tls_connect_socket() open. */
+  tls_free(tls);
+}
+
 void ircd_tls_close(void *ctx, const char *message)
 {
   /* TODO: handle TLS_WANT_POLL{IN,OUT} from tls_close() */
