@@ -92,6 +92,7 @@ extern void msgq_append(struct Client *dest, struct MsgBuf *mb,
 			const char *format, ...);
 extern void msgq_clean(struct MsgBuf *mb);
 extern void msgq_add(struct MsgQ *mq, struct MsgBuf *mb, int prio);
+extern int msgq_append_raw(struct MsgQ *mq, const void *data, size_t len);
 extern void msgq_excise(struct MsgQ *mq, const char *buf);
 extern void msgq_count_memory(struct Client *cptr,
                               size_t *msg_alloc, size_t *msg_used);

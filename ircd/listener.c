@@ -26,6 +26,7 @@
 #include "client.h"
 #include "ircd.h"
 #include "ircd_alloc.h"
+#include "hotreload.h"
 #include "ircd_events.h"
 #include "ircd_features.h"
 #include "ircd_log.h"
@@ -38,6 +39,7 @@
 #include "numeric.h"
 #include "s_bsd.h"
 #include "s_conf.h"
+#include "s_debug.h"
 #include "s_misc.h"
 #include "s_stats.h"
 #include "send.h"
@@ -271,15 +273,30 @@ static int inetport(struct Listener* listener, int family)
   int fd;
 
   /*
-   * At first, open a new socket
+   * A hot reload hands the already bound and listening socket down by
+   * descriptor number, so take that in preference to binding a new one --
+   * binding would fail anyway while the old socket is still open, and any
+   * gap between close and bind is a window where connections are refused.
+   * The socket is already listening, so os_socket()/os_set_listen() are
+   * skipped; everything after this point is the ordinary path.
    */
-  fd = os_socket(&listener->addr, SOCK_STREAM, get_listener_name(listener), family);
-  if (fd < 0)
-    return -1;
-  if (!os_set_listen(fd, HYBRID_SOMAXCONN)) {
-    report_error(LISTEN_ERROR_MSG, get_listener_name(listener), errno);
-    close(fd);
-    return -1;
+  fd = hotreload_claim_listener(family == AF_INET ? 4 : 6,
+                                &listener->addr.addr, listener->addr.port);
+  if (fd >= 0) {
+    Debug((DEBUG_DEBUG, "adopted listener fd %d for %s", fd,
+           get_listener_name(listener)));
+  } else {
+    /*
+     * At first, open a new socket
+     */
+    fd = os_socket(&listener->addr, SOCK_STREAM, get_listener_name(listener), family);
+    if (fd < 0)
+      return -1;
+    if (!os_set_listen(fd, HYBRID_SOMAXCONN)) {
+      report_error(LISTEN_ERROR_MSG, get_listener_name(listener), errno);
+      close(fd);
+      return -1;
+    }
   }
   if (!set_listener_options(listener, fd, family))
     return -1;

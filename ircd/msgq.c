@@ -608,6 +608,53 @@ msgq_add(struct MsgQ *mq, struct MsgBuf *mb, int prio)
   mq->count++; /* and the queue count */
 }
 
+/** Append raw bytes to \a mq as one or more queued messages.
+ *
+ * Unlike msgq_add() with a msgq_make()'d buffer, nothing is formatted and no
+ * CRLF is appended: the bytes go in exactly as given, NULs included.  Used by
+ * the hot reload loader to restore a connection's pending output, which is
+ * already a finished byte stream and must not be re-framed.  The data is split
+ * across the largest pool bucket so a long sendq becomes a handful of
+ * close-fitting buffers rather than one oversized allocation.
+ *
+ * @param[in,out] mq Message queue to append to.
+ * @param[in] data Bytes to append.
+ * @param[in] len Number of bytes at \a data; zero is a no-op.
+ * @return Non-zero on success, zero if a buffer could not be allocated.
+ */
+int
+msgq_append_raw(struct MsgQ *mq, const void *data, size_t len)
+{
+  const char *src = (const char *)data;
+  size_t chunk_max = (size_t)1 << MB_MAX_SHIFT;
+
+  assert(0 != mq);
+
+  if (!len)
+    return 1;                   /* nothing to do; not an error */
+  assert(0 != src);
+
+  while (len > 0) {
+    size_t chunk = (len > chunk_max) ? chunk_max : len;
+    struct MsgBuf *mb = msgq_raw_alloc(0, (unsigned int)chunk);
+
+    if (!mb)
+      return 0;
+
+    memcpy(mb->msg, src, chunk);
+    mb->msg[chunk] = '\0';      /* msgq_add() copies length + 1 bytes */
+    mb->length = (unsigned int)chunk;
+
+    msgq_add(mq, mb, 0);
+    msgq_clean(mb);             /* the queue holds the only reference now */
+
+    src += chunk;
+    len -= chunk;
+  }
+
+  return 1;
+}
+
 /** Excise the head message of \a qlist if \a buf points into its buffer.
  * @param[in,out] mq Message queue owning \a qlist.
  * @param[in] qlist Queue list (normal or priority) to test.
