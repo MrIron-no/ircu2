@@ -158,7 +158,15 @@ static const struct hr_chanmode {
   { MODE_TLSINSECURE,    'z' }
 };
 
-/** Channel member status bits, by letter. */
+/** Channel member status bits, by letter.
+ *
+ * This table must stay in sync with hr_member_status() in
+ * ircd/hotreload_dump.c, and with the "MEMBER status= letters" table at the
+ * top of that file, which is the canonical list: the letters are o v d s z b
+ * m j n.  They are deliberately not the /MODE letters -- 'd' is DEOPPED and
+ * 'j' is the delayed (+D) join -- so a letter changed on one side and not the
+ * other silently drops a member's status across the reload.
+ */
 static const struct hr_memberflag {
   unsigned int flag;            /**< CHFL_* constant. */
   char c;                       /**< Character corresponding to the flag. */
@@ -168,9 +176,10 @@ static const struct hr_memberflag {
   { CHFL_DEOPPED,         'd' },
   { CHFL_ZOMBIE,          'z' },
   { CHFL_BURST_JOINED,    'b' },
-  { CHFL_SERVOPOK,        'S' },
+  { CHFL_SERVOPOK,        's' },
   { CHFL_CHANNEL_MANAGER, 'm' },
-  { CHFL_DELAYED,         'D' }
+  { CHFL_DELAYED,         'j' },
+  { CHFL_DELAYED_TARGET,  'n' }
 };
 
 /** Width of a #ServerStatistics field, for #hr_statfields. */
@@ -229,13 +238,23 @@ static const struct hr_statfield {
  * tls, raw, IPcheck) or is per-connection state that must start clean in the
  * new process (DEADSOCKET, BLOCKED, CLOSING, KILLED, PINGSENT and, above all,
  * NEGOTIATING_TLS -- the handshake finished in the process we replaced).
+ *
+ * The local-only user modes ride here too.  umode_str() emits only the flags
+ * at or above FLAG_GLOBAL_UMODES, so +O (FLAG_LOCOP) and +s (FLAG_SERVNOTICE)
+ * never reach the umodes= key and would be lost; the flags= word written by
+ * hr_client_flags() in ircd/hotreload_dump.c does carry them.  Those two are
+ * the only flags between FLAG_LOCAL_UMODES and FLAG_GLOBAL_UMODES in
+ * include/client.h -- FLAG_DEBUG (+g) sits above FLAG_GLOBAL_UMODES and so
+ * arrives through umodes= like any other global mode.
  */
 static const unsigned int hr_carried_flags[] = {
   FLAG_GOTID,
   FLAG_NONL,
   FLAG_TS8,
   FLAG_SASL,
-  FLAG_CAP302
+  FLAG_CAP302,
+  FLAG_LOCOP,
+  FLAG_SERVNOTICE
 };
 
 /** Number of entries in the array \a a. */
@@ -453,7 +472,10 @@ static void hr_apply_network_state(void)
     } else if (hr_is(rec, "GLINE")) {
       /* gline_add() canonicalises the mask in place, so hand it a copy
        * rather than the line buffer the record still points into. */
-      char mask[USERLEN + HOSTLEN + REALLEN + 8];
+      /* Big enough for every mask form gline_add() accepts: a BADCHAN mask
+       * runs to CHANNELLEN + 6 (gline.c), which is longer than the
+       * USERLEN + HOSTLEN user@host form and the REALLEN realname form. */
+      char mask[CHANNELLEN + 8];
       char reason[TOPICLEN + 1];
       time_t expire = (time_t)hr_get_int(rec, "expire", 0);
       unsigned int flags = (unsigned int)hr_get_int(rec, "flags", 0);
@@ -496,6 +518,7 @@ static void hr_apply_network_state(void)
     } else if (hr_is(rec, "JUPE")) {
       char server[HOSTLEN + 1];
       char reason[TOPICLEN + 1];
+      time_t expire = (time_t)hr_get_int(rec, "expire", 0);
       unsigned int flags = 0;
 
       ircd_strncpy(server, hr_str(rec, "server"), sizeof(server) - 1);
@@ -506,8 +529,20 @@ static void hr_apply_network_state(void)
       if (hr_get_int(rec, "local", 0))
         flags |= JUPE_LOCAL;
 
-      jupe_add(&me, &me, server, reason,
-               (time_t)hr_get_int(rec, "expire", 0),
+      /* The dump writes ju_expire, which is absolute, but jupe_add() takes a
+       * lifetime relative to now: it adds CurrentTime itself and rejects
+       * anything above JUPE_MAX_EXPIRE.  Convert, drop what has already
+       * expired, and clamp the rest -- a jupe whose remaining life somehow
+       * exceeds the maximum is better shortened than refused outright. */
+      expire -= CurrentTime;
+      if (expire <= 0) {
+        Debug((DEBUG_DEBUG, "hot reload: dropping expired jupe %s", server));
+        continue;
+      }
+      if (expire > JUPE_MAX_EXPIRE)
+        expire = JUPE_MAX_EXPIRE;
+
+      jupe_add(&me, &me, server, reason, expire,
                (time_t)hr_get_int(rec, "lastmod", 0), flags);
     } else if (hr_is(rec, "SLINE")) {
       char pattern[BUFSIZE];
