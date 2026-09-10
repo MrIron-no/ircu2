@@ -689,6 +689,16 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  /* -K is the hot-reload pre-flight check, meaningful only with a -R <fd>
+   * dump to validate.  On its own it would otherwise fall through to a normal
+   * boot and start a second live server.  Both flags are set by the RELOAD
+   * machinery, never by hand; refuse the nonsensical combination outright. */
+  if (hotreload_check && hotreload_fd < 0) {
+    fprintf(stderr, "-K (hot-reload pre-flight) requires -R <fd>; "
+            "these flags are set by RELOAD, not for manual use\n");
+    return 2;
+  }
+
   /* The dump has to be in memory before init_conf() runs, because
    * inetport() asks hotreload_claim_listener() for each listening socket it
    * is about to bind.  Nothing is initialised this early, so complain on
