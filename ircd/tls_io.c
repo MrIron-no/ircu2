@@ -24,9 +24,12 @@
 #include "tls_io.h"
 #include "client.h"
 #include "ircd_events.h"
+#include "ircd_osdep.h"
 #include "ircd_tls.h"
 #include "msgq.h"
 #include "ircd_string.h"
+#include "tls_ktls.h"
+#include <errno.h>
 #include <stdio.h>
 #include "ircd_snprintf.h"
 
@@ -44,6 +47,14 @@ int tls_want_writable(struct Client *cptr)
    * Starts from the same base rule as plaintext, then applies the TLS
    * cross-direction overrides — the single place that rule lives. */
   int want = base_want_writable(cptr);
+
+  /* raw kTLS: the kernel owns the record layer, so there is no cross-direction
+   * blocking to model — a write is a plain socket write and a read a plain
+   * recvmsg.  con_tls_want_rd/wr are whatever the pre-reload session last left
+   * there and must be ignored outright: a stale WANT_READ would otherwise pin
+   * writable interest off and park the send queue for good. */
+  if (IsTLSRaw(cptr))
+    return want;
 
   if (con_tls_want_wr(cli_connect(cptr)) == IRCD_TLS_WANT_READ)
     want = 0;                       /* a write waiting to read must not spin */
@@ -63,18 +74,26 @@ unsigned int tls_desired_events(struct Client *cptr)
   return ev;
 }
 
-/** Core-owned teardown after a fatal backend I/O error: hard-drop the session
- * and mark the socket dead, so deliver_it()/read_packet() never fall back to
- * the plaintext path and the connection is reaped.  Backends do no teardown of
- * their own for the read/write paths. */
-static void tls_io_fatal(struct Client *cptr)
+/** Mark the socket dead and clear both blocked-direction markers, so
+ * deliver_it()/read_packet() never fall back to the plaintext path and the
+ * connection is reaped.  Split out of tls_io_fatal() for raw kTLS mode, which
+ * has no library session to drop. */
+static void tls_io_mark_dead(struct Client *cptr)
 {
   struct Connection *con = cli_connect(cptr);
 
-  tls_backend_drop(cptr);
   SetFlag(cptr, FLAG_DEADSOCKET);
   con_tls_want_rd(con) = IRCD_TLS_WANT_NONE;
   con_tls_want_wr(con) = IRCD_TLS_WANT_NONE;
+}
+
+/** Core-owned teardown after a fatal backend I/O error: hard-drop the session,
+ * then mark the connection dead.  Backends do no teardown of their own for the
+ * read/write paths. */
+static void tls_io_fatal(struct Client *cptr)
+{
+  tls_backend_drop(cptr);
+  tls_io_mark_dead(cptr);
 }
 
 /** Record the direction a blocked write is waiting on, or tear the session
@@ -101,6 +120,14 @@ IOResult tls_io_sendv(struct Client *cptr, struct MsgQ *buf,
 
   *count_in = 0;
   *count_out = 0;
+
+  /* raw kTLS: the kernel frames the records, so this is a plain writev on a
+   * plain socket — same short-write semantics as plaintext.  Deliberately no
+   * con_rexmit bookkeeping (that exists only because a TLS library can accept
+   * part of a record and demand the identical pointer back) and no
+   * con_tls_want_wr, which stays IRCD_TLS_WANT_NONE. */
+  if (IsTLSRaw(cptr))
+    return os_sendv_nonb(cli_fd(cptr), buf, count_in, count_out);
 
   if (con->con_rexmit)
   {
@@ -202,7 +229,51 @@ IOResult tls_io_recv(struct Client *cptr, char *buf, unsigned int length,
                      unsigned int *count_out)
 {
   enum ircd_tls_want want = IRCD_TLS_WANT_NONE;
-  IOResult io = tls_backend_read(cptr, buf, length, count_out, &want);
+  IOResult io;
+
+  /* raw kTLS: read through the kernel record layer.  con_tls_want_rd is left
+   * at IRCD_TLS_WANT_NONE — there is no session that can block cross-
+   * direction, so there is nothing to record. */
+  if (IsTLSRaw(cptr))
+  {
+    int closed = 0;
+
+    io = tls_ktls_recv(cli_fd(cptr), buf, length, count_out, &closed);
+    if (io == IO_FAILURE)
+    {
+      /* No library session to drop — only the socket dies.  tls_io_fatal()
+       * would call tls_backend_drop() on a NULL session. */
+      tls_io_mark_dead(cptr);
+      return IO_FAILURE;
+    }
+    if (closed)
+    {
+      /* raw-mode EOF contract.
+       *
+       * tls_ktls_recv() reports an orderly close (a peer close_notify record,
+       * or a plain FIN) as IO_SUCCESS with zero bytes.  That is NOT what
+       * read_packet() understands as end-of-file: os_recv_nonb() — the
+       * plaintext primitive whose contract read_packet() was written against
+       * — turns a zero-byte recv() into IO_FAILURE with errno cleared to 0
+       * (ircd/os_generic.c), and read_packet()'s IO_FAILURE arm is the only
+       * one that returns 0 to close the link.  A zero-byte IO_SUCCESS instead
+       * falls through every `length > 0` test as "nothing arrived" and
+       * returns 1, so the connection would stay open and the level-triggered
+       * readable event would re-fire on the pending EOF forever.
+       *
+       * So translate here, at the one place that knows: raw EOF becomes
+       * exactly os_recv_nonb()'s EOF signal, and a peer close_notify closes
+       * the connection down precisely the path a plaintext FIN does
+       * (read_packet() returns 0 -> client_sock_callback()'s "EOF from
+       * client" -> exit_client()). */
+      *count_out = 0;
+      errno = 0;
+      return IO_FAILURE;
+    }
+    return io;
+  }
+
+  io = tls_backend_read(cptr, buf, length, count_out, &want);
 
   if (io == IO_FAILURE)
     tls_io_fatal(cptr);
