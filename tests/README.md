@@ -104,10 +104,9 @@ uv run pytest hotreload -v
   offloaded being closed gracefully instead; KeyUpdate after a reload
   (kernel TLS cannot rekey, so the connection is closed, not wedged).
 - `test_reload_dump.py` — `RELOAD DUMP <name>` and the dump/reload/dump
-  round trip. Written against a RELOAD DUMP hardening fix
-  (plain-file-name-only, a `RELOAD_DUMP_DIR` feature, `PRIV_DIE`) that is
-  not yet merged into this branch; those tests are marked
-  `xfail(strict=True)` until it lands.
+  round trip. Dumps are written into the server's working directory (DPATH);
+  the command is hardened (plain file name only, `PRIV_RESTART`+`PRIV_DIE`,
+  `O_EXCL`/`O_NOFOLLOW`, mode 0600).
 - `test_reload_scale.py` — the same survival and dump-roundtrip
   guarantees, but at a few hundred clients/channels instead of 2-3, plus a
   test that genuinely blocks a client's server-side sendQ (kernel-level

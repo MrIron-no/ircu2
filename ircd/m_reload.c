@@ -109,14 +109,14 @@
  * operator privileges, silence list and queued output, and -- in cleartext --
  * every channel's key, upass and apass, so the right to ask for one is the
  * right to read the whole server's state, secrets included, off the disk.  The
- * name is a plain file name below RELOAD_DUMP_DIR (see
- * hotreload_dump_to_path()); the request is logged and noticed to opers
+ * name is a plain file name written in the server's working directory
+ * (DPATH; see hotreload_dump_to_path()); the request is logged and noticed to opers
  * whether or not it succeeds at writing anything.
  *
  * Failures answer with a fixed string.  The one exception is the name check,
  * which the oper can act on and which reveals nothing about the filesystem;
  * every other reason (a name that already exists, a symlink in the way, a
- * directory that is not writable, an unreadable RELOAD_DUMP_DIR) is a probe
+ * directory that is not writable) is a probe
  * of the server's filesystem if it is reported back, so it goes to the log
  * and not to the client.
  */

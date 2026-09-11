@@ -213,7 +213,7 @@ Target limiting:
  Additional Numerics:
   ERR_TARGETTOOFAST 349
 
-Note: RELOAD/hot-reload and its TLS_KTLS, RELOAD_TIMEOUT and
-RELOAD_DUMP_DIR configuration features are documented in doc/readme.reload
+Note: RELOAD/hot-reload and its TLS_KTLS and RELOAD_TIMEOUT
+configuration features are documented in doc/readme.reload
 and doc/readme.features, not here -- this file covers client-visible
 protocol features, not F:-line configuration.

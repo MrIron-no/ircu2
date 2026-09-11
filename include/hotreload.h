@@ -128,7 +128,7 @@ int hotreload_client_carriable(const struct Client *cptr);
  */
 int server_reload(const char *reason, struct Client *by);
 
-/** Write a state dump to a file below RELOAD_DUMP_DIR, for debugging.
+/** Write a state dump to a file in the server's working directory (DPATH), for debugging.
  *
  * \a name must be a plain file name: empty, "." , ".." and anything holding
  * a '/' are refused with errno EINVAL, so the caller's argument can never
