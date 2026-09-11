@@ -581,36 +581,42 @@ async def test_blocked_sendq_client_survives_reload(ircd_tls_network):
     channel the victim is in; because nothing ever drains the victim's
     receive window, the server's software sendQ to it backs up for real.
 
-    KNOWN INTERMITTENT FAILURE (observed ~2026-09-10, ~40-50% of runs on
-    this branch, HEAD c78077f/c9620e6): the pre-RELOAD blocked sendQ is
-    reliably built (STATS l consistently shows ~97-98KB, well over
-    _SENDQ_EVIDENCE_THRESHOLD, every run) and the SYSTEM log always
-    reports "hot reload: applied: ... 0 authorisation failures" -- but on
-    a substantial fraction of runs the victim connection goes silent
-    forever after the reload: no data, no EOF/RST, the fresh liveness
-    PING never gets a PONG even after a 90s read budget. When it does not
-    reproduce, the whole backlog (all FLOOD_CLIENTS*LINES_PER_CLIENT
-    messages, in order, no dupes) plus the liveness PONG all arrive
-    normally, usually within a couple of seconds of the reload. This is
-    NOT a bug in this test (verified by stashing every test-infra change
-    this file's task introduced and re-running an adjacent, pre-existing
-    hotreload test -- unaffected; and by reproducing the same signature
-    outside pytest against a manually-held container). The leading
-    candidate is the write-interest re-arm path for an adopted connection
-    whose sendQ is nonempty: ircd/hotreload_load.c's post-adoption loop
-    (`if (MsgQLength(&cli_sendQ(fdmap[i]))) update_write(fdmap[i]);`,
-    hr_apply_clients()) calls ircd/s_bsd.c's update_write() ->
-    socket_events(), which for a client freshly socket_add()-ed by
-    adopt_connection() (s_bsd.c) is now the *second* interest-mask change
-    on that fd before the event loop has ever run (the first being
-    adopt_connection()'s own SOCK_EVENT_READABLE arm) -- worth
-    instrumenting ircd/engine_epoll.c's engine_set_events()/EPOLL_CTL_MOD
-    call for this fd specifically to see whether the kernel ever actually
-    gets asked for EPOLLOUT on the runs that hang. Left as a strict,
-    unweakened assertion (not xfail) per this task's instructions: this
-    is exactly the class of adoption-time bug the dump/load rewrite was
-    supposed to guard against, and coverage should keep failing until
-    it's fixed, not paper over it.
+    HISTORY -- two independent causes were once conflated as one
+    "intermittent silent-after-reload" failure (observed ~40-50% of runs
+    on HEAD c78077f/c9620e6); both are now resolved:
+
+      1. Server flow-control drain (the real one, already fixed in the
+         tree). A client carried across RELOAD with a big blocked sendQ
+         is re-armed for writable interest, but its kernel send buffer is
+         only CLIENT_TCP_WINDOW (2 KB): against the victim's own 2 KB
+         receive window the backlog then trickled out one MTU per event,
+         application-paced, and could lose the race that keeps the window
+         open and wedge in a TCP zero-window persist that did not recover
+         inside the read budget. ircd/hotreload_load.c's hr_apply_clients()
+         now grows the adopted socket's SO_SNDBUF to hold the whole
+         backlog (os_set_sockbufs(..., sendq + CLIENT_TCP_WINDOW, ...)),
+         so the kernel owns the delivery and drains it autonomously. With
+         that in place the full backlog arrives every run.
+
+      2. A liveness-probe race in THIS test (fixed in the read loop
+         below). The old loop fired the post-reload PING only upon reading
+         a line that arrived *after* the marker. But the marker is sent
+         from the oper connection after the entire flood, so the server
+         normally queues it at the very tail of the victim's sendQ:
+         whenever nothing was interleaved behind it, no line ever followed
+         the marker, the PING was never sent, and the test then failed
+         waiting 90s for a PONG to a probe it never transmitted -- the
+         "backlog fully drained (all FLOOD_CLIENTS*LINES_PER_CLIENT + the
+         marker) then silent, no PONG" signature. Reproduced with an
+         identical victim/flood setup and NO reload at all, which is how
+         it was pinned on the probe logic rather than the server. The loop
+         now fires the PING the instant the marker is seen and keeps
+         reading for the cookie'd PONG.
+
+    The assertions remain strict and unweakened (not xfail): the test
+    still builds a genuine ~97 KB blocked server-side sendQ, reloads, and
+    requires the entire backlog delivered in order with the connection
+    answering a fresh PING afterwards.
     """
     hub = ircd_tls_network["hub"]
     host, port = hub["host"], hub["port"]
@@ -733,14 +739,25 @@ async def test_blocked_sendq_client_survives_reload(ircd_tls_network):
             lines_seen += 1
             if not marker_seen and marker in line:
                 marker_seen = True
-                continue
-            if marker_seen and not postcheck_sent:
-                # First line read *after* the marker: safe to fire the
-                # liveness probe now -- any earlier and a slow drain could
-                # still misread it as "dead" while backlog is legitimately
-                # still arriving.
+                # Fire the liveness probe the instant the marker is seen,
+                # NOT on some later line. The marker is sent from the oper
+                # connection only *after* the entire flood, so the server
+                # queues it at the tail of the victim's sendQ: whenever the
+                # backlog happens to drain with the marker genuinely last
+                # (no separate-connection interleaving puts a stray flood
+                # line behind it -- a race the server owes no guarantee
+                # about), no line ever arrives *after* the marker, the old
+                # "PING on the next line read" gate never triggered, the
+                # PING was never sent, and the read below timed out waiting
+                # for a PONG to a PING that was never asked for -- the exact
+                # "backlog fully drained, 330 lines incl. marker, then
+                # silent" false failure. Reading continues after this send,
+                # so a PONG queued behind any remaining backlog is still
+                # collected (matched by cookie below), never misread as
+                # dead.
                 await loop.run_in_executor(None, victim.send_line, f"PING :{postcheck}")
                 postcheck_sent = True
+                continue
             # The server's reply to a client-initiated PING is source-
             # prefixed (":tls-hub.test.net PONG ... :<cookie>"), so a
             # startswith("PONG") check (right for the *unprefixed* PING
