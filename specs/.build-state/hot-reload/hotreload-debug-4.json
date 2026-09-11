@@ -1,11 +1,13 @@
 {
   "name": "Isolated deep-dive blocked-sendq",
-  "status": "in_progress",
+  "status": "completed",
   "agentType": "debugger",
   "startedAt": "2026-09-11T14:01:06",
-  "lastUpdated": "2026-09-11T14:01:06",
-  "description": "Clean isolated attempt (user chose). First runs a no-reload control to decide reload-defect vs pathological-test-setup. If real defect: root-cause the post-drain silence; else fix the test to a realistic setup. 10x verification required. Has docker to itself.",
+  "lastUpdated": "2026-09-11T14:55:20",
+  "description": "RESOLVED. Control experiment (same victim setup, NO reload) reproduced the failure identically => NOT a reload defect. Two conflated causes: (1) real small-window drain, fixed by the kept SO_SNDBUF mitigation; (2) a test liveness-probe race (PING fired only on a post-marker line that often never came). Fix: test fires PING on marker (strict assertions kept). 10/10 clean. Merged.",
   "dependsOn": [
     "verify-sendq-fix"
-  ]
+  ],
+  "completedAt": "2026-09-11T14:55:20",
+  "commitSha": "39d885abc21b35d5169659a41306f9710d9f7ba7"
 }
