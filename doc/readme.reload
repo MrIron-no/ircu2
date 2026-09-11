@@ -205,13 +205,11 @@ around it are correspondingly strict.
     down, so both are required together.
   - <name> must be a plain file name: it must not contain a '/', and it
     must not be "." or "..".  This is enforced so the command can never
-    be used to write outside the configured directory.
-  - The file is created below the directory named by the RELOAD_DUMP_DIR
-    feature.  That feature can only be set from ircd.conf (an F: line);
-    it cannot be changed with /SET at runtime, so the directory a dump
-    can land in is an administrator's choice, not the requesting oper's.
-    If RELOAD_DUMP_DIR is unset, the dump lands in the server's own
-    working directory (DPATH).
+    be used to write outside the server's working directory.
+  - The file is written into the server's own working directory (DPATH),
+    which the daemon chdir()s into at startup.  The <name> given on the
+    command is opened relative to that directory; the dump always lands
+    there and the location is not an oper-chosen path.
   - The file is opened O_EXCL and O_NOFOLLOW, mode 0600: it is refused
     outright if a file of that name already exists, or if that name is a
     symlink.  A dump never overwrites anything.
@@ -224,8 +222,8 @@ data -- every local user's real IP address, account name, and operator
 privileges; every client's queued but unsent message bytes; and every
 channel's key, upass and apass. Treat a dump file exactly as you would
 treat the server's own configuration secrets, and delete it once you are
-done with it. This is also why RELOAD_DUMP_DIR should point somewhere
-only the server administrator can read.
+done with it. This is also why the server's working directory (DPATH)
+should be somewhere only the server administrator can read.
 
 * Internal flags: -R and -K.
 

@@ -594,18 +594,18 @@ int server_reload(const char *reason, struct Client *by)
   return by_exited;
 }
 
-/** Write a state dump to a file below RELOAD_DUMP_DIR, for debugging.
+/** Write a state dump to a file in the server's working directory, for debugging.
  *
  * A state dump holds every local user's nick, host, address, account,
  * operator privileges, silence list and pending send queue, so the file it
- * lands in must be chosen by the administrator and not by whoever types the
- * command.  Three rules do that:
+ * lands in must not be steerable by whoever types the command.  Two rules do
+ * that:
  *
  *   - \a name is a plain file name.  Anything holding a '/', and the two
  *     directory names "." and "..", is refused, so the dump cannot be steered
- *     out of the configured directory by a relative or absolute path;
- *   - the directory is RELOAD_DUMP_DIR, or the working directory (DPATH) when
- *     that feature is unset.  It is never taken from the command;
+ *     out of the working directory by a relative or absolute path.  The file
+ *     is opened relative to the cwd, which is DPATH: the daemon chdir()s into
+ *     its working directory at startup, so the dump always lands there;
  *   - the file is created with O_EXCL | O_NOFOLLOW and mode 0600, so an
  *     existing file, a symlink planted in the directory, or a file whose
  *     permissions someone widened beforehand all fail rather than being
@@ -617,8 +617,6 @@ int server_reload(const char *reason, struct Client *by)
  */
 int hotreload_dump_to_path(const char *name)
 {
-  const char *dir;
-  char path[1024];
   FILE *f;
   int ok;
   int fd;
@@ -629,13 +627,7 @@ int hotreload_dump_to_path(const char *name)
     return 0;
   }
 
-  dir = feature_str(FEAT_RELOAD_DUMP_DIR);
-  if (!dir || !*dir)
-    dir = ".";                  /* DPATH: the daemon's working directory */
-
-  ircd_snprintf(0, path, sizeof(path), "%s/%s", dir, name);
-
-  fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+  fd = open(name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
   if (fd < 0)
     return 0;                   /* errno is the caller's to report */
 

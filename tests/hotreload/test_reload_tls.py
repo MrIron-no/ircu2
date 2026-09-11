@@ -17,6 +17,7 @@ below (a path that used to crash the daemon outright).
 from __future__ import annotations
 
 import asyncio
+import platform
 import re
 import ssl
 
@@ -47,6 +48,23 @@ HUB_CONTAINER = "ircu-tls-hub"
 # collapses some close_notify deliveries to this) or an explicit
 # SSLZeroReturnError/SSLEOFError is acceptable; anything else is a bug.
 _CLEAN_CLOSE_EXCEPTIONS = (ConnectionError, ssl.SSLZeroReturnError, ssl.SSLEOFError)
+
+# Kernel TLS transmit-side rekey (a TLS 1.3 KeyUpdate on an offloaded
+# session) needs Linux 6.14; see ircd/tls_ktls.c. Docker containers share
+# the host kernel, so a test that drives that path can only run when the
+# host is 6.14 or newer.
+_KTLS_TX_REKEY_MIN = (6, 14)
+
+
+def _host_kernel_version() -> tuple[int, int]:
+    """(major, minor) parsed from platform.release(), e.g.
+    "6.12.101+deb13-amd64" -> (6, 12). Unparseable input yields (0, 0) so
+    the caller treats it as "too old to be sure"."""
+    rel = platform.release()
+    m = re.match(r"(\d+)\.(\d+)", rel)
+    if not m:
+        return (0, 0)
+    return (int(m.group(1)), int(m.group(2)))
 
 
 async def _disconnect_all(*clients) -> None:
@@ -225,6 +243,15 @@ async def test_tls_close_after_reload_is_clean(ircd_tls_network):
             pass
 
 
+@pytest.mark.skipif(
+    _host_kernel_version() < _KTLS_TX_REKEY_MIN,
+    reason=(
+        "kernel TLS-TX rekey requires Linux >= %d.%d (host is %d.%d); a "
+        "post-reload TLS 1.3 KeyUpdate on an offloaded session cannot be "
+        "exercised below that"
+        % (_KTLS_TX_REKEY_MIN + _host_kernel_version())
+    ),
+)
 async def test_tls_keyupdate_after_reload_closes_cleanly(ircd_tls_network):
     hub = ircd_tls_network["hub"]
     oper = IRCClient()
