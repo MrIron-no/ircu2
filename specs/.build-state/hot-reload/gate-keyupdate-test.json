@@ -1,10 +1,12 @@
 {
   "name": "Skip keyupdate test on kernel <6.14",
-  "status": "queued",
+  "status": "completed",
   "agentType": "builder",
-  "lastUpdated": "2026-09-11T14:01:06",
-  "description": "test_tls_keyupdate_after_reload_closes_cleanly is environmental (needs kernel 6.14 TLS-TX rekey). Gate it to skip on <6.14. Sequenced after debug-4 to avoid test-file collision.",
+  "lastUpdated": "2026-09-11T15:14:52",
+  "description": "DONE. test_tls_keyupdate_after_reload_closes_cleanly skipif kernel<6.14 (host 6.12 -> SKIPPED with reason). Full hotreload suite: 22 passed, 2 skipped, 0 failed.",
   "dependsOn": [
     "hotreload-debug-4"
-  ]
+  ],
+  "startedAt": "2026-09-11T14:56:35",
+  "completedAt": "2026-09-11T15:14:52"
 }

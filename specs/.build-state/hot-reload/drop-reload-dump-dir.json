@@ -1,11 +1,11 @@
 {
   "name": "Drop RELOAD_DUMP_DIR, use DPATH",
-  "status": "queued",
+  "status": "completed",
   "agentType": "builder",
-  "startedAt": null,
-  "completedAt": null,
-  "lastUpdated": "2026-09-10T20:51:09",
-  "description": "User decision: remove the RELOAD_DUMP_DIR feature; RELOAD DUMP <name> always writes to cwd (DPATH/lib dir). Keep plain-name validation, O_EXCL|O_NOFOLLOW, 0600, PRIV_RESTART+PRIV_DIE. Scope: ircd/ircd_features.c (remove F_S), include/ircd_features.h (remove FEAT_ enum), ircd/hotreload.c (hotreload_dump_to_path: drop feature_str, path=<name> in cwd), doc/readme.reload+readme.features+example.conf (remove RELOAD_DUMP_DIR, note dumps go to DPATH), tests/docker/ircd-tls-hub.conf (remove line), tests/hotreload/test_reload_dump.py+helpers (read from /opt/ircu/lib). SEQUENCED after hotreload-scale-tests + hotreload-abi-guard merge to avoid test-file/working-tree collisions.",
+  "startedAt": "2026-09-11T14:56:35",
+  "completedAt": "2026-09-11T15:14:52",
+  "lastUpdated": "2026-09-11T15:14:52",
+  "description": "DONE. RELOAD DUMP writes to DPATH; feature removed; docs/conf/dump-tests updated; ABI golden unaffected; stale comment refs cleaned. Dump tests pass under /opt/ircu/lib.",
   "commitSha": null,
   "filesChanged": [],
   "dependsOn": [
