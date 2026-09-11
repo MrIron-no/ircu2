@@ -1,0 +1,11 @@
+{
+  "name": "Isolated deep-dive blocked-sendq",
+  "status": "in_progress",
+  "agentType": "debugger",
+  "startedAt": "2026-09-11T14:01:06",
+  "lastUpdated": "2026-09-11T14:01:06",
+  "description": "Clean isolated attempt (user chose). First runs a no-reload control to decide reload-defect vs pathological-test-setup. If real defect: root-cause the post-drain silence; else fix the test to a realistic setup. 10x verification required. Has docker to itself.",
+  "dependsOn": [
+    "verify-sendq-fix"
+  ]
+}

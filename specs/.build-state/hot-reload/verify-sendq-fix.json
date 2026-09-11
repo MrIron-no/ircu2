@@ -1,11 +1,12 @@
 {
   "name": "Verify sendq fix 10x",
-  "status": "in_progress",
+  "status": "completed",
   "agentType": "tester",
   "startedAt": "2026-09-11T00:35:08",
-  "lastUpdated": "2026-09-11T00:35:08",
-  "description": "Run blocked-sendq repro 10x for the intermittent-bug fix; characterize keyupdate-after-reload test.",
+  "lastUpdated": "2026-09-11T14:01:06",
+  "description": "0/10 clean: SO_SNDBUF fix INSUFFICIENT (relocates the wedge; run 4 = backlog drained then silent). keyupdate-after-reload = (b) environmental kernel-6.14 gate on 6.12 host, 6/6 identical, to be skip-gated. Note: main checkout got flipped to 'main' branch after this run (recovered).",
   "dependsOn": [
     "hotreload-debug-3"
-  ]
+  ],
+  "completedAt": "2026-09-11T14:01:06"
 }
