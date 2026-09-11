@@ -13,9 +13,9 @@ CONTRACT (security hardening, merged into feat/hot-reload as of commit
 f12d268 -- "merge: hot-reload security hardening (RELOAD DUMP, pre-flight-
 before-shed, fd hygiene)", commits 226be92 and 5255dc5): `RELOAD DUMP
 <name>` takes a plain file name only -- no '/' anywhere, so no '.' or '..'
-traversal either -- and writes it inside the directory named by feature
-RELOAD_DUMP_DIR (configured here as /opt/ircu/debug, the bind-mounted
-debug dir; see tests/docker/ircd-tls-hub.conf). The file is opened
+traversal either -- and writes it into the server's own working directory
+(DPATH, /opt/ircu/lib -- the daemon chdir()s there at startup; see
+tests/docker/ircd-tls-hub.conf). The file is opened
 O_EXCL|O_NOFOLLOW,
 mode 0600: it must not already exist, and being 0600 and owned by the
 container's ircu user, it is not reliably host-readable, so every dump is
@@ -42,7 +42,8 @@ echoing one back would let a caller probe the filesystem. (An earlier
 revision of this contract, seen briefly during development, sent the bare
 notice before the specific one on a name-check failure; the version
 tested here is the corrected one: exactly one notice, matched to the
-failure.) `RELOAD_DUMP_DIR` is `FEAT_READ` -- config-only, no `SET`.
+failure.) The dump directory is not oper-selectable at all: it is always
+DPATH, the working directory the daemon chdir()s into at startup.
 
 """
 
@@ -61,7 +62,7 @@ from tls.helpers import oper_up
 
 pytestmark = [pytest.mark.tls, pytest.mark.asyncio, pytest.mark.hotreload]
 
-DUMP_DIR = "/opt/ircu/debug"
+DUMP_DIR = "/opt/ircu/lib"
 
 
 async def _disconnect_all(*clients: IRCClient) -> None:

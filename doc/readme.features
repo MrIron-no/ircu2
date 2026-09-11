@@ -112,20 +112,6 @@ a value of 0 would fail every reload outright, and a very large value
 could wedge the server behind one hung child; half a minute of a frozen
 event loop is already as much as a network will tolerate.
 
-RELOAD_DUMP_DIR
- * Type: string
- * Default: none (the server's own working directory, DPATH)
-
-Directory under which "RELOAD DUMP <name>" (see doc/readme.reload) writes
-state dump files.  This feature can only be set from an F: line in
-ircd.conf; it is read-only at runtime and cannot be changed with /SET, so
-the one directory a dump can land in is an administrator's choice and not
-that of whichever oper happens to request the dump.  A state dump holds
-every local user's nick, host, IP address, account, operator privileges,
-silence list and queued output, and every channel's key, upass and apass,
-all in cleartext, so this should be a directory only the server
-administrator can read.
-
 CLIENT_TAG_FLOOD
  * Type: integer
  * Default: 8192
