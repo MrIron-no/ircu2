@@ -114,6 +114,7 @@ int ms_account(struct Client* cptr, struct Client* sptr, int parc,
   struct ConfItem *conf;
   uint64_t acc_id = 0, acc_flags = 0;
   int already_account;
+  const char *fmt;
 
   if (parc < 3)
     return need_more_params(sptr, "ACCOUNT");
@@ -185,23 +186,25 @@ int ms_account(struct Client* cptr, struct Client* sptr, int parc,
            "flags %qu", parv[2], cli_user(acptr)->acc_flags));
   }
 
-  /* Flag-only / same-name ACCOUNT updates for already-authed users
-   * confuse peers on u2.10.12.19 and earlier (they protocol_violate on
-   * any second ACCOUNT).  u2.10.13.0 tolerates same-name locally; do not
-   * relay while NETWORK_FEATURES is off.  First-time ACCOUNT always
-   * propagates. */
-  if (already_account && !feature_bool(FEAT_NETWORK_FEATURES))
-    return 0;
-
   /* Key the relay format on parc (not stored acc_id) so a flag update
    * after a bare-name registration still propagates id/flags.  A zero
    * flag value is intentional when parc > 4. */
-  sendcmdto_serv_butone(sptr, CMD_ACCOUNT, cptr,
-                        parc > 4 ? "%C %s %qu %qu" :
-                        parc > 3 ? "%C %s %qu" : "%C %s",
-                        acptr, cli_user(acptr)->account,
-                        cli_user(acptr)->acc_id,
-                        cli_user(acptr)->acc_flags);
+  fmt = parc > 4 ? "%C %s %qu %qu" : parc > 3 ? "%C %s %qu" : "%C %s";
+
+  /* Flag-only / same-name ACCOUNT updates for already-authed users
+   * confuse P10 peers (u2.10.12.19 and earlier protocol_violate on any
+   * second ACCOUNT), so relay those over P11 links only.  First-time
+   * ACCOUNT always propagates. */
+  if (already_account)
+    sendcmdto_prot_serv_butone(sptr, CMD_ACCOUNT, cptr, 11, fmt,
+                               acptr, cli_user(acptr)->account,
+                               cli_user(acptr)->acc_id,
+                               cli_user(acptr)->acc_flags);
+  else
+    sendcmdto_serv_butone(sptr, CMD_ACCOUNT, cptr, fmt,
+                          acptr, cli_user(acptr)->account,
+                          cli_user(acptr)->acc_id,
+                          cli_user(acptr)->acc_flags);
 
   return 0;
 }

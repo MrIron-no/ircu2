@@ -5,7 +5,7 @@ not shown on the client ACCOUNT CAP wire; they appear in the NICK burst
 as ``account:id:flags``.
 
 Prod rolling-upgrade behaviour, multi-hop flag relay after bare-name
-registration, and NETWORK_FEATURES gating live in
+registration, and per-link P10/P11 gating live in
 ``pr_network_features_compat/`` (A prod — B — C + spies).
 """
 
