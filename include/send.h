@@ -61,12 +61,6 @@ extern void sendcmdto_prot_serv_butone(struct Client *from, const char *cmd,
                                        unsigned short min_prot,
                                        const char *pattern, ...);
 
-/* Send command to servers by flags except one */
-extern void sendcmdto_flag_serv_butone(struct Client *from, const char *cmd,
-                                       const char *tok, struct Client *one,
-                                       int require, int forbid,
-                                       const char *pattern, ...);
-
 /* Send command to all servers except one */
 extern void sendcmdto_serv_butone(struct Client *from, const char *cmd,
 				  const char *tok, struct Client *one,
