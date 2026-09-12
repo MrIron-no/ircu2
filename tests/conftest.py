@@ -102,7 +102,7 @@ LIMITS = {
     "name": "limits.test.net",
 }
 
-# A (prod release) — B (new, NETWORK_FEATURES=FALSE) — C (new, NETWORK_FEATURES=TRUE)
+# A (prod release, P10) — B (new; P10 link to A, P11 link to C) — C (new, P11)
 NF_A = {
     "host": "127.0.0.1",
     "port": 6674,
@@ -467,7 +467,7 @@ def ircd_limits():
 
 @pytest.fixture(scope="session")
 def ircd_nf_compat():
-    """Connection info for the A(prod)—B(NF=FALSE)—C(NF=TRUE) compat chain.
+    """Connection info for the A(prod, P10)—B—C rolling-upgrade compat chain.
 
     A is built from the UndernetIRC/ircu2 release tarball (see Dockerfile
     target runtime-release).  B and C are built from the working tree.

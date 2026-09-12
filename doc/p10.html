@@ -618,6 +618,16 @@ indicate it is currently still <B>j</B>oining the network.</LI>
 <LI>
 &nbsp;The protocol token should always be JXX when the server is introducing
 <B>itself</B>.</LI>
+
+<LI>
+&nbsp;The protocol number is negotiated per link: each side announces the
+highest version it speaks and clamps the peer's number down to its own, so
+a P11 server linked to a P10 server treats that link as P10.  On a P11
+link the server additionally sends IRCv3 message-tag prefixes (@time=,
+@batch=) and TAGMSG (TM), the TLS certificate fingerprint parameter after
+umode +z on NICK and MODE, remote OPMODE +x toward a user's home server,
+and ACCOUNT (AC) updates for users who are already authenticated.  None of
+these are sent on a P10 link; inbound they are accepted from any link.</LI>
 </OL>
 
 <LI>

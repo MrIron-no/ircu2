@@ -93,7 +93,7 @@ extern int hunt_server_prio_cmd(struct Client *from, const char *cmd,
 				int MustBeOper, const char *pattern,
 				int server, int parc, char *parv[]);
 extern struct Client* next_client(struct Client* next, const char* ch);
-extern char *umode_str(struct Client *cptr);
+extern char *umode_str(struct Client *cptr, int with_fingerprint);
 extern void send_umode(struct Client *cptr, struct Client *sptr,
                        struct Flags *old, int sendset);
 extern void set_snomask(struct Client *, unsigned int, int);

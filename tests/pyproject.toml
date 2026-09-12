@@ -25,5 +25,5 @@ markers = [
     "tls_stress: concurrent TLS registration / AUTH-drop stress (tls/)",
     "websocket_stress: aggressive WebSocket load / edge-case tests (pr_websocket/, hub + port 7000)",
     "limits: tests that need the dedicated limits server",
-    "nf_compat: NETWORK_FEATURES A(prod)-B(NF=FALSE)-C(NF=TRUE) topology",
+    "nf_compat: P10/P11 rolling-upgrade A(prod P10)-B-C topology",
 ]
