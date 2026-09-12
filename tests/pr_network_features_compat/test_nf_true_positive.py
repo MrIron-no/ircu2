@@ -1,14 +1,14 @@
-"""Positive-path NETWORK_FEATURES=TRUE relay checks on the standard hub.
+"""Positive-path P11 relay checks on the standard hub.
 
-The nf_compat suite asserts suppression toward prod when NF=FALSE.  These
-tests mirror the same three extensions on a fully upgraded hub (default
-NETWORK_FEATURES=TRUE) so over-suppression cannot pass silently:
+The nf_compat suite asserts suppression toward a P10 peer.  These tests
+mirror the same three extensions toward a P11 peer (the default J11
+handshake) so over-suppression cannot pass silently:
 
 * TAGMSG (TM) is relayed S2S
 * OPMODE +x is relayed toward a remote user's home server
 * ACCOUNT flag updates are relayed after bare-name registration
 
-Wire observations use ``notulined.test.net`` as a P10 spy alongside
+Wire observations use ``notulined.test.net`` as a P11 spy alongside
 U:lined ``services.test.net`` (both Connect blocks exist on the hub).
 """
 
@@ -47,7 +47,7 @@ async def spy(ircd_network):
         name="notulined.test.net",
         numeric=5,
         password="testpass",
-        description="NF=TRUE positive-path wire spy",
+        description="P11 positive-path wire spy",
     )
     await srv.connect(hub["host"], hub["server_port"])
     await srv.handshake()
@@ -91,8 +91,8 @@ async def _collect_matching(
     return matched
 
 
-async def test_tagmsg_relayed_s2s_when_network_features_true(ircd_network, spy):
-    """With NETWORK_FEATURES=TRUE, TAGMSG must appear on the S2S wire (TM)."""
+async def test_tagmsg_relayed_s2s_on_p11_link(ircd_network, spy):
+    """On a P11 link, TAGMSG must appear on the S2S wire (TM)."""
     hub = ircd_network["hub"]
     channel = "#nftrue_tm"
 
@@ -127,7 +127,7 @@ async def test_tagmsg_relayed_s2s_when_network_features_true(ircd_network, spy):
             await asyncio.sleep(0.05)
 
         assert tm_lines, (
-            f"TAGMSG was not relayed S2S while NETWORK_FEATURES=TRUE: "
+            f"TAGMSG was not relayed S2S to a P11 link: "
             f"{spy.received[before:]!r}"
         )
         assert any(channel in strip_msg_tags(line) for line in tm_lines), (
@@ -141,10 +141,10 @@ async def test_tagmsg_relayed_s2s_when_network_features_true(ircd_network, spy):
         await user.disconnect()
 
 
-async def test_opmode_plus_x_relayed_when_network_features_true(
+async def test_opmode_plus_x_relayed_on_p11_link(
     ircd_network, services, spy
 ):
-    """With NETWORK_FEATURES=TRUE, OPMODE +x for a remote user must leave the hub."""
+    """On a P11 link, OPMODE +x for a remote user must leave the hub."""
     hub = ircd_network["hub"]
     leaf = ircd_network["leaf1"]
 
@@ -174,7 +174,7 @@ async def test_opmode_plus_x_relayed_when_network_features_true(
                 line for line in spy.received[before:] if is_om_plus_x(line)
             ]
         assert om_lines, (
-            f"OPMODE +x was not relayed S2S while NETWORK_FEATURES=TRUE: "
+            f"OPMODE +x was not relayed S2S to a P11 link: "
             f"{spy.received[before:]!r}"
         )
     finally:
@@ -185,10 +185,10 @@ async def test_opmode_plus_x_relayed_when_network_features_true(
         await user.disconnect()
 
 
-async def test_account_flag_update_relayed_when_network_features_true(
+async def test_account_flag_update_relayed_on_p11_link(
     ircd_network, services, spy
 ):
-    """With NETWORK_FEATURES=TRUE, a flag update after bare ACCOUNT must relay."""
+    """On a P11 link, a flag update after bare ACCOUNT must relay."""
     hub = ircd_network["hub"]
 
     user = IRCClient()
@@ -222,7 +222,7 @@ async def test_account_flag_update_relayed_when_network_features_true(
         if not late:
             late = _ac_for_numnick(spy.received[before:], numnick)
         assert late, (
-            f"ACCOUNT flag update was not relayed while NETWORK_FEATURES=TRUE: "
+            f"ACCOUNT flag update was not relayed to a P11 link: "
             f"{spy.received[before:]!r}"
         )
         parts = strip_msg_tags(late[-1]).split()

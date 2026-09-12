@@ -122,25 +122,69 @@ async def test_hub_forwards_time_tag_on_s2s_channel(ircd_network, services):
         await user.disconnect()
 
 
-async def test_network_features_off_suppresses_s2s_tags(ircd_network, services):
-    """NETWORK_FEATURES=FALSE must not prefix S2S PRIVMSG with @time=."""
+@pytest.fixture
+async def p10_peer(ircd_network):
+    """Legacy peer that announces J10; it must never receive P11 extensions."""
+    hub = ircd_network["hub"]
+    srv = P10Server(
+        name="notulined.test.net",
+        numeric=5,
+        password="testpass",
+        description="Legacy P10 peer",
+        protocol=10,
+    )
+    await srv.connect(hub["host"], hub["server_port"])
+    await srv.handshake()
+    yield srv
+    await srv.disconnect()
+
+
+async def _wait_line(srv: P10Server, token: str, contain: str,
+                     timeout: float = 5.0) -> str:
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        remaining = deadline - asyncio.get_event_loop().time()
+        line = await srv._recv(timeout=max(remaining, 0.1))
+        if srv._get_token(line) == token and contain in line:
+            return line
+    raise TimeoutError(f"no {token!r} line containing {contain!r} from {srv.name}")
+
+
+async def _lines_with_token(srv: P10Server, token: str, seconds: float) -> list[str]:
+    seen: list[str] = []
+    deadline = asyncio.get_event_loop().time() + seconds
+    while asyncio.get_event_loop().time() < deadline:
+        remaining = deadline - asyncio.get_event_loop().time()
+        try:
+            line = await srv._recv(timeout=max(remaining, 0.1))
+        except (asyncio.TimeoutError, TimeoutError):
+            break
+        if srv._get_token(line) == token:
+            seen.append(line)
+    return seen
+
+
+async def _seat_bots(services: P10Server, p10_peer: P10Server, channel: str,
+                     tag: str) -> None:
+    """Home one bot on the P11 link and one on the P10 link, both in channel.
+
+    Both peers use the plain Server class, which is not allowed to hub, so
+    the bots are homed on the peers themselves rather than on downstream
+    servers.
+    """
+    bot11 = await services.introduce_user(f"{tag}Bot11")
+    await services.send_join(bot11, channel)
+    bot10 = await p10_peer.introduce_user(f"{tag}Bot10")
+    await p10_peer.send_join(bot10, channel)
+    await asyncio.sleep(0.3)
+
+
+async def test_p10_link_gets_no_s2s_tags(ircd_network, services, p10_peer):
+    """The same PRIVMSG carries @time= on the P11 link and no tags on the P10 link."""
     hub = ircd_network["hub"]
     channel = "#s2snofeat"
 
-    oper = IRCClient()
-    await oper.connect(hub["host"], hub["port"])
-    await oper.register("nofeatop", "oper", "Oper")
-    await oper.send("OPER testoper operpass")
-    await oper.wait_for("381", timeout=10.0)
-    await oper.send("SET NETWORK_FEATURES FALSE")
-    await oper.wait_for("284", timeout=8.0)
-
-    down_num = await services.send_downstream_server("down.nofeat.test", 91)
-    await services.send_downstream_nick(
-        down_num, "NoFeatBot", server_numeric=91, client_num=1,
-    )
-    await services.send_downstream_join("NoFeatBot", channel)
-    await asyncio.sleep(0.3)
+    await _seat_bots(services, p10_peer, channel, "nofeat")
 
     user = IRCClient()
     await user.connect(hub["host"], hub["port"])
@@ -151,50 +195,26 @@ async def test_network_features_off_suppresses_s2s_tags(ircd_network, services):
         await asyncio.sleep(0.3)
         await user.send(f"PRIVMSG {channel} :no tags please")
 
-        deadline = asyncio.get_event_loop().time() + 5.0
-        saw = None
-        while asyncio.get_event_loop().time() < deadline:
-            remaining = deadline - asyncio.get_event_loop().time()
-            line = await services._recv(timeout=max(remaining, 0.1))
-            if " P " in f" {line} " and channel in line and "no tags please" in line:
-                saw = line
-                break
-        assert saw, "expected S2S PRIVMSG without requiring tags"
-        assert not saw.lstrip().startswith("@"), saw
-        assert "@time=" not in saw, saw
+        on_p11 = await _wait_line(services, "P", "no tags please")
+        assert on_p11.startswith("@time="), f"P11 link lost @time=: {on_p11}"
+
+        on_p10 = await _wait_line(p10_peer, "P", "no tags please")
+        assert not on_p10.lstrip().startswith("@"), on_p10
+        assert "@time=" not in on_p10, on_p10
     finally:
         try:
-            await oper.send("SET NETWORK_FEATURES TRUE")
-            await oper.wait_for("284", timeout=8.0)
+            await user.send("QUIT :cleanup")
         except Exception:
             pass
-        for c in (user, oper):
-            try:
-                await c.send("QUIT :cleanup")
-            except Exception:
-                pass
-            await c.disconnect()
+        await user.disconnect()
 
 
-async def test_network_features_off_suppresses_s2s_tagmsg(ircd_network, services):
-    """NETWORK_FEATURES=FALSE must not relay TAGMSG (TM) to servers."""
+async def test_p10_link_gets_no_s2s_tagmsg(ircd_network, services, p10_peer):
+    """TAGMSG (TM) is relayed on the P11 link and dropped on the P10 link."""
     hub = ircd_network["hub"]
     channel = "#s2snotagmsg"
 
-    oper = IRCClient()
-    await oper.connect(hub["host"], hub["port"])
-    await oper.register("notagmsgop", "oper", "Oper")
-    await oper.send("OPER testoper operpass")
-    await oper.wait_for("381", timeout=10.0)
-    await oper.send("SET NETWORK_FEATURES FALSE")
-    await oper.wait_for("284", timeout=8.0)
-
-    down_num = await services.send_downstream_server("down.notm.test", 92)
-    await services.send_downstream_nick(
-        down_num, "NoTmBot", server_numeric=92, client_num=1,
-    )
-    await services.send_downstream_join("NoTmBot", channel)
-    await asyncio.sleep(0.3)
+    await _seat_bots(services, p10_peer, channel, "notm")
 
     local_obs = IRCClient()
     await local_obs.connect(hub["host"], hub["port"])
@@ -211,43 +231,25 @@ async def test_network_features_off_suppresses_s2s_tagmsg(ircd_network, services
         await local_obs.send(f"JOIN {channel}")
         await asyncio.sleep(0.3)
 
-        # Drain any join noise on the services link before the TAGMSG.
-        deadline = asyncio.get_event_loop().time() + 0.5
-        while asyncio.get_event_loop().time() < deadline:
-            remaining = deadline - asyncio.get_event_loop().time()
-            try:
-                await services._recv(timeout=max(remaining, 0.05))
-            except (asyncio.TimeoutError, TimeoutError):
-                break
+        # Drain join noise on both links before the TAGMSG.
+        await _lines_with_token(services, "TM", 0.5)
+        await _lines_with_token(p10_peer, "TM", 0.5)
 
         await user.send(f"@+example.com/foo=nofeat TAGMSG {channel}")
 
-        # Local clients still receive TAGMSG when NETWORK_FEATURES is off.
+        # Local clients receive TAGMSG regardless of link protocol.
         local_msg = await local_obs.wait_for("TAGMSG", timeout=5.0)
         assert local_msg.params[0] == channel, local_msg.raw
 
-        # Remote peers must not see TM (or a tagged TM) at all.
-        deadline = asyncio.get_event_loop().time() + 2.5
-        while asyncio.get_event_loop().time() < deadline:
-            remaining = deadline - asyncio.get_event_loop().time()
-            try:
-                line = await services._recv(timeout=max(remaining, 0.1))
-            except (asyncio.TimeoutError, TimeoutError):
-                break
-            body = line.lstrip()
-            if body.startswith("@"):
-                body = body.split(" ", 1)[-1]
-            tokens = body.split()
-            assert not (len(tokens) >= 2 and tokens[1] == "TM"), (
-                f"TAGMSG was relayed S2S while NETWORK_FEATURES=FALSE: {line}"
-            )
+        # The TM line itself reaches the P11 link (client-only tags are not
+        # federated on S2S; see msg_tag_format_s2s).
+        on_p11 = await _wait_line(services, "TM", channel)
+        assert on_p11.startswith("@time="), f"P11 link lost @time=: {on_p11}"
+
+        on_p10 = await _lines_with_token(p10_peer, "TM", 2.5)
+        assert not on_p10, f"TAGMSG was relayed to a P10 link: {on_p10}"
     finally:
-        try:
-            await oper.send("SET NETWORK_FEATURES TRUE")
-            await oper.wait_for("284", timeout=8.0)
-        except Exception:
-            pass
-        for c in (user, local_obs, oper):
+        for c in (user, local_obs):
             try:
                 await c.send("QUIT :cleanup")
             except Exception:

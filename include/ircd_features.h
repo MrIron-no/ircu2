@@ -108,7 +108,6 @@ enum Feature {
   FEAT_ANNOUNCE_INVITES,
   FEAT_TLS_CIPHERS,
   FEAT_TLS_SYSTEMCA,
-  FEAT_NETWORK_FEATURES,
   FEAT_NETWORK_TIME,
 
   /* features that affect all operators */

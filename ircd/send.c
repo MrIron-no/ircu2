@@ -372,9 +372,9 @@ void send_buffer(struct Client* to, struct Client* from, struct MsgBuf* buf, int
   }
 
   if (IsServer(to)) {
-    /* Older peers cannot parse @tags or TAGMSG (TM); gate on NETWORK_FEATURES.
+    /* P10 peers cannot parse @tags or TAGMSG (TM); only P11 links get them.
      * Invent @time= only for client-event commands (see s2s_needs_time). */
-    if (!feature_bool(FEAT_NETWORK_FEATURES)) {
+    if (Protocol(to) < 11) {
       if (tctx && tctx->tok && !strcmp(tctx->tok, TOK_TAGMSG))
         return;
     } else {
@@ -561,6 +561,46 @@ void sendcmdto_prio_one(struct Client *from, const char *cmd, const char *tok,
 
   msgtagctx_init(&mctx, tok);
   send_buffer(to, from, mb, 1, &mctx, NULL);
+
+  msgq_clean(mb);
+}
+
+/** Send a (prefixed) command to all servers speaking at least a given
+ * protocol version, except one.  Used for P11 extensions that P10 peers
+ * would reject (compare the Protocol(x) < 10 checks for P9 peers).
+ * @param[in] from Client sending the command.
+ * @param[in] cmd Long name of command (ignored).
+ * @param[in] tok Short name of command.
+ * @param[in] one Client direction to skip (or NULL).
+ * @param[in] min_prot Lowest protocol number that receives the command.
+ * @param[in] pattern Format string for command arguments.
+ */
+void sendcmdto_prot_serv_butone(struct Client *from, const char *cmd,
+                                const char *tok, struct Client *one,
+                                unsigned short min_prot,
+                                const char *pattern, ...)
+{
+  struct VarData vd;
+  struct MsgBuf *mb;
+  struct DLink *lp;
+  struct MsgTagCtx mctx;
+
+  vd.vd_format = pattern; /* set up the struct VarData for %v */
+  va_start(vd.vd_args, pattern);
+
+  /* use token */
+  mb = msgq_make(&me, "%C %s %v", from, tok, &vd);
+  va_end(vd.vd_args);
+
+  msgtagctx_init(&mctx, tok);
+  /* send it to our downlinks */
+  for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
+    if (one && lp->value.cptr == cli_from(one))
+      continue;
+    if (Protocol(lp->value.cptr) < min_prot)
+      continue;
+    send_buffer(lp->value.cptr, NULL, mb, 0, &mctx, NULL);
+  }
 
   msgq_clean(mb);
 }

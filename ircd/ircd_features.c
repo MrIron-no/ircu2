@@ -381,7 +381,6 @@ static struct FeatureDesc {
   F_B(ANNOUNCE_INVITES, 0, 0, 0),
   F_S(TLS_CIPHERS, FEAT_NULL | FEAT_CASE | FEAT_OPER, 0, 0),
   F_B(TLS_SYSTEMCA, 0, 1, 0),
-  F_B(NETWORK_FEATURES, 0, 1, 0),
   F_B(NETWORK_TIME, 0, 1, 0),
 
   /* features that affect all operators */

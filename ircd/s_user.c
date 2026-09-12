@@ -344,6 +344,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
   char*            tmpstr;
   struct User*     user = cli_user(sptr);
   char             ip_base64[25];
+  struct DLink*    lp;
 
   user->last = CurrentTime;
   parv[0] = cli_name(sptr);
@@ -444,27 +445,25 @@ int register_user(struct Client *cptr, struct Client *sptr)
   if (IsOper(sptr))
     ++UserStats.opers;
 
-  tmpstr = umode_str(sptr);
-  /* Send full IP address to IPv6-grokking servers. */
-  sendcmdto_flag_serv_butone(user->server, CMD_NICK, cptr,
-                             FLAG_IPV6, FLAG_LAST_FLAG,
-                             "%s %d %Tu %s %s %s%s%s%s %s%s :%s",
-                             cli_name(sptr), cli_hopcount(sptr) + 1,
-                             cli_lastnick(sptr),
-                             user->username, user->realhost,
-                             *tmpstr ? "+" : "", tmpstr, *tmpstr ? " " : "",
-                             iptobase64(ip_base64, &cli_ip(sptr), sizeof(ip_base64), 1),
-                             NumNick(sptr), cli_info(sptr));
-  /* Send fake IPv6 addresses to pre-IPv6 servers. */
-  sendcmdto_flag_serv_butone(user->server, CMD_NICK, cptr,
-                             FLAG_LAST_FLAG, FLAG_IPV6,
-                             "%s %d %Tu %s %s %s%s%s%s %s%s :%s",
-                             cli_name(sptr), cli_hopcount(sptr) + 1,
-                             cli_lastnick(sptr),
-                             user->username, user->realhost,
-                             *tmpstr ? "+" : "", tmpstr, *tmpstr ? " " : "",
-                             iptobase64(ip_base64, &cli_ip(sptr), sizeof(ip_base64), 0),
-                             NumNick(sptr), cli_info(sptr));
+  /* Introduce the user to each server link in the form that link
+   * negotiated: a full IPv6 address only to +6 peers (fake IPv4-mapped
+   * otherwise) and the TLS fingerprint parameter only on P11 links. */
+  for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
+    struct Client *link = lp->value.cptr;
+
+    if (link == cli_from(cptr))
+      continue;
+    tmpstr = umode_str(sptr, Protocol(link) >= 11);
+    sendcmdto_one(user->server, CMD_NICK, link,
+                  "%s %d %Tu %s %s %s%s%s%s %s%s :%s",
+                  cli_name(sptr), cli_hopcount(sptr) + 1,
+                  cli_lastnick(sptr),
+                  user->username, user->realhost,
+                  *tmpstr ? "+" : "", tmpstr, *tmpstr ? " " : "",
+                  iptobase64(ip_base64, &cli_ip(sptr), sizeof(ip_base64),
+                             IsIPv6(link)),
+                  NumNick(sptr), cli_info(sptr));
+  }
 
   /* Send user mode to client */
   if (MyUser(sptr))
@@ -1163,7 +1162,9 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
       case 'z':
         if (what == MODE_ADD) {
           SetTLS(sptr);
-          if (feature_bool(FEAT_NETWORK_FEATURES) && *(p + 1))
+          /* Only P11 links carry a fingerprint parameter after +z; on a
+           * P10 link the next parameter (if any) is not ours to consume. */
+          if (IsServer(cptr) && Protocol(cptr) >= 11 && *(p + 1))
             tls_fingerprint = *(++p);
         }
         /* There is no -z */
@@ -1279,8 +1280,7 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
   if (!FlagHas(&setflags, FLAG_HIDDENHOST) && do_host_hiding && allow_modes != ALLOWMODES_DEFAULT)
     hide_hostmask(sptr, FLAG_HIDDENHOST);
 
-  if (IsServer(cptr) && feature_bool(FEAT_NETWORK_FEATURES) &&
-      tls_fingerprint && tls_fingerprint[0] != '_') {
+  if (IsServer(cptr) && tls_fingerprint && tls_fingerprint[0] != '_') {
     ircd_strncpy(cli_tls_fingerprint(sptr), tls_fingerprint, 64);
     Debug((DEBUG_DEBUG, "Received TLS fingerprint in user mode; "
           "fingerprint \"%s\"", cli_tls_fingerprint(sptr)));
@@ -1322,9 +1322,11 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
 
 /** Build a mode string to describe modes for \a cptr.
  * @param[in] cptr Some user.
+ * @param[in] with_fingerprint Non-zero if the string is for a P11 link,
+ *   which understands the TLS fingerprint parameter after +z.
  * @return Pointer to a static buffer.
  */
-char *umode_str(struct Client *cptr)
+char *umode_str(struct Client *cptr, int with_fingerprint)
 {
   /* Maximum string size: "owidgrx\0" */
   char *m = umodeBuf;
@@ -1376,9 +1378,10 @@ char *umode_str(struct Client *cptr)
 
   /** If the client is on a secure connection (umode +z) we append the fingerprint.
    * If the fingerprint is empty (client has not provided a certificate),
-   * we return _ in the place of the fingerprint.
+   * we return _ in the place of the fingerprint.  Only P11 links understand
+   * the extra parameter, so the caller says whether the string is for one.
    */
-  if (IsTLS(cptr) && feature_bool(FEAT_NETWORK_FEATURES))
+  if (IsTLS(cptr) && with_fingerprint)
   {
     char* t = cli_tls_fingerprint(cptr);
 

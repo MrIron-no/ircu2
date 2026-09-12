@@ -37,12 +37,12 @@ uv run pytest -m single_server    # tests needing only the hub
 uv run pytest -m multi_server     # tests needing hub + 2 leaves
 uv run pytest -m tls              # TLS trust / verification tests (hub + TLS leaf)
 uv run pytest -m tls_single       # standalone TLS hub (no peer server ever links)
-uv run pytest -m nf_compat        # A(prod)-B(NF=FALSE)-C topology
+uv run pytest -m nf_compat        # A(prod P10)-B-C rolling-upgrade topology
 
 # TLS suite only
 uv run pytest tls/ -v
 
-# NETWORK_FEATURES rolling-upgrade compat (downloads prod release on first build)
+# P10/P11 rolling-upgrade compat (downloads prod release on first build)
 uv run pytest pr_network_features_compat/ -v
 
 All docker topologies (hub-only, full network, TLS, limits, DNS, standalone
@@ -133,18 +133,25 @@ The hub also has Connect blocks for two external test servers used by the P10 te
 
 Configs are baked into the Docker images (in `docker/`), not volume-mounted.
 
-### NETWORK_FEATURES compat topology (`pr_network_features_compat/`)
+### P10/P11 compat topology (`pr_network_features_compat/`)
 
 Rolling-upgrade guard tests use a dedicated A—B—C chain.  **A** is built from
 the current [UndernetIRC/ircu2 release](https://github.com/UndernetIRC/ircu2/releases)
 (`Dockerfile` target `runtime-release`, default tag `u2.10.12.19`).  **B** and
 **C** are built from the working tree.
 
-| Service   | Server Name      | Binary   | NETWORK_FEATURES | Client | S2S  | IP         |
+| Service   | Server Name      | Binary   | Links            | Client | S2S  | IP         |
 |-----------|------------------|----------|------------------|--------|------|------------|
-| ircd-nf-a | a.prod.test.net  | release  | n/a (prod)       | 6674   | 4420 | 10.55.0.40 |
-| ircd-nf-b | b.test.net       | tree     | FALSE            | 6675   | 4421 | 10.55.0.41 |
-| ircd-nf-c | c.test.net       | tree     | TRUE (also HUB)  | 6676   | 4422 | 10.55.0.42 |
+| ircd-nf-a | a.prod.test.net  | release  | P10 (announces J10) | 6674 | 4420 | 10.55.0.40 |
+| ircd-nf-b | b.test.net       | tree     | P10 to A, P11 to C | 6675 | 4421 | 10.55.0.41 |
+| ircd-nf-c | c.test.net       | tree     | P11 (also HUB)   | 6676   | 4422 | 10.55.0.42 |
+
+The protocol number is negotiated per link from the SERVER line (`J10` /
+`J11`); the tree announces J11 and clamps a J10 peer down to P10.  The P11
+extensions — message-tag prefixes and TAGMSG, the `+z` TLS fingerprint
+parameter, remote `OPMODE +x`, and already-authed `ACCOUNT` updates — are
+sent only on P11 links.  `P10Server` announces J11 by default; pass
+`protocol=10` to act as a legacy peer.
 
 Services (`P10Server`, numeric 4) attach to **C** (C sets `HUB` so it can
 accept that server link).  Assertions check that remote `OPMODE +x`,
@@ -152,17 +159,17 @@ already-authed `ACCOUNT` flag updates, and `+z` TLS fingerprint tokens on
 NICK/umode bursts never reach **A**.  On **u2.10.12.19 and earlier**, a
 second ACCOUNT for an already-authed nick is a hard `protocol_violation`;
 **u2.10.13.0** tolerates same-name updates locally.  The ACCOUNT gate is
-asserted on the wire via a P10 spy on **B** (`spy.test.net`): with
-`NETWORK_FEATURES=FALSE`, B must not relay a second `AC` for that numnick.
-A spy on **C** (`spyc.test.net`) checks that a flag update after bare-name
-registration still leaves C with id+flags (NF=TRUE hop).  TOPIC-with-who
-from the tree is also checked for prod parse tolerance (topic text still
-last param).  Override the release with `IRCD_RELEASE_TAG=...`.
+asserted on the wire via a J10 spy on **B** (`spy.test.net`): over a P10
+link, B must not relay a second `AC` for that numnick.  A J11 spy on **C**
+(`spyc.test.net`) checks that a flag update after bare-name registration
+still leaves C with id+flags over a P11 link.  TOPIC-with-who from the
+tree is also checked for prod parse tolerance (topic text still last
+param).  Override the release with `IRCD_RELEASE_TAG=...`.
 
 Positive-path checks (TAGMSG / OPMODE +x / ACCOUNT flag update still leave
-the hub when `NETWORK_FEATURES` is TRUE) live in
-`test_nf_true_positive.py` on the standard hub topology, using
-`notulined.test.net` as a wire spy beside services.
+the hub over a P11 link) live in `test_nf_true_positive.py` on the
+standard hub topology, using `notulined.test.net` as a wire spy beside
+services.
 
 ## IRC Client API
 

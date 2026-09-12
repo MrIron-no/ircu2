@@ -79,10 +79,12 @@ def strip_msg_tags(line: str) -> str:
 
 
 class P10Server:
-    """A fake IRC server speaking the P10 protocol.
+    """A fake IRC server speaking the P10 wire protocol.
 
     Connects to an ircd on its server port, performs the full P10
-    handshake, then allows sending arbitrary S2S messages.
+    handshake, then allows sending arbitrary S2S messages.  By default it
+    announces protocol 11 (J11) so the ircd sends it the P11 extensions;
+    construct with ``protocol=10`` to act as a legacy P10 peer.
     """
 
     def __init__(
@@ -93,6 +95,7 @@ class P10Server:
         max_clients: int = 64,
         description: str = "Test Services",
         server_flags: str = "s",
+        protocol: int = 11,
     ):
         self.name = name
         self.numeric = numeric
@@ -100,6 +103,11 @@ class P10Server:
         self.max_clients = max_clients
         self.description = description
         self.server_flags = server_flags
+        # Protocol number announced in our SERVER line.  ircd gates the
+        # P11 extensions (message tags, TAGMSG, TLS fingerprints, remote
+        # OPMODE +x, already-authed ACCOUNT updates) per link on this, so
+        # pass protocol=10 to observe what a legacy P10 peer receives.
+        self.protocol = protocol
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -244,7 +252,7 @@ class P10Server:
         flags = self.server_flags
         flag_field = f"+{flags}" if flags else "+"
         await self._send(
-            f"SERVER {self.name} 1 {now} {now} J10 {self._numnick_mask} "
+            f"SERVER {self.name} 1 {now} {now} J{self.protocol} {self._numnick_mask} "
             f"{flag_field} :{self.description}"
         )
 
@@ -329,17 +337,19 @@ class P10Server:
         flags: str = "",
         description: str = "Downstream test server",
         timestamp: int | None = None,
+        protocol: int | None = None,
     ) -> str:
         """Introduce a remote server behind this link.
 
         Returns the 2-character P10 server numeric for the new server.
         """
         ts = timestamp or _next_timestamp()
+        proto = self.protocol if protocol is None else protocol
         down_num = server_numeric(numeric)
         down_mask = down_num + int_to_b64(self.max_clients, 3)
         flag_field = f"+{flags}" if flags else "+"
         await self._send(
-            f"{self._num} SERVER {name} {hop} 0 {ts} J10 {down_mask} "
+            f"{self._num} SERVER {name} {hop} 0 {ts} J{proto} {down_mask} "
             f"{flag_field} :{description}"
         )
         return down_num

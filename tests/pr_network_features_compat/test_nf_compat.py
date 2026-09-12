@@ -1,33 +1,39 @@
-"""NETWORK_FEATURES rolling-upgrade compat tests.
+"""P10/P11 rolling-upgrade compat tests.
 
 Topology (see docker-compose ircd-nf-{a,b,c}):
 
-    A (prod release, u2.10.12.19) — B (tree, NETWORK_FEATURES=FALSE) — C (tree, NETWORK_FEATURES=TRUE)
-                                                                              ^
-                                                                       services (P10)
+    A (prod release, u2.10.12.19, P10) — B (tree) — C (tree)
+                                                     ^
+                                              services (J11)
+
+The protocol number is negotiated per link.  A announces J10, so B's link
+to A is P10 and B must send it only the compatible subset; B's link to C
+is P11 and carries the extensions.  A legacy peer of B (spy_on_b, J10)
+stands in for what prod receives; spy_on_c (J11) checks C's full relay.
 
 Flag-only / same-name ACCOUNT updates for already-authed users confuse
 peers on u2.10.12.19 and earlier: a second ACCOUNT for an already-authed
 nick is a hard protocol_violation (WALLOPS to +g opers).  u2.10.13.0
-tolerates same-name updates locally (for flag changes); with
-NETWORK_FEATURES=FALSE, B must not relay a second AC toward peers —
-assert that on the wire via spy_on_b, not only via A's non-violation.
-On C (NF=TRUE), a flag update after bare-name registration must still
-relay id+flags (spy_on_c); otherwise flags die after one hop even on a
-fully upgraded path.
+tolerates same-name updates locally (for flag changes); over a P10 link B
+must not relay a second AC toward peers — assert that on the wire via
+spy_on_b, not only via A's non-violation.  On C, a flag update after
+bare-name registration must still relay id+flags over the P11 link
+(spy_on_c); otherwise flags die after one hop even on a fully upgraded
+path.
 
 Remote OPMODE +x and +z TLS fingerprint tokens on NICK/umode bursts are
-newer extensions.  With NETWORK_FEATURES=FALSE on the middle hop B, those
-must not reach A.
+P11 extensions.  Over the P10 link on the middle hop B, those must not
+reach A.
 
 TOPIC lines from current servers include a topic-who field that older
 ``ms_topic`` never stored; topic text remains ``parv[parc-1]``, so prod
 must accept TOPIC-with-who without desync.  First-time ACCOUNT with
 acc_id/acc_flags likewise reaches A (id is treated as the old timestamp).
 
-TLS clients on B still get umode +z locally, but B omits the fingerprint
-parameter when introducing them toward peers.  C (NF=TRUE) must accept that
-+z-without-fingerprint NICK without crashing or protocol-violating.
+TLS clients on B get umode +z; toward a P10 peer B omits the fingerprint
+parameter, and toward C (P11) it sends the fingerprint or the ``_``
+placeholder.  C must accept both forms without crashing or
+protocol-violating.
 """
 
 from __future__ import annotations
@@ -49,7 +55,7 @@ FAKE_TLS_FINGERPRINT = (
 
 @pytest.fixture
 async def services(ircd_nf_compat):
-    """U:lined P10 services attached to C (NETWORK_FEATURES=TRUE)."""
+    """U:lined services (J11) attached to C."""
     c = ircd_nf_compat["c"]
     srv = P10Server(
         name="services.test.net",
@@ -64,13 +70,14 @@ async def services(ircd_nf_compat):
 
 @pytest.fixture
 async def spy_on_b(ircd_nf_compat):
-    """P10 peer on B to observe what B relays toward other servers (incl. A)."""
+    """Legacy P10 peer (J10) on B: sees exactly what B relays toward prod A."""
     b = ircd_nf_compat["b"]
     spy = P10Server(
         name="spy.test.net",
         numeric=5,
         password="testpass",
         description="NF compat wire spy",
+        protocol=10,
     )
     await spy.connect(b["host"], b["server_port"])
     await spy.handshake()
@@ -80,7 +87,7 @@ async def spy_on_b(ircd_nf_compat):
 
 @pytest.fixture
 async def spy_on_c(ircd_nf_compat):
-    """P10 peer on C to observe what C relays (NF=TRUE hop before B)."""
+    """P11 peer (J11) on C to observe what C relays over a P11 link."""
     c = ircd_nf_compat["c"]
     spy = P10Server(
         name="spyc.test.net",
@@ -197,8 +204,8 @@ async def test_account_flag_update_not_relayed_to_prod(
 
     u2.10.12.19 and earlier protocol_violate on any ACCOUNT for an
     already-authed nick.  u2.10.13.0 tolerates same-name updates locally;
-    assert the NETWORK_FEATURES=FALSE gate on the wire via spy_on_b:
-    after the first AC, B must relay no further AC for that numnick.
+    assert the P10-link gate on the wire via spy_on_b (J10): after the
+    first AC, B must relay no further AC for that numnick.
     """
     a = ircd_nf_compat["a"]
 
@@ -233,7 +240,7 @@ async def test_account_flag_update_not_relayed_to_prod(
         ac_count_before = len(_ac_lines_for_numnick(spy_on_b.received, numnick))
 
         # Flag-only / same-name update: u2.10.13.0 accepts it locally.
-        # B must not relay it (gate).  Prod ≤.12.19 would protocol_violate if it arrived.
+        # B must not relay it over a P10 link.  Prod ≤.12.19 would protocol_violate if it arrived.
         await services.send_account(numnick, "NfAcct1", acc_id=1, acc_flags=42)
         late_acs = await _collect_ac_from_spy(spy_on_b, numnick, seconds=2.5)
         ac_count_after = len(_ac_lines_for_numnick(spy_on_b.received, numnick))
@@ -267,17 +274,17 @@ async def test_account_flag_update_not_relayed_to_prod(
 async def test_flag_update_after_bare_account_relays_id_and_flags(
     ircd_nf_compat, services, spy_on_b, spy_on_c
 ):
-    """Flag update after bare ACCOUNT must keep id+flags across the NF=TRUE hop.
+    """Flag update after bare ACCOUNT must keep id+flags across the P11 hop.
 
-    Topology: A(prod) — B(NF=FALSE) — C(NF=TRUE) ← services / spy_on_c;
-    spy_on_b watches B's outbound toward A.
+    Topology: A(prod) — B — C ← services / spy_on_c (both J11);
+    spy_on_b (J10) watches B's outbound toward A.
 
     Registration without acc_id left stored id at 0; a later same-name
     update that supplies id+flags used to be re-emitted as bare ``%C %s``
     because the relay format keyed on stored acc_id and the already-
-    account path never adopted a first-seen id.  On C (NF=TRUE) the full
-    line must leave toward peers (spy_on_c).  B still gates it (spy_on_b
-    sees no second AC), so prod A stays quiet.
+    account path never adopted a first-seen id.  On C the full line must
+    leave over the P11 link (spy_on_c).  B still gates it on the P10 link
+    (spy_on_b sees no second AC), so prod A stays quiet.
     """
     a = ircd_nf_compat["a"]
 
@@ -374,14 +381,14 @@ async def test_flag_update_after_bare_account_relays_id_and_flags(
 async def test_first_account_with_flags_reaches_prod(
     ircd_nf_compat, services, spy_on_b
 ):
-    """First-time ACCOUNT with id+flags may pass flags through NF=FALSE to prod.
+    """First-time ACCOUNT with id+flags may pass flags over a P10 link to prod.
 
     Design: do not strip acc_id on first-time relays — .19 stores parv[3] as
     acc_create (legacy "logged in since").  The open question was whether the
     4th param (acc_flags) is safe.  .19's ms_account only reads parc>3 for
     acc_create and ignores further params, so flags should be harmless.
 
-    Assert on spy_on_b that B (NF=FALSE) still relays the full
+    Assert on spy_on_b (J10) that B still relays the full
     ``account id flags`` line toward peers, and that prod A accepts it
     (account name visible, no protocol_violation, link healthy).
     """
@@ -508,8 +515,8 @@ async def test_topic_with_who_accepted_by_prod(ircd_nf_compat, spy_on_b):
 async def test_opmode_plus_x_not_relayed_to_prod(ircd_nf_compat, services):
     """Remote OPMODE +x from C must not be applied on prod A.
 
-    B with NETWORK_FEATURES=FALSE drops OM +x toward non-local targets,
-    so the user on A stays without +x and A raises no protocol noise.
+    B drops OM +x on its P10 link toward A, so the user on A stays
+    without +x and A raises no protocol noise.
     """
     a = ircd_nf_compat["a"]
 
@@ -562,10 +569,9 @@ async def test_plus_z_fingerprint_not_relayed_to_prod(
 ):
     """TLS +z fingerprint on NICK/umode must not be regenerated toward A.
 
-    C (NETWORK_FEATURES=TRUE) accepts and stores the fingerprint.  B
-    (NETWORK_FEATURES=FALSE) must omit it from umode_str() when
-    re-bursting, so the wire toward A (and other peers of B) never
-    carries the fingerprint token.
+    C accepts and stores the fingerprint from its P11 services link.  B
+    must omit it from umode_str() when re-bursting over a P10 link, so
+    the wire toward A (and spy_on_b) never carries the fingerprint token.
     """
     a = ircd_nf_compat["a"]
     oper = await _make_oper(a, "nfoper4")
@@ -604,7 +610,7 @@ async def test_plus_z_fingerprint_not_relayed_to_prod(
 
 
 async def test_first_account_still_reaches_prod(ircd_nf_compat, services):
-    """NETWORK_FEATURES=FALSE must not block first-time ACCOUNT registration."""
+    """The P10-link gate must not block first-time ACCOUNT registration."""
     a = ircd_nf_compat["a"]
 
     user = IRCClient()
@@ -632,12 +638,12 @@ async def test_first_account_still_reaches_prod(ircd_nf_compat, services):
 async def test_tls_plus_z_without_fingerprint_accepted_on_nf_true(
     ircd_nf_compat, services
 ):
-    """TLS client on B (NF=FALSE) reaches C (NF=TRUE) as +z with no fingerprint.
+    """TLS client on B without a certificate reaches C over P11 as +z _.
 
-    B omits the fingerprint parameter from S2S NICK while NETWORK_FEATURES is
-    off.  C must still SetTLS from bare +z (the ``*(p + 1)`` guard skips
-    consuming a missing param) — no crash, no protocol violation, and WHOIS
-    on C still reports a secure connection (671).
+    B's link to C is P11, so it appends the fingerprint parameter; with no
+    client certificate that is the ``_`` placeholder.  C must SetTLS,
+    store no fingerprint — no crash, no protocol violation — and WHOIS on
+    C still reports a secure connection (671).
     """
     b = ircd_nf_compat["b"]
     c = ircd_nf_compat["c"]
@@ -647,7 +653,7 @@ async def test_tls_plus_z_without_fingerprint_accepted_on_nf_true(
 
     tls_user = IRCClient()
     await tls_user.connect_tls(b["host"], b["tls_port"])
-    await tls_user.register(nick, "testuser", "TLS on NF=FALSE")
+    await tls_user.register(nick, "testuser", "TLS on B")
 
     observer = IRCClient()
     await observer.connect(c["host"], c["port"])
@@ -691,9 +697,9 @@ async def test_p10_plus_z_without_fingerprint_no_crash(
 ):
     """Direct P10 NICK with +z and no fingerprint param is accepted on C.
 
-    Mimics the wire format B emits under NETWORK_FEATURES=FALSE, injected
-    from services (also attached to C) so the receive path is exercised
-    without requiring a TLS client.
+    Mimics the wire format a peer emits over a P10 link, injected from
+    services (also attached to C) so the receive path is exercised without
+    requiring a TLS client.
     """
     c = ircd_nf_compat["c"]
     nick = "nftls2"
@@ -744,8 +750,8 @@ async def test_p10_plus_rz_account_without_fingerprint(
     """+r account param then bare +z (no fingerprint) is parsed correctly on C.
 
     umode_str() emits modes in userModeList order (r before z) and appends
-    the account before any fingerprint.  With NETWORK_FEATURES=FALSE the
-    fingerprint is omitted, so the wire is ``+irz AcctName`` with one mode
+    the account before any fingerprint.  Over a P10 link the fingerprint
+    is omitted, so the wire is ``+irz AcctName`` with one mode
     param.  C must consume AcctName for +r and leave +z without a param —
     not treat the account as a TLS fingerprint.
     """
