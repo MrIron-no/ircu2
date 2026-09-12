@@ -22,7 +22,7 @@ dnl
 
 dnl Make sure we are in the correct directory (someone could have run
 dnl 'configure' with a wrong '--srcdir').
-AC_INIT([ircu2], [10.12.19])
+AC_INIT([ircu2], [11.0.0])
 AC_CONFIG_SRCDIR([ircd/ircd.c])
 AC_CONFIG_MACRO_DIRS([m4])
 
@@ -52,14 +52,8 @@ m4_define([v_major], m4_bregexp(AC_PACKAGE_VERSION, [\([0-9]+\)\.\([0-9]+\)\.\([
 m4_define([v_minor], m4_bregexp(AC_PACKAGE_VERSION, [\([0-9]+\)\.\([0-9]+\)\.\([0-9]+\)], [\2]))
 m4_define([v_patch], m4_bregexp(AC_PACKAGE_VERSION, [\([0-9]+\)\.\([0-9]+\)\.\([0-9]+\)], [\3]))
 
-dnl The S2S protocol version is announced in the SERVER line (J11) and is
-dnl independent of the package version: P11 links carry message tags, TAGMSG,
-dnl TLS fingerprints, remote OPMODE +x and ACCOUNT updates; P10 links get the
-dnl compatible subset.  Peers that only speak P10 clamp our J11 down to 10.
-m4_define([p_major], [11])
-
-AC_DEFINE([BASE_VERSION],   ["u2.]v_major["],  [Base version prefix, e.g. "u2.10"])
-AC_DEFINE([MAJOR_PROTOCOL], ["]p_major["],      [Major protocol version, e.g. "11"])
+AC_DEFINE([BASE_VERSION],   ["u2.]v_major["],  [Base version prefix, e.g. "u2.11"])
+AC_DEFINE([MAJOR_PROTOCOL], ["]v_major["],      [Major protocol version, e.g. "11"])
 AC_DEFINE([RELEASE],        [".]v_minor[."],    [Release number with dots, e.g. ".12."])
 AC_DEFINE([PATCHLEVEL],     ["]v_patch["],      [Patch level, e.g. "19"])
 
