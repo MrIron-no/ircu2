@@ -180,15 +180,11 @@ int m_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (MyConnect(acptr)) {
     add_invite(acptr, chptr);
     sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H", cli_name(acptr), chptr);
-  } else if (!IsLocalChannel(chptr->chname)) {
-    /* Deliver to the invitee's server: P11 addresses the target by numnick,
-       P10 still expects a nickname. */
-    if (Protocol(cli_from(acptr)) >= 11)
-      sendcmdto_one(sptr, CMD_INVITE, acptr, "%C %H %Tu", acptr, chptr,
-                    chptr->creationtime);
-    else
-      sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H %Tu", cli_name(acptr), chptr,
-                    chptr->creationtime);
+  } else if (!IsLocalChannel(chptr->chname) && Protocol(cli_from(acptr)) < 11) {
+    /* A P10 invitee's server takes no part in the P11 invite-notify
+       propagation below, so deliver to it directly, by nickname. */
+    sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H %Tu", cli_name(acptr), chptr,
+                  chptr->creationtime);
   }
 
   if (!IsLocalChannel(chptr->chname) || MyConnect(acptr)) {
@@ -198,13 +194,15 @@ int m_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                                              CAP_INVITENOTIFY, 0,
                                              "%C %H", acptr, chptr);
 
-    /* Propagate to P11 servers hosting channel operators so their local ops
-       are notified via invite-notify too. The target is a numnick, which a
-       P10 hop cannot carry, so the propagation is restricted to P11 links. */
+    /* Propagate the invite once, like a channel message: to every P11 server
+       that hosts a channel op and to the invitee's P11 server.  Each such
+       server notifies its own local ops via invite-notify and, if it hosts
+       the invitee, delivers it -- so no directed copy competes with this
+       broadcast.  numnick target, hence P11 links only. */
     if (!IsLocalChannel(chptr->chname))
-      sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr,
-                                       SKIP_NONOPS, 11, "%C %H %Tu", acptr,
-                                       chptr, chptr->creationtime);
+      sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, cptr,
+                                       acptr, SKIP_NONOPS, 11, "%C %H %Tu",
+                                       acptr, chptr, chptr->creationtime);
   }
 
   return 0;
@@ -301,10 +299,9 @@ int ms_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (MyConnect(acptr)) {
     add_invite(acptr, chptr);
     sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H", cli_name(acptr), chptr);
-  } else if (Protocol(cli_from(acptr)) >= 11) {
-    sendcmdto_one(sptr, CMD_INVITE, acptr, "%C %H %Tu", acptr, chptr,
-                  chptr->creationtime);
-  } else {
+  } else if (Protocol(cli_from(acptr)) < 11) {
+    /* A P10 invitee's server takes no part in the P11 invite-notify
+       propagation below, so deliver to it directly, by nickname. */
     sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H %Tu", cli_name(acptr), chptr,
                   chptr->creationtime);
   }
@@ -315,11 +312,14 @@ int ms_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                                            CAP_INVITENOTIFY, 0,
                                            "%C %H", acptr, chptr);
 
-  /* Propagate onward to P11 servers hosting channel operators (numnick
-     target); a P10 hop cannot carry it, so it is restricted to P11 links. */
-  sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr,
-                                   SKIP_NONOPS, 11, "%C %H %Tu", acptr, chptr,
-                                   chptr->creationtime);
+  /* Relay the invite onward once, like a channel message: to every P11 server
+     hosting a channel op and to the invitee's P11 server, skipping the link
+     it arrived on.  Each notifies its own local ops (and delivers to the
+     invitee if local), so nothing is reflected or duplicated.  numnick
+     target, hence P11 links only. */
+  sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, cptr,
+                                   acptr, SKIP_NONOPS, 11, "%C %H %Tu", acptr,
+                                   chptr, chptr->creationtime);
 
   return 0;
 }

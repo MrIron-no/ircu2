@@ -1023,19 +1023,36 @@ void sendcmdto_channel_butserv_butone(struct Client *from, const char *cmd,
   msgq_clean(mb);
 }
 
-/** Send a (prefixed) command to all servers with users on \a to.
- * Skip \a from and \a one plus those indicated in \a skip.
+/** Send a (prefixed) command once to every server link that leads to a
+ * selected member of \a to, and optionally to the link toward one extra
+ * client \a also, skipping the link the command arrived on.
+ *
+ * This propagates a channel event across the network the way a channel
+ * message does: one copy per onward server link (deduplicated per link, not
+ * per member, so a server with several members gets a single copy), never
+ * back down the incoming link, so each server relaying it onward reaches
+ * every interested server exactly once with no reflection or fan-out.  A
+ * receiving server does its own local work (e.g. notifying its members) and
+ * relays onward with itself as \a one.
+ *
+ * \a also lets the caller include a server that holds no selected member --
+ * an invite's target, say -- so it is reached and can act locally too.
+ *
  * @param[in] from Client originating the command.
  * @param[in] cmd Long name of command (ignored).
  * @param[in] tok Short name of command.
  * @param[in] to Destination channel.
- * @param[in] one Client direction to skip (or NULL).
- * @param[in] skip Bitmask of SKIP_NONOPS and SKIP_NONVOICES indicating which clients to skip.
+ * @param[in] one Client whose server link is skipped (or NULL); pass the
+ *   link the command arrived on to avoid reflecting it back.
+ * @param[in] also Extra client whose link is also sent to (or NULL).
+ * @param[in] skip Bitmask of SKIP_NONOPS and SKIP_NONVOICES indicating which members select a link.
+ * @param[in] min_prot Lowest link protocol that receives the command.
  * @param[in] pattern Format string for command arguments.
  */
 void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
                                       const char *tok, struct Channel *to,
-                                      struct Client *one, unsigned int skip,
+                                      struct Client *one, struct Client *also,
+                                      unsigned int skip,
                                       unsigned short min_prot,
                                       const char *pattern, ...)
 {
@@ -1043,6 +1060,7 @@ void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
   struct MsgBuf *serv_mb;
   struct Membership *member;
   struct MsgTagCtx mctx;
+  struct Client *link;
 
   /* build the buffer */
   vd.vd_format = pattern;
@@ -1051,20 +1069,32 @@ void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
   va_end(vd.vd_args);
 
   msgtagctx_init(&mctx, tok);
-  /* send the buffer to each server */
-  bump_sentalong(one);
-  cli_sentalong(from) = sentalong_marker;
+  /* Mark the incoming link so we never reflect the command back down it. */
+  bump_sentalong(one ? cli_from(one) : 0);
+  /* One copy per onward link that leads to a selected member. */
   for (member = to->members; member; member = member->next_member) {
     if (MyConnect(member->user)
         || IsZombie(member)
-        || cli_fd(cli_from(member->user)) < 0
-        || cli_sentalong(member->user) == sentalong_marker
-        || Protocol(cli_from(member->user)) < min_prot
         || (skip & SKIP_NONOPS && !IsChanOp(member))
         || (skip & SKIP_NONVOICES && !IsChanOp(member) && !HasVoice(member)))
       continue;
-    cli_sentalong(member->user) = sentalong_marker;
+    link = cli_from(member->user);
+    if (cli_fd(link) < 0
+        || Protocol(link) < min_prot
+        || cli_sentalong(link) == sentalong_marker)  /* link already covered */
+      continue;
+    cli_sentalong(link) = sentalong_marker;
     send_buffer(member->user, NULL, serv_mb, 0, &mctx, NULL);
+  }
+  /* Plus the link toward an extra client, if not already covered. */
+  if (also && !MyConnect(also)) {
+    link = cli_from(also);
+    if (cli_fd(link) >= 0
+        && Protocol(link) >= min_prot
+        && cli_sentalong(link) != sentalong_marker) {
+      cli_sentalong(link) = sentalong_marker;
+      send_buffer(also, NULL, serv_mb, 0, &mctx, NULL);
+    }
   }
   msgq_clean(serv_mb);
 }

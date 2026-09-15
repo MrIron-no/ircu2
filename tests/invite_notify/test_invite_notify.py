@@ -123,3 +123,68 @@ async def test_invite_notify_across_servers(ircd_network):
             except Exception:
                 pass
             await c.disconnect()
+
+
+async def _count_invites(client, chan, target_nick, window=2.0):
+    """Count invite-notify INVITE messages naming target_nick/chan within a
+    short window."""
+    n = 0
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + window
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return n
+        try:
+            msg = await client.wait_for_user_msg("INVITE", timeout=remaining)
+        except asyncio.TimeoutError:
+            return n
+        joined = " ".join(msg.params).lower()
+        if target_nick.lower() in joined and chan.lower() in joined:
+            n += 1
+
+
+async def test_invite_notify_not_reflected_to_source_link(ircd_network):
+    """S2S invite-notify must not be reflected back down the link it arrived
+    on.  Inviter and an op with the CAP sit on leaf1 (the source side); the
+    hub relays the op-notify but must skip the leaf1 link, so the leaf1 op
+    sees the invite exactly once (from leaf1's own local notify), not twice.
+    A leaf2 op confirms legitimate propagation still reaches other servers
+    exactly once."""
+    leaf1 = ircd_network["leaf1"]
+    leaf2 = ircd_network["leaf2"]
+    chan = "#inv_reflect"
+
+    inviter = await make_cap_client(leaf1["host"], leaf1["port"], "reflinv")
+    op_src = await make_cap_client(
+        leaf1["host"], leaf1["port"], "reflopsrc", ["invite-notify"])
+    op_far = await make_cap_client(
+        leaf2["host"], leaf2["port"], "reflopfar", ["invite-notify"])
+    target = await make_cap_client(leaf2["host"], leaf2["port"], "refltarget")
+    try:
+        for cl in (inviter, op_src, op_far):
+            await cl.send(f"JOIN {chan}")
+            await cl.wait_for("JOIN")
+        await asyncio.sleep(0.5)
+        await inviter.send(f"MODE {chan} +oo reflopsrc reflopfar")
+        await asyncio.sleep(0.8)
+        await drain_briefly(op_src)
+        await drain_briefly(op_far)
+
+        await inviter.send(f"INVITE refltarget {chan}")
+        await inviter.wait_for("341")
+
+        invitee_msg = await target.wait_for_user_msg("INVITE", timeout=3.0)
+        assert "refltarget" in " ".join(invitee_msg.params).lower()
+
+        # The source-side op must get exactly one notify (no reflection).
+        assert await _count_invites(op_src, chan, "refltarget") == 1
+        # The far-side op must still get exactly one (propagation works).
+        assert await _count_invites(op_far, chan, "refltarget") == 1
+    finally:
+        for cl in (inviter, op_src, op_far, target):
+            try:
+                await cl.send("QUIT :cleanup")
+            except Exception:
+                pass
+            await cl.disconnect()
