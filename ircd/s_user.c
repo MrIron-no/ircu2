@@ -1209,10 +1209,16 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
       case 'z':
         if (what == MODE_ADD) {
           SetTLS(sptr);
-          /* Only P11 links carry a fingerprint parameter after +z; on a
-           * P10 link the next parameter (if any) is not ours to consume. */
+          /* Only a P11 server link carries a fingerprint parameter after +z
+           * (and only such a link may set it).  On a P10 link the next
+           * parameter is not ours -- it belongs to another mode -- so leave
+           * it.  A directly-connected client may not set its own fingerprint,
+           * but if it supplies a parameter anyway we must still consume it,
+           * or the outer loop would reparse that string as a mode change. */
           if (IsServer(cptr) && Protocol(cptr) >= 11 && *(p + 1))
             tls_fingerprint = *(++p);
+          else if (MyConnect(cptr) && !IsServer(cptr) && *(p + 1))
+            ++p;
         }
         /* There is no -z */
         break;
