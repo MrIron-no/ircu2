@@ -522,10 +522,14 @@ class P10Server:
     async def send_invite(self, from_numnick: str, target_nick: str, channel: str):
         """Send an INVITE (I) from one of our users to a target nick/channel.
 
-        Unlike PRIVMSG/NOTICE, ms_invite() takes the target by nickname
-        (see the outgoing "%s %H" format in m_invite.c), not numnick.
+        On a P11 link ms_invite() resolves the invitee by numnick (findNUser);
+        on a P10 link by nickname.  When this link is P11 and we know the
+        target's numnick (call wait_for_user first), address it by numnick.
         """
-        await self._send(f"{from_numnick} I {target_nick} {channel}")
+        target = target_nick
+        if self.protocol >= 11:
+            target = self.get_user_numnick(target_nick) or target_nick
+        await self._send(f"{from_numnick} I {target} {channel}")
 
     async def wait_for_user(self, nick: str, timeout: float = 5.0) -> str:
         """Wait until a user with the given nick appears, return their numnick.
