@@ -3513,14 +3513,26 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
       modestr = state.parv[state.args_used++];
       state.parc--;
 
-      /* is it a TS? */
-      if (IsServer(state.cptr) && !state.parc && IsDigit(*modestr)) {
+      /* Is this the channel timestamp?  On a P11 link the final parameter
+       * is a mandatory, positional channel TS; on a P10 link it is detected
+       * by the legacy heuristic (a final argument that starts with a digit).
+       * The P11 form is validated as all-digits, so an unconsumed mode
+       * argument -- e.g. a numnick beginning with a digit -- can no longer
+       * be mistaken for the timestamp and poison the creation time. */
+      if (IsServer(state.cptr) && !state.parc
+	  && (Protocol(state.cptr) >= 11 || IsDigit(*modestr))) {
 	time_t recv_ts;
+
+	if (Protocol(state.cptr) >= 11 && !strIsDigit(modestr)) {
+	  protocol_violation(state.cptr,
+			     "Non-numeric channel timestamp in MODE (%s)", modestr);
+	  break;
+	}
 
 	if (!(state.flags & MODE_PARSE_SET))	  /* don't set earlier TS if */
 	  break;		     /* we're then going to bounce the mode! */
 
-	recv_ts = atoi(modestr);
+	recv_ts = atotime(modestr);
 
 	if (recv_ts && recv_ts < state.chptr->creationtime)
 	  state.chptr->creationtime = recv_ts; /* respect earlier TS */
