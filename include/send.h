@@ -124,12 +124,14 @@ extern void sendcmdto_channel_butserv_butone(struct Client *from,
                                              unsigned int skip,
 					     const char *pattern, ...);
 
-/* Send command to all servers interested in a channel */
+/* Send command once per onward server link toward a selected channel member
+ * (and optionally toward one extra client), skipping the incoming link */
 extern void sendcmdto_channel_servers_butone(struct Client *from,
                                              const char *cmd,
                                              const char *tok,
                                              struct Channel *to,
                                              struct Client *one,
+                                             struct Client *also,
                                              unsigned int skip,
                                              unsigned short min_prot,
                                              const char *pattern, ...);
