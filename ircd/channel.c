@@ -2380,6 +2380,12 @@ struct ParseState {
   int max_args;
   int numbans;
   struct Ban banlist[MAXPARA];
+  struct Mode newmode;      /**< Staged channel modes (+l/+k/+U/+A); copied
+                                 to the channel only on commit, so a dropped
+                                 mode applies nothing. */
+  int apass_oplevel;        /**< Deferred +A/-A member oplevel action: 0 none,
+                                 1 set the manager to oplevel 0 (+A),
+                                 2 reset all chanops to MAXOPLEVEL (-A). */
   struct {
     unsigned int flag;
     unsigned short oplevel;
@@ -2464,13 +2470,13 @@ mode_parse_limit(struct ParseState *state, int *flag_p)
 
   modebuf_mode_uint(state->mbuf, state->dir | flag_p[0], t_limit);
 
-  if (state->flags & MODE_PARSE_SET) { /* set the limit */
+  if (state->flags & MODE_PARSE_SET) { /* stage the limit */
     if (state->dir & MODE_ADD) {
-      state->chptr->mode.mode |= flag_p[0];
-      state->chptr->mode.limit = t_limit;
+      state->newmode.mode |= flag_p[0];
+      state->newmode.limit = t_limit;
     } else {
-      state->chptr->mode.mode &= ~flag_p[0];
-      state->chptr->mode.limit = 0;
+      state->newmode.mode &= ~flag_p[0];
+      state->newmode.limit = 0;
     }
   }
 }
@@ -2591,11 +2597,11 @@ mode_parse_key(struct ParseState *state, int *flag_p)
   } else /* send new key */
     modebuf_mode_string(state->mbuf, state->dir | flag_p[0], t_str, 0);
 
-  if (state->flags & MODE_PARSE_SET) {
+  if (state->flags & MODE_PARSE_SET) { /* stage the key */
     if (state->dir == MODE_DEL) /* remove the old key */
-      *state->chptr->mode.key = '\0';
+      *state->newmode.key = '\0';
     else
-      ircd_strncpy(state->chptr->mode.key, t_str, KEYLEN);
+      ircd_strncpy(state->newmode.key, t_str, KEYLEN);
   }
 }
 
@@ -2710,11 +2716,11 @@ mode_parse_upass(struct ParseState *state, int *flag_p)
   } else /* send new upass */
     modebuf_mode_string(state->mbuf, state->dir | flag_p[0], t_str, 0);
 
-  if (state->flags & MODE_PARSE_SET) {
+  if (state->flags & MODE_PARSE_SET) { /* stage the upass */
     if (state->dir == MODE_DEL) /* remove the old upass */
-      *state->chptr->mode.upass = '\0';
+      *state->newmode.upass = '\0';
     else
-      ircd_strncpy(state->chptr->mode.upass, t_str, KEYLEN);
+      ircd_strncpy(state->newmode.upass, t_str, KEYLEN);
   }
 }
 
@@ -2724,7 +2730,6 @@ mode_parse_upass(struct ParseState *state, int *flag_p)
 static void
 mode_parse_apass(struct ParseState *state, int *flag_p)
 {
-  struct Membership *memb;
   char *t_str;
 
   if (MyUser(state->sptr) && state->max_args <= 0) /* drop if too many args */
@@ -2833,20 +2838,20 @@ mode_parse_apass(struct ParseState *state, int *flag_p)
   } else /* send new apass */
     modebuf_mode_string(state->mbuf, state->dir | flag_p[0], t_str, 0);
 
-  if (state->flags & MODE_PARSE_SET) {
+  if (state->flags & MODE_PARSE_SET) { /* stage the apass */
     if (state->dir == MODE_ADD) { /* set the new apass */
       /* Only accept the new apass if there is no current apass or
        * this is a BURST. */
       if (state->chptr->mode.apass[0] == '\0' ||
           (state->flags & MODE_PARSE_BURST))
-        ircd_strncpy(state->chptr->mode.apass, t_str, KEYLEN);
+        ircd_strncpy(state->newmode.apass, t_str, KEYLEN);
       /* Make it VERY clear to the user that this is a one-time password */
       if (MyUser(state->sptr)) {
-	send_reply(state->sptr, RPL_APASSWARN_SET, state->chptr->mode.apass);
+	send_reply(state->sptr, RPL_APASSWARN_SET, state->newmode.apass);
 	send_reply(state->sptr, RPL_APASSWARN_SECRET, state->chptr->chname,
-                   state->chptr->mode.apass);
+                   state->newmode.apass);
       }
-      /* Give the channel manager level 0 ops.
+      /* Give the channel manager level 0 ops (deferred to commit).
          There should not be tested for IsChannelManager here because
 	 on the local server it is impossible to set the apass if one
 	 isn't a channel manager and remote servers might need to sync
@@ -2854,19 +2859,15 @@ mode_parse_apass(struct ParseState *state, int *flag_p)
 	 channel manager) during a net.break, and only sets the Apass
 	 after the net rejoined, they will have oplevel MAXOPLEVEL on
 	 all remote servers. */
-      if (state->member)
-        SetOpLevel(state->member, 0);
+      state->apass_oplevel = 1;
     } else { /* remove the old apass */
-      *state->chptr->mode.apass = '\0';
+      *state->newmode.apass = '\0';
       /* Clear Upass so that there is never a Upass set when a zannel is burst. */
-      *state->chptr->mode.upass = '\0';
+      *state->newmode.upass = '\0';
       if (MyUser(state->sptr))
         send_reply(state->sptr, RPL_APASSWARN_CLEAR);
-      /* Revert everyone to MAXOPLEVEL. */
-      for (memb = state->chptr->members; memb; memb = memb->next_member) {
-        if (memb->status & MODE_CHANOP)
-          SetOpLevel(memb, MAXOPLEVEL);
-      }
+      /* Revert everyone to MAXOPLEVEL (deferred to commit). */
+      state->apass_oplevel = 2;
     }
   }
 }
@@ -3022,7 +3023,10 @@ mode_parse_ban(struct ParseState *state, int *flag_p)
   set_ban_mask(newban, collapse(pretty_mask(t_str)));
   ircd_strncpy(newban->who, IsUser(state->sptr) ? cli_name(state->sptr) : "*", NICKLEN);
   newban->when = TStime();
-  apply_ban(&state->chptr->banlist, newban, 0);
+  /* The ban is only staged here.  apply_ban() -- which links it into the
+   * channel -- is deferred to mode_process_bans() in the commit phase, so a
+   * mode dropped before commit (e.g. a P11 mode with no timestamp) leaves the
+   * channel's ban list untouched. */
 }
 
 /*
@@ -3036,6 +3040,14 @@ mode_process_bans(struct ParseState *state)
   int len = 0;
   int banlen;
   int changed = 0;
+  int i;
+
+  /* Link the bans this parse staged into the channel now, in parse order, so
+   * apply_ban()'s overlap handling matches what it did inline before.  This
+   * is deferred from mode_parse_ban() so a mode dropped before this commit
+   * phase never touches the channel's ban list. */
+  for (i = 0; i < state->numbans; i++)
+    apply_ban(&state->chptr->banlist, state->banlist + i, 0);
 
   for (prevban = 0, ban = state->chptr->banlist; ban; ban = nextban) {
     count++;
@@ -3385,47 +3397,21 @@ mode_parse_mode(struct ParseState *state, int *flag_p)
  * \param[in] member If non-null, the channel member attempting to change the modes.
  */
 
-/** Undo the inline effects of a mode change we have decided to drop, and
- * empty the mode buffer so nothing is propagated.
+/** Empty the mode buffer of a mode change we have decided to drop, so that
+ * nothing is propagated.
  *
- * mode_parse() applies the parametric modes as it walks the mode string:
- * mode_parse_ban() links a ban (whose storage lives in the caller's stack
- * @c banlist[] array) into the channel via apply_ban(), and the +l/+k/+U/+A
- * helpers write straight into @c chptr->mode.  A drop happens only after the
- * loop, so those effects must be unwound or the channel is left applied and,
- * for a ban, pointing at stack memory that is freed on return.
+ * mode_parse() stages every channel change it makes -- bans in @c banlist[],
+ * the parametric +l/+k/+U/+A modes in @c newmode, and the +A/-A oplevel
+ * action in @c apass_oplevel -- and commits them only after the drop
+ * decision at the end of the parse loop.  So a dropped mode has applied
+ * nothing to the channel; the only visible side effect to unwind is the
+ * mode buffer the helpers filled in while validating, which this clears.
  *
- * Bans: apply_ban() only ever links a brand-new node -- always flagged
- * BAN_ADD -- into the list, and never sets BAN_ADD on a pre-existing ban.  So
- * a listed node with BAN_ADD is exactly one this parse appended (stack
- * storage); unlink it without freeing.  Every surviving node is a real,
- * heap-allocated ban whose transient BAN_ADD/BAN_DEL/BAN_OVERLAPPED flags this
- * parse may have set, so clear them.
- *
- * Parametric modes: restore the channel mode struct saved before the loop.
- * Simple modes are only applied after the drop decision, so they need no undo.
- *
- * @param[in,out] state Parse state whose channel is to be restored.
- * @param[in] saved The channel mode as it was before the parse loop.
+ * @param[in,out] state Parse state whose mode buffer is to be emptied.
  */
 static void
-mode_parse_undo(struct ParseState *state, const struct Mode *saved)
+mode_parse_drop(struct ParseState *state)
 {
-  struct Ban **pp;
-  struct Ban *b;
-
-  for (pp = &state->chptr->banlist; (b = *pp); ) {
-    if (b->flags & BAN_ADD)  /* a ban this parse appended; storage is on the
-                                caller's stack, so unlink but do not free */
-      *pp = b->next;
-    else {
-      b->flags &= ~(BAN_ADD | BAN_DEL | BAN_OVERLAPPED);
-      pp = &b->next;
-    }
-  }
-
-  state->chptr->mode = *saved;
-
   if (state->mbuf) {
     state->mbuf->mb_add = 0;
     state->mbuf->mb_rem = 0;
@@ -3470,7 +3456,6 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
   char *modestr;
   struct ParseState state;
   int ts_present = 0;   /* a valid channel timestamp was seen (P11: mandatory) */
-  struct Mode saved_mode; /* channel modes before the loop, for a P11 TS drop */
 
   assert(0 != cptr);
   assert(0 != sptr);
@@ -3503,10 +3488,11 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
     state.cli_change[i].client = 0;
   }
 
-  /* Snapshot the channel modes before the loop applies any of them inline,
-   * so a P11 timestamp drop (or the bursting-peer future-TS case) can undo
-   * a partial application rather than leave the channel corrupted. */
-  saved_mode = chptr->mode;
+  /* Stage the channel's current modes.  The parametric-mode helpers edit
+   * this copy, never the live channel, so nothing is applied until the
+   * commit phase past the end-of-loop drop check. */
+  state.newmode = chptr->mode;
+  state.apass_oplevel = 0;
 
   modestr = state.parv[state.args_used++];
   state.parc--;
@@ -3585,7 +3571,7 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
 	   * and propagate nothing) rather than let it diverge. */
 	  protocol_violation(state.cptr,
 			     "Non-numeric channel timestamp in MODE (%s)", modestr);
-	  mode_parse_undo(&state, &saved_mode);
+	  mode_parse_drop(&state);
 	  return state.args_used;
 	}
 
@@ -3614,7 +3600,7 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
              * bounce that could desync modes from our side (that
              * have already been sent).
              */
-            mode_parse_undo(&state, &saved_mode);
+            mode_parse_drop(&state);
             return state.args_used;
           } else {
             /* Server is desynced; bounce the mode and deop the source
@@ -3655,11 +3641,14 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
       && !ts_present) {
     protocol_violation(state.cptr, "MODE for %s without a channel timestamp",
 		       state.chptr->chname);
-    mode_parse_undo(&state, &saved_mode);
+    mode_parse_drop(&state);
     return state.args_used;
   }
 
-  t_mode = state.chptr->mode.mode;
+  /* Start from the staged mode word: it already carries the parametric-mode
+   * bits (e.g. MODE_LIMIT) the helpers set on state.newmode.  The simple
+   * add/del bits are folded in below. */
+  t_mode = state.newmode.mode;
 
   if (state.del & t_mode) { /* delete any modes to be deleted... */
     modebuf_mode(state.mbuf, MODE_DEL | (state.del & t_mode));
@@ -3693,6 +3682,27 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
     if (*state.chptr->mode.apass && !(state.done & DONE_APASS_DEL))
       modebuf_mode_string(state.mbuf, MODE_DEL | MODE_APASS,
 			  state.chptr->mode.apass, 0);
+  }
+
+  if (state.flags & MODE_PARSE_SET) {
+    /* Commit the staged parametric-mode values.  This runs after the WIPEOUT
+     * block above, which reads the channel's current (pre-change) values.
+     * Unchanged fields equal the live ones, so copying all four is safe. */
+    state.chptr->mode.limit = state.newmode.limit;
+    ircd_strncpy(state.chptr->mode.key,   state.newmode.key,   KEYLEN);
+    ircd_strncpy(state.chptr->mode.upass, state.newmode.upass, KEYLEN);
+    ircd_strncpy(state.chptr->mode.apass, state.newmode.apass, KEYLEN);
+
+    /* Apply the deferred +A/-A member oplevel change. */
+    if (state.apass_oplevel == 1) {
+      if (state.member)
+	SetOpLevel(state.member, 0);
+    } else if (state.apass_oplevel == 2) {
+      struct Membership *memb;
+      for (memb = state.chptr->members; memb; memb = memb->next_member)
+	if (memb->status & MODE_CHANOP)
+	  SetOpLevel(memb, MAXOPLEVEL);
+    }
   }
 
   if (state.done & DONE_BANCLEAN) /* process bans */

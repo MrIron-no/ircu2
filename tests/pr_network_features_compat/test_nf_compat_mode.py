@@ -65,3 +65,52 @@ async def test_mode_from_p11_reaches_p10_no_desync(ircd_nf_compat):
     """A mode set on a P11 server (C) is applied on the P10 release (A)."""
     await _run(ircd_nf_compat["c"], ircd_nf_compat["a"], "#p11mode",
                "p11setter", "p10watch")
+
+
+async def _limit(client, chan):
+    """Return the numeric +l limit on a channel, or None if unset."""
+    await client.send(f"MODE {chan}")
+    m = await client.wait_for("324", timeout=5.0)
+    modes = m.params[2] if len(m.params) > 2 else ""
+    if "l" not in modes:
+        return None
+    # the limit value is the argument following the mode letters
+    return int(m.params[3]) if len(m.params) > 3 else None
+
+
+async def test_parametric_mode_limit_crosses_boundary(ircd_nf_compat):
+    """A real client on a P11 server (C) sets +l; the server stamps the
+    channel TS on propagation, so the parametric mode commits and is applied
+    both locally (C) and on the P10 release (A).  Positive end-to-end control
+    for the deferred mode-commit path (a dropped mode applies nothing; a
+    normal one must still apply)."""
+    c = ircd_nf_compat["c"]
+    a = ircd_nf_compat["a"]
+    chan = "#nfparam"
+
+    setter = IRCClient()
+    await setter.connect(c["host"], c["port"])
+    await setter.register("nflimitset", "u", "limit setter")
+    watcher = IRCClient()
+    await watcher.connect(a["host"], a["port"])
+    await watcher.register("nflimitwatch", "u", "limit watcher")
+    try:
+        await setter.send(f"JOIN {chan}")
+        await setter.wait_for("JOIN")
+        await watcher.send(f"JOIN {chan}")
+        await watcher.wait_for("JOIN")
+        await asyncio.sleep(0.5)
+
+        await setter.send(f"MODE {chan} +l 42")
+        await setter.wait_for("MODE")
+        await asyncio.sleep(0.5)
+
+        assert await _limit(setter, chan) == 42
+        assert await _limit(watcher, chan) == 42
+    finally:
+        for cl in (setter, watcher):
+            try:
+                await cl.send("QUIT :cleanup")
+            except Exception:
+                pass
+            await cl.disconnect()
