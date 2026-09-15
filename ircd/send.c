@@ -666,19 +666,31 @@ void sendcmdto_prio_one(struct Client *from, const char *cmd, const char *tok,
   msgq_clean(mb);
 }
 
-/** Send a (prefixed) command to all servers speaking at least a given
- * protocol version, except one.  Used for P11 extensions that P10 peers
- * would reject.
+/** Send a (prefixed) command to all servers whose negotiated protocol
+ * falls in a half-open range, except one.  A peer receives the command
+ * when @a min_prot <= Protocol(peer) < @a max_prot.  Either bound may be
+ * given as 0 to leave that side open: @a min_prot 0 reaches down to the
+ * link floor, @a max_prot 0 reaches up to this server's own version.
+ *
+ * Two calls sharing a boundary partition the downlinks, so a P11 form can
+ * go to P11 peers (min_prot 11, max_prot 0) and the P10 form to the rest
+ * (min_prot 0, max_prot 11) without hand-rolling the downlink loop at the
+ * call site.  min_prot 0, max_prot 0 reaches every server, like
+ * sendcmdto_serv_butone().
  * @param[in] from Client sending the command.
  * @param[in] cmd Long name of command (ignored).
  * @param[in] tok Short name of command.
  * @param[in] one Client direction to skip (or NULL).
- * @param[in] min_prot Lowest protocol number that receives the command.
+ * @param[in] min_prot Lowest protocol number that receives the command, or
+ *   0 for no lower bound.
+ * @param[in] max_prot Protocol number at or above which a peer is skipped,
+ *   or 0 for no upper bound.
  * @param[in] pattern Format string for command arguments.
  */
 void sendcmdto_prot_serv_butone(struct Client *from, const char *cmd,
                                 const char *tok, struct Client *one,
                                 unsigned short min_prot,
+                                unsigned short max_prot,
                                 const char *pattern, ...)
 {
   struct VarData vd;
@@ -698,7 +710,9 @@ void sendcmdto_prot_serv_butone(struct Client *from, const char *cmd,
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     if (one && lp->value.cptr == cli_from(one))
       continue;
-    if (Protocol(lp->value.cptr) < min_prot)
+    if (min_prot && Protocol(lp->value.cptr) < min_prot)
+      continue;
+    if (max_prot && Protocol(lp->value.cptr) >= max_prot)
       continue;
     send_buffer(lp->value.cptr, NULL, mb, 0, &mctx, NULL);
   }

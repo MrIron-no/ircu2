@@ -79,10 +79,12 @@ extern void sendcmdto_one_hunted(struct Client *from, const char *cmd,
 				 const char *tok, struct Client *to,
 				 const char *pattern, ...);
 
-/* Send command to servers speaking at least min_prot except one */
+/* Send command to servers whose protocol is in [min_prot, max_prot) except
+ * one; either bound 0 leaves that side open (link floor / this version) */
 extern void sendcmdto_prot_serv_butone(struct Client *from, const char *cmd,
                                        const char *tok, struct Client *one,
                                        unsigned short min_prot,
+                                       unsigned short max_prot,
                                        const char *pattern, ...);
 
 /* Send command to all servers except one */
