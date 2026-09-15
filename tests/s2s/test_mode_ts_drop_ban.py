@@ -132,3 +132,39 @@ async def test_p11_mode_with_valid_ts_applies_ban(ircd_hub, make_client):
         assert "*!*@ok.example" in masks, f"ban not applied: {masks}"
     finally:
         await srv.disconnect()
+
+
+async def test_p11_less_specific_ban_replaces_more_specific(ircd_hub, make_client):
+    """The deferred apply_ban() must still replace more-specific bans with a
+    less-specific one.  Two narrow bans are set, then a broader ban that is a
+    superset of both; the broad ban must remain and the two narrow ones must
+    be removed (apply_ban marks them BAN_OVERLAPPED|BAN_DEL, mode_process_bans
+    unlinks them).  Guards the relocation of the apply_ban() call into the
+    commit phase."""
+    srv = await _link(ircd_hub)
+    try:
+        await srv.handshake()
+        client = await make_client("banoverlap1")
+        chan = "#banoverlap"
+        await client.send(f"JOIN {chan}")
+        await client.wait_for("JOIN")
+        orig = await _creationtime(client, chan)
+
+        # Two specific bans.
+        await srv._send(
+            f"{srv.server_numnick} M {chan} +bb "
+            f"a!b@host1.example.com a!b@host2.example.com {orig}")
+        await asyncio.sleep(0.5)
+        masks = await _ban_list(client, chan)
+        assert "a!b@host1.example.com" in masks, masks
+        assert "a!b@host2.example.com" in masks, masks
+
+        # A broader ban that is a superset of both.
+        await srv._send(f"{srv.server_numnick} M {chan} +b a!b@*.example.com {orig}")
+        await asyncio.sleep(0.5)
+
+        masks = await _ban_list(client, chan)
+        assert masks == ["a!b@*.example.com"], (
+            f"less-specific ban did not replace the specific ones: {masks}")
+    finally:
+        await srv.disconnect()
