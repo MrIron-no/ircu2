@@ -1259,7 +1259,7 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
       char *id, *flags;
       if ((id = strchr(account, ':'))) {
         len = (id++) - account;
-	      cli_user(sptr)->acc_id = atoi(id);
+	      cli_user(sptr)->acc_id = strtoull(id, NULL, 10);
 	      Debug((DEBUG_DEBUG, "Received account id in user mode; "
 	        "account \"%s\", id %qu", account,
 	        cli_user(sptr)->acc_id));
@@ -1267,7 +1267,7 @@ int set_user_mode(struct Client *cptr, struct Client *sptr, int parc,
         /* Check for account flags */
         if ((flags = strchr(id, ':'))) {
             // Parse the flags after the second colon.
-            cli_user(sptr)->acc_flags = atoi(flags + 1);
+            cli_user(sptr)->acc_flags = strtoull(flags + 1, NULL, 10);
             // Null-terminate the account string before flags.
             *flags = '\0';
             Debug((DEBUG_DEBUG, "Received account flags; account \"%s\", flags %qu",
