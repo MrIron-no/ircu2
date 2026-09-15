@@ -105,3 +105,30 @@ async def test_p11_mode_drop_does_not_apply_limit(ircd_hub, make_client):
         assert "50" not in modes, f"dropped +l was applied: {modes}"
     finally:
         await srv.disconnect()
+
+
+async def _creationtime(client, chan):
+    await client.send(f"MODE {chan}")
+    ct = await client.wait_for("329", timeout=5.0)
+    return int(ct.params[-1])
+
+
+async def test_p11_mode_with_valid_ts_applies_ban(ircd_hub, make_client):
+    """Positive control: a P11 MODE carrying a valid TS commits its ban
+    through the deferred apply_ban() path."""
+    srv = await _link(ircd_hub)
+    try:
+        await srv.handshake()
+        client = await make_client("banok1")
+        chan = "#banok"
+        await client.send(f"JOIN {chan}")
+        await client.wait_for("JOIN")
+        orig = await _creationtime(client, chan)
+
+        await srv._send(f"{srv.server_numnick} M {chan} +b *!*@ok.example {orig}")
+        await asyncio.sleep(0.5)
+
+        masks = await _ban_list(client, chan)
+        assert "*!*@ok.example" in masks, f"ban not applied: {masks}"
+    finally:
+        await srv.disconnect()
