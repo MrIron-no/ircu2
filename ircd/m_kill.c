@@ -89,7 +89,6 @@
 #include "ircd_reply.h"
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
-#include "list.h"
 #include "msg.h"
 #include "numeric.h"
 #include "numnicks.h"
@@ -137,25 +136,20 @@ static int do_kill(struct Client* cptr, struct Client* sptr,
    */
   if (IsServer(cptr) || !MyConnect(victim)) {
     char fullpath[KILLPATHLEN + 1];
-    struct DLink *lp;
 
     /* Fold this hop onto the kill path, capped so a long path cannot
      * squeeze the reason out of the line. */
     ircd_snprintf(0, fullpath, sizeof(fullpath), "%s!%s", inpath, path);
 
-    /* Relay to each downlink.  A P11 peer carries the path as its own
-     * parameter and the reason as the trailing parameter; a P10 peer packs
-     * both into the trailing parameter, separated by a space. */
-    for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
-      if (cptr == lp->value.cptr)
-        continue;
-      if (Protocol(lp->value.cptr) >= 11)
-        sendcmdto_one(sptr, CMD_KILL, lp->value.cptr, "%C %s :%s",
-                      victim, fullpath, msg);
-      else
-        sendcmdto_one(sptr, CMD_KILL, lp->value.cptr, "%C :%s %s",
-                      victim, fullpath, msg);
-    }
+    /* Relay to each downlink in the form its link negotiated: a P11 peer
+     * carries the path as its own parameter and the reason as the trailing
+     * parameter; a P10 peer packs both into the trailing parameter,
+     * separated by a space.  The two calls partition the downlinks at
+     * protocol 11. */
+    sendcmdto_prot_serv_butone(sptr, CMD_KILL, cptr, 11, 0, "%C %s :%s",
+                               victim, fullpath, msg);
+    sendcmdto_prot_serv_butone(sptr, CMD_KILL, cptr, 0, 11, "%C :%s %s",
+                               victim, fullpath, msg);
 
     /*
      * Set FLAG_KILLED. This prevents exit_one_client from sending

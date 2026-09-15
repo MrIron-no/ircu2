@@ -196,7 +196,7 @@ int ms_account(struct Client* cptr, struct Client* sptr, int parc,
    * second ACCOUNT), so relay those over P11 links only.  First-time
    * ACCOUNT always propagates. */
   if (already_account)
-    sendcmdto_prot_serv_butone(sptr, CMD_ACCOUNT, cptr, 11, fmt,
+    sendcmdto_prot_serv_butone(sptr, CMD_ACCOUNT, cptr, 11, 0, fmt,
                                acptr, cli_user(acptr)->account,
                                cli_user(acptr)->acc_id,
                                cli_user(acptr)->acc_flags);
