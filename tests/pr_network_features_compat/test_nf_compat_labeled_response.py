@@ -119,13 +119,18 @@ async def _assert_still_alive(server: dict, nick: str):
     await probe.disconnect()
 
 
-async def test_whois_trick_via_nf_false_hop_falls_back_to_immediate_ack(
+async def test_whois_trick_via_p10_hop_degrades_unlabeled_no_ack(
     ircd_nf_compat,
 ):
-    """Client connects directly to B (NF=FALSE) and does a labeled WHOIS
-    trick for a user on A. B's own sendcmdto_one_hunted() gate is off, so
-    it never touches the local capture -- the client must get an
-    immediate bare ACK (today's known, safe S2S gap), never a hang.
+    """Client connects directly to B and does a labeled WHOIS trick for a
+    user on A, reached over the B->A link, which is P10. The label cannot
+    be carried, so B hands the capture off and the reply degrades to an
+    unlabeled WHOIS with NO ACK -- never an immediate ACK and never a hang.
+
+    Per the IRCv3 labeled-response spec, ACK is reserved for commands that
+    normally produce no response; WHOIS produces one, so an unlabelable
+    relayed WHOIS must degrade to "no labeled response, not even an ACK"
+    (clients treat it as an unlabeled server), not to a bare ACK.
     """
     a = ircd_nf_compat["a"]
     b = ircd_nf_compat["b"]
@@ -138,16 +143,14 @@ async def test_whois_trick_via_nf_false_hop_falls_back_to_immediate_ack(
     try:
         await client.send(f"@label=viaB WHOIS {target.nick} {target.nick}")
 
-        ack = await client.wait_for("ACK", timeout=5.0)
-        assert _tag_value(ack.tags, "label") == "viaB", ack.raw
-
-        # The real reply still arrives afterward, unlabeled -- same shape
-        # as any other hunt_server_cmd()-routed command when NF is off.
+        # The real reply arrives, unlabeled, and there is no ACK or BATCH.
         lines = await client.collect_until("318", timeout=10.0)
         assert any(m.command == "311" for m in lines), [m.command for m in lines]
         for m in lines:
             assert not _tag_has(m.tags, "label"), m.raw
             assert not _tag_has(m.tags, "batch"), m.raw
+        assert not any(m.command == "ACK" for m in lines), lines
+        assert not any(m.command == "BATCH" for m in lines), lines
     finally:
         await _cleanup(client, target)
 
