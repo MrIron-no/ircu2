@@ -130,7 +130,6 @@ m_mode(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     return set_user_mode(cptr, sptr, parc, parv, ALLOWMODES_ANY);
   }
 
-  ClrFlag(sptr, FLAG_TS8);
 
   member = find_member_link(chptr, sptr);
 
@@ -201,7 +200,6 @@ ms_mode(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     return set_user_mode(cptr, sptr, parc, parv, ALLOWMODES_ANY);
   }
 
-  ClrFlag(sptr, FLAG_TS8);
 
   if (IsServer(sptr)) {
     /* Prefer UWorld on the originator (multi-hop); fall back to uplink. */

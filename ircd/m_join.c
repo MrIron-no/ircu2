@@ -368,8 +368,6 @@ int ms_join(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
         		   name,cli_name(sptr));
       	continue;
       }
-      flags |= HasFlag(sptr, FLAG_TS8) ? CHFL_SERVOPOK : 0;
-
       chptr->creationtime = creation;
     }
     else { /* We have a valid channel? */
@@ -379,12 +377,10 @@ int ms_join(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 	if (!IsZombie(member)) /* already on channel */
 	  continue;
 
-	flags = member->status & (CHFL_DEOPPED | CHFL_SERVOPOK);
+	flags = member->status & CHFL_DEOPPED;
 	remove_user_from_channel(sptr, chptr);
 	chptr = FindChannel(name);
       }
-      else
-        flags |= HasFlag(sptr, FLAG_TS8) ? CHFL_SERVOPOK : 0;
       /* Always copy the timestamp when it is older, that is the only way to
          ensure network-wide synchronization of creation times.
          We now also copy a creation time that only 1 second younger...

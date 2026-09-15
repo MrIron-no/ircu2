@@ -668,7 +668,7 @@ void sendcmdto_prio_one(struct Client *from, const char *cmd, const char *tok,
 
 /** Send a (prefixed) command to all servers speaking at least a given
  * protocol version, except one.  Used for P11 extensions that P10 peers
- * would reject (compare the Protocol(x) < 10 checks for P9 peers).
+ * would reject.
  * @param[in] from Client sending the command.
  * @param[in] cmd Long name of command (ignored).
  * @param[in] tok Short name of command.
