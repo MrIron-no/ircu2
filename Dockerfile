@@ -116,6 +116,9 @@ RUN touch /opt/ircu/lib/ircd.motd && chown ircu:ircu /opt/ircu/lib/ircd.motd
 COPY tests/docker/iauth-trust-username.pl /opt/ircu/bin/iauth-trust-username.pl
 RUN chmod +x /opt/ircu/bin/iauth-trust-username.pl && chown ircu:ircu /opt/ircu/bin/iauth-trust-username.pl
 
+COPY tests/docker/iauth-test.pl /opt/ircu/bin/iauth-test.pl
+RUN chmod +x /opt/ircu/bin/iauth-test.pl && chown ircu:ircu /opt/ircu/bin/iauth-test.pl
+
 COPY tests/docker/ircd-entrypoint.sh /opt/ircu/lib/ircd-entrypoint.sh
 RUN chmod 755 /opt/ircu/lib/ircd-entrypoint.sh
 
