@@ -1495,7 +1495,7 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
     char from_numnick[16];
     int rc;
 
-    if (feature_bool(FEAT_NETWORK_FEATURES) && mptr->tok && IsUser(from)
+    if (IsServer(cptr) && Protocol(cptr) >= 11 && mptr->tok && IsUser(from)
         && strcmp(mptr->tok, TOK_BATCH) && strcmp(mptr->tok, TOK_ACK)) {
       struct MsgTag *label_tag = msg_tag_find(current_tags, "label");
 

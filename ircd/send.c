@@ -587,7 +587,7 @@ void sendcmdto_one_hunted(struct Client *from, const char *cmd, const char *tok,
   int labeled = 0;
   struct LabelCapture *lc;
 
-  if (feature_bool(FEAT_NETWORK_FEATURES)
+  if (IsServer(cli_from(to)) && Protocol(cli_from(to)) >= 11
       && (lc = label_capture_active_for(from)) != NULL) {
     ircd_strncpy(label, lc->value, sizeof(label) - 1);
     label[sizeof(label) - 1] = '\0';
