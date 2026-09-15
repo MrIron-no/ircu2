@@ -54,13 +54,13 @@ async def _stats_lines_no_send(client, end_arg, timeout=8.0):
             return lines
 
 
-async def test_iauthconf_reports_missing_version(ircd_network, oper):
+async def test_iauthconf_reports_missing_version(ircd_network, hub_iauth, oper):
     """The hub's iauth-tilded.pl sends no V line."""
     lines = await _stats_lines(oper, "iauthconf", "iauthconf")
     assert any("did not report a version" in l for l in lines), lines
 
 
-async def test_iauth_stats_sync_path_on_hub(ircd_network, oper):
+async def test_iauth_stats_sync_path_on_hub(ircd_network, hub_iauth, oper):
     """Without the S policy (hub stub) STATS iauth answers synchronously."""
     lines = await _stats_lines(oper, "iauth", "iauth")
     assert isinstance(lines, list)
