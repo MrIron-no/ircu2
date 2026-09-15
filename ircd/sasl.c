@@ -29,6 +29,7 @@
 #include "ircd_events.h"
 #include "ircd_log.h"
 #include "ircd_string.h"
+#include "match.h"
 #include "ircd_reply.h"
 #include "ircd_netconf.h"
 #include "send.h"
@@ -71,17 +72,65 @@ static struct SaslSessionEntry* sasl_session_table[SASL_HASH_SIZE];
 /** Global SASL statistics */
 static struct SaslStats sasl_statistics = { 0, 0 };
 
+/** Check whether any server on the path from us to \a acptr is bursting.
+ * @param[in] acptr Server to test.
+ * @return 1 if \a acptr or one of its uplinks is still bursting.
+ */
+static int sasl_path_bursting(struct Client* acptr)
+{
+  for (; acptr && !IsMe(acptr); acptr = cli_serv(acptr)->up) {
+    if (IsBurst(acptr))
+      return 1;
+  }
+  return 0;
+}
+
+/** Find the SASL server to use.
+ *
+ * A usable SASL server exists when a SASL server mask and a mechanism
+ * list are configured and some linked server matches the mask with no
+ * bursting server on the path between us and it.  A half-completed link
+ * may already have introduced a matching server, but it is neither
+ * advertised nor routed to until END_OF_BURST has been received from
+ * every hop on the way.  With a wildcard mask, every match is considered
+ * and the first (lowest numnick) fully linked one wins, so a matching
+ * server that is re-linking does not mask an established one.
+ *
+ * This is the single source of truth: sasl_available() and the
+ * AUTHENTICATE routing in m_sasl() both use it, so the server validated
+ * here is the one requests are sent to.
+ * @return The SASL server, or NULL if none is usable.
+ */
+struct Client* sasl_server(void)
+{
+  char mask[HOSTLEN + 1];
+  struct Client* acptr;
+  unsigned int iter = 0;
+
+  if (!*netconf_str(NETCONF_SASL_SERVER)
+      || !*netconf_str(NETCONF_SASL_MECHANISMS))
+    return NULL;
+
+  /* Work on a copy: find_match_server() would collapse() the netconf
+   * value in place. */
+  ircd_strncpy(mask, netconf_str(NETCONF_SASL_SERVER), HOSTLEN);
+  mask[HOSTLEN] = '\0';
+  collapse(mask);
+
+  while ((acptr = find_match_server_next(mask, &iter))) {
+    if (!sasl_path_bursting(acptr))
+      return acptr;
+  }
+  return NULL;
+}
+
 /** Check if SASL is available
- * @return 1 if SASL server is configured, 0 otherwise
+ * @return 1 if a usable SASL server is linked, 0 otherwise
+ * @see sasl_server()
  */
 int sasl_available(void)
 {
-  if (!*netconf_str(NETCONF_SASL_SERVER)
-      || !*netconf_str(NETCONF_SASL_MECHANISMS)
-      || !find_match_server((char*)netconf_str(NETCONF_SASL_SERVER)))
-    return 0;
-
-  return 1;
+  return sasl_server() != NULL;
 }
 
 /** Check if a mechanism exists in a mechanism list

@@ -166,8 +166,7 @@ int m_sasl(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (HasFlag(sptr, FLAG_SASL) || HasFlag(sptr, FLAG_ACCOUNT))
     return send_reply(cptr, ERR_SASLALREADY);
 
-  acptr = find_match_server((char*)netconf_str(NETCONF_SASL_SERVER));
-  if (!sasl_available() || !acptr)
+  if (!(acptr = sasl_server()))
     return send_reply(cptr, ERR_SASLFAIL, "The login server is currently disconnected.  Please excuse the inconvenience.");
 
   if (strlen(parv[1]) > 400)

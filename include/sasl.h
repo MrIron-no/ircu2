@@ -30,6 +30,7 @@ struct StatDesc;
 /* Public SASL functions */
 extern void sasl_init(void);
 extern int sasl_available(void);
+extern struct Client* sasl_server(void);
 extern int sasl_mechanism_supported(const char* mechanism);
 extern void sasl_check_capability(void);
 extern void sasl_send_xreply(struct Client* sptr, const char* routing, const char* reply);

@@ -246,6 +246,21 @@ class P10Server:
         Sends PASS + SERVER, reads the hub's PASS + SERVER + burst,
         sends our EB, waits for EA, sends EA.
         """
+        deadline = asyncio.get_event_loop().time() + timeout
+        await self.begin_handshake(timeout=timeout)
+        await self.send_end_of_burst()
+        remaining = deadline - asyncio.get_event_loop().time()
+        await self.complete_handshake(timeout=remaining)
+
+    async def begin_handshake(self, timeout: float = 15.0):
+        """Send PASS + SERVER and read the hub's burst up to its EB.
+
+        Leaves the link in the "still bursting" state from the hub's point
+        of view: we have not sent our own EB yet. Tests that need a
+        half-linked server (e.g. to simulate a link that dies mid-burst)
+        stop here; otherwise follow with send_end_of_burst() and
+        complete_handshake().
+        """
         now = int(time.time())
 
         # Send our credentials
@@ -268,10 +283,13 @@ class P10Server:
             if tok == "EB" or line == "EB":
                 break
 
-        # Send our (empty) burst + end of burst
+    async def send_end_of_burst(self):
+        """Send our EB, marking the end of our (possibly empty) burst."""
         await self._send(f"{self._num} EB")
 
-        # Wait for EA (end of burst ack)
+    async def complete_handshake(self, timeout: float = 15.0):
+        """Wait for the hub's EA and answer with our own EA."""
+        deadline = asyncio.get_event_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
@@ -339,21 +357,34 @@ class P10Server:
         description: str = "Downstream test server",
         timestamp: int | None = None,
         protocol: int | None = None,
+        bursting: bool = True,
     ) -> str:
         """Introduce a remote server behind this link.
+
+        ``bursting`` selects the protocol field: ``J10`` (default) tells the
+        hub the server is still bursting -- it stays flagged as such until
+        an EB arrives from *that* server's numeric (see send_end_of_burst_for).
+        ``P10`` introduces a server whose burst already completed, which is
+        how an uplink re-introduces its existing downlinks during its own
+        burst.
 
         Returns the 2-character P10 server numeric for the new server.
         """
         ts = timestamp or _next_timestamp()
-        proto = self.protocol if protocol is None else protocol
+        version = self.protocol if protocol is None else protocol
         down_num = server_numeric(numeric)
         down_mask = down_num + int_to_b64(self.max_clients, 3)
         flag_field = f"+{flags}" if flags else "+"
+        prefix = "J" if bursting else "P"
         await self._send(
-            f"{self._num} SERVER {name} {hop} 0 {ts} J{proto} {down_mask} "
+            f"{self._num} SERVER {name} {hop} 0 {ts} {prefix}{version} {down_mask} "
             f"{flag_field} :{description}"
         )
         return down_num
+
+    async def send_end_of_burst_for(self, server_numeric_prefix: str):
+        """Send EB on behalf of a downstream server introduced with J10."""
+        await self._send(f"{server_numeric_prefix} EB")
 
     async def send_downstream_nick(
         self,
