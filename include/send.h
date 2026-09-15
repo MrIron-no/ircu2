@@ -129,6 +129,7 @@ extern void sendcmdto_channel_servers_butone(struct Client *from,
                                              struct Channel *to,
                                              struct Client *one,
                                              unsigned int skip,
+                                             unsigned short min_prot,
                                              const char *pattern, ...);
 
 /* Send command to all interested channel users */

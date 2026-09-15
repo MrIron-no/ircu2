@@ -181,32 +181,30 @@ int m_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     add_invite(acptr, chptr);
     sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H", cli_name(acptr), chptr);
   } else if (!IsLocalChannel(chptr->chname)) {
-    sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H %Tu", cli_name(acptr), chptr,
-                  chptr->creationtime);
+    /* Deliver to the invitee's server: P11 addresses the target by numnick,
+       P10 still expects a nickname. */
+    if (Protocol(cli_from(acptr)) >= 11)
+      sendcmdto_one(sptr, CMD_INVITE, acptr, "%C %H %Tu", acptr, chptr,
+                    chptr->creationtime);
+    else
+      sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H %Tu", cli_name(acptr), chptr,
+                    chptr->creationtime);
   }
 
   if (!IsLocalChannel(chptr->chname) || MyConnect(acptr)) {
-    /*
-     * Announce to channel operators with CAP_INVITENOTIFY enabled.
-     * We do this irrespective of whether FEAT_ANNOUNCE_INVITES is enabled.
-     */
+    /* Notify local channel operators via invite-notify. */
     sendcmdto_capflag_channel_butserv_butone(sptr, CMD_INVITE,
                                              chptr, sptr, SKIP_NONOPS,
                                              CAP_INVITENOTIFY, 0,
                                              "%C %H", acptr, chptr);
 
-    if (feature_bool(FEAT_ANNOUNCE_INVITES)) {
-      /* Announce to channel operators without CAP_INVITENOTIFY enabled. */
-      sendcmdto_capflag_channel_butserv_butone(&his, get_error_numeric(RPL_ISSUEDINVITE)->str,
-                                               NULL, chptr, sptr, SKIP_NONOPS,
-                                               0, CAP_INVITENOTIFY,
-                                               "%H %C %C :%C has been invited by %C",
-                                               chptr, acptr, sptr, acptr, sptr);
-      /* Announce to servers with channel operators. */
-      sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr, SKIP_NONOPS,
-                                       "%s %H %Tu", cli_name(acptr),
+    /* Propagate to P11 servers hosting channel operators so their local ops
+       are notified via invite-notify too. The target is a numnick, which a
+       P10 hop cannot carry, so the propagation is restricted to P11 links. */
+    if (!IsLocalChannel(chptr->chname))
+      sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr,
+                                       SKIP_NONOPS, 11, "%C %H %Tu", acptr,
                                        chptr, chptr->creationtime);
-    }
   }
 
   return 0;
@@ -258,7 +256,9 @@ int ms_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
      */
     return protocol_violation(sptr, "Invite to a non-standard channel %s",parv[2]);
   }
-  if (!(acptr = FindUser(parv[1]))) {
+  /* A P11 peer addresses the invitee by numnick; a P10 peer by nickname. */
+  acptr = (Protocol(cptr) >= 11) ? findNUser(parv[1]) : FindUser(parv[1]);
+  if (!acptr) {
     send_reply(sptr, ERR_NOSUCHNICK, parv[1]);
     return 0;
   }
@@ -268,7 +268,10 @@ int ms_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
      * allow invites to non existent channels, bleah
      * avoid JOIN, INVITE, PART abuse
      */
-    sendcmdto_one(sptr, CMD_INVITE, acptr, "%C :%s", acptr, parv[2]);
+    if (Protocol(cli_from(acptr)) >= 11)
+      sendcmdto_one(sptr, CMD_INVITE, acptr, "%C :%s", acptr, parv[2]);
+    else
+      sendcmdto_one(sptr, CMD_INVITE, acptr, "%s :%s", cli_name(acptr), parv[2]);
     return 0;
   }
 
@@ -298,29 +301,25 @@ int ms_invite(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (MyConnect(acptr)) {
     add_invite(acptr, chptr);
     sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H", cli_name(acptr), chptr);
+  } else if (Protocol(cli_from(acptr)) >= 11) {
+    sendcmdto_one(sptr, CMD_INVITE, acptr, "%C %H %Tu", acptr, chptr,
+                  chptr->creationtime);
   } else {
     sendcmdto_one(sptr, CMD_INVITE, acptr, "%s %H %Tu", cli_name(acptr), chptr,
                   chptr->creationtime);
   }
 
-  /* Announce to channel operators with CAP_NOTIFY enabled. */
+  /* Notify local channel operators via invite-notify. */
   sendcmdto_capflag_channel_butserv_butone(sptr, CMD_INVITE,
                                            chptr, sptr, SKIP_NONOPS,
                                            CAP_INVITENOTIFY, 0,
                                            "%C %H", acptr, chptr);
 
-  if (feature_bool(FEAT_ANNOUNCE_INVITES)) {
-    /* Announce to channel operators without CAP_NOTIFY enabled. */
-    sendcmdto_capflag_channel_butserv_butone(&his, get_error_numeric(RPL_ISSUEDINVITE)->str,
-                                             NULL, chptr, sptr, SKIP_NONOPS,
-                                             0, CAP_INVITENOTIFY,
-                                             "%H %C %C :%C has been invited by %C",
-                                             chptr, acptr, sptr, acptr, sptr);
-    /* Announce to servers with channel operators. */
-    sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr, SKIP_NONOPS,
-                                     "%s %H %Tu", cli_name(acptr), chptr,
-                                     chptr->creationtime);
-  }
+  /* Propagate onward to P11 servers hosting channel operators (numnick
+     target); a P10 hop cannot carry it, so it is restricted to P11 links. */
+  sendcmdto_channel_servers_butone(sptr, NULL, TOK_INVITE, chptr, acptr,
+                                   SKIP_NONOPS, 11, "%C %H %Tu", acptr, chptr,
+                                   chptr->creationtime);
 
   return 0;
 }
