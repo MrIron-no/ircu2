@@ -410,6 +410,9 @@ async def test_channel_service_sender_allowed_invite(make_client, ulined_server)
     await creator.wait_for("366")
 
     service = await ulined_server.introduce_user("service33i", modes="+k")
+    # Learn the target's numnick so the P11 link can address the invite by
+    # numnick (ms_invite resolves the invitee with findNUser on a P11 link).
+    await ulined_server.wait_for_user(target.nick)
     await asyncio.sleep(0.3)
 
     await ulined_server.send_invite(service, target.nick, "#t33service")

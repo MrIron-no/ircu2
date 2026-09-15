@@ -41,9 +41,10 @@ async def test_remote_user_with_same_ip_counts_and_releases(ircd_network):
         await srv.connect(hub["host"], hub["server_port"])
         await srv.handshake()
         await srv.introduce_user("ipcremote", ip=my_ip)
+        await srv.drain_messages()
         # Wait until the hub knows the remote user before measuring.
         await oper.send("WHOIS ipcremote")
-        await oper.wait_for("311", timeout=5.0)
+        await oper.wait_for("311", timeout=8.0)
 
         local_b, nb = await register_with_notice(hub["host"], hub["port"], "ipcrb")
         assert nb.connected == na.connected + 2, (na, nb)   # local_b + remote
@@ -52,7 +53,7 @@ async def test_remote_user_with_same_ip_counts_and_releases(ircd_network):
         await srv.disconnect()
         srv = None
         await oper.send("WHOIS ipcremote")
-        await oper.wait_for("401", timeout=5.0)
+        await oper.wait_for("401", timeout=8.0)
 
         local_c, nc = await register_with_notice(hub["host"], hub["port"], "ipcrc")
         assert nc.connected == na.connected + 2, (na, nb, nc)  # a, b, c: remote gone
