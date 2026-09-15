@@ -187,7 +187,7 @@ int ms_opmode(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       /* Remote +x is a P11 extension; P10 peers protocol_violate on it,
        * so only relay it over P11 links. */
       if (!strcmp(parv[2], "+x"))
-        sendcmdto_prot_serv_butone(sptr, CMD_OPMODE, cptr, 11, "%s %s",
+        sendcmdto_prot_serv_butone(sptr, CMD_OPMODE, cptr, 11, 0, "%s %s",
                                    parv[1], parv[2]);
       else
         sendcmdto_serv_butone(sptr, CMD_OPMODE, cptr, "%s %s",
