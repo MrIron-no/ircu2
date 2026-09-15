@@ -2575,17 +2575,19 @@ mode_parse_key(struct ParseState *state, int *flag_p)
       ircd_strcmp(state->chptr->mode.key, t_str) <= 0)
     return;
 
-  /* can't add a key if one is set, nor can one remove the wrong key */
+  /* can't add a key if one is set, nor can one remove the wrong key.
+     Test the staged key, not the live channel, so an earlier -k in the same
+     command has already taken effect (a rekey "-k old +k new"). */
   if (!(state->flags & MODE_PARSE_FORCE))
-    if ((state->dir == MODE_ADD && *state->chptr->mode.key) ||
+    if ((state->dir == MODE_ADD && *state->newmode.key) ||
 	(state->dir == MODE_DEL &&
-	 ircd_strcmp(state->chptr->mode.key, t_str))) {
+	 ircd_strcmp(state->newmode.key, t_str))) {
       send_reply(state->sptr, ERR_KEYSET, state->chptr->chname);
       return;
     }
 
   if (!(state->flags & MODE_PARSE_WIPEOUT) && state->dir == MODE_ADD &&
-      !ircd_strcmp(state->chptr->mode.key, t_str))
+      !ircd_strcmp(state->newmode.key, t_str))
     return; /* no key change */
 
   if (state->flags & MODE_PARSE_BOUNCE) {
@@ -2676,28 +2678,31 @@ mode_parse_upass(struct ParseState *state, int *flag_p)
   if (!state->mbuf)
     return;
 
+  /* Test the staged passwords, not the live channel, so earlier sub-changes
+     in the same command (a +A before this +U, or a -U before a +U) have
+     already taken effect. */
   if (!(state->flags & MODE_PARSE_FORCE)) {
     /* can't add the upass while apass is not set */
-    if (state->dir == MODE_ADD && !*state->chptr->mode.apass) {
+    if (state->dir == MODE_ADD && !*state->newmode.apass) {
       send_reply(state->sptr, ERR_UPASSNOTSET, state->chptr->chname, state->chptr->chname);
       return;
     }
     /* cannot set a +U password that is the same as +A */
-    if (state->dir == MODE_ADD && !ircd_strcmp(state->chptr->mode.apass, t_str)) {
+    if (state->dir == MODE_ADD && !ircd_strcmp(state->newmode.apass, t_str)) {
       send_reply(state->sptr, ERR_UPASS_SAME_APASS, state->chptr->chname);
       return;
     }
     /* can't add a upass if one is set, nor can one remove the wrong upass */
-    if ((state->dir == MODE_ADD && *state->chptr->mode.upass) ||
+    if ((state->dir == MODE_ADD && *state->newmode.upass) ||
 	(state->dir == MODE_DEL &&
-	 ircd_strcmp(state->chptr->mode.upass, t_str))) {
+	 ircd_strcmp(state->newmode.upass, t_str))) {
       send_reply(state->sptr, ERR_KEYSET, state->chptr->chname);
       return;
     }
   }
 
   if (!(state->flags & MODE_PARSE_WIPEOUT) && state->dir == MODE_ADD &&
-      !ircd_strcmp(state->chptr->mode.upass, t_str))
+      !ircd_strcmp(state->newmode.upass, t_str))
     return; /* no upass change */
 
   /* Skip if this is a burst, we have a Upass already and the new Upass is
@@ -2773,14 +2778,16 @@ mode_parse_apass(struct ParseState *state, int *flag_p)
         }
         return;
       }
-      /* Can't remove the Apass while Upass is still set. */
-      if (state->dir == MODE_DEL && *state->chptr->mode.upass) {
+      /* Can't remove the Apass while Upass is still set.  Test the staged
+         passwords so earlier sub-changes in the same command have taken
+         effect. */
+      if (state->dir == MODE_DEL && *state->newmode.upass) {
         send_reply(state->sptr, ERR_UPASSSET, state->chptr->chname, state->chptr->chname);
         return;
       }
       /* Can't add an Apass if one is set, nor can one remove the wrong Apass. */
-      if ((state->dir == MODE_ADD && *state->chptr->mode.apass) ||
-          (state->dir == MODE_DEL && ircd_strcmp(state->chptr->mode.apass, t_str))) {
+      if ((state->dir == MODE_ADD && *state->newmode.apass) ||
+          (state->dir == MODE_DEL && ircd_strcmp(state->newmode.apass, t_str))) {
         send_reply(state->sptr, ERR_KEYSET, state->chptr->chname);
         return;
       }
@@ -2819,7 +2826,7 @@ mode_parse_apass(struct ParseState *state, int *flag_p)
     return;
 
   if (!(state->flags & MODE_PARSE_WIPEOUT) && state->dir == MODE_ADD &&
-      !ircd_strcmp(state->chptr->mode.apass, t_str))
+      !ircd_strcmp(state->newmode.apass, t_str))
     return; /* no apass change */
 
   /* Skip if this is a burst, we have an Apass already and the new Apass is
@@ -2840,9 +2847,9 @@ mode_parse_apass(struct ParseState *state, int *flag_p)
 
   if (state->flags & MODE_PARSE_SET) { /* stage the apass */
     if (state->dir == MODE_ADD) { /* set the new apass */
-      /* Only accept the new apass if there is no current apass or
+      /* Only accept the new apass if there is no current (staged) apass or
        * this is a BURST. */
-      if (state->chptr->mode.apass[0] == '\0' ||
+      if (state->newmode.apass[0] == '\0' ||
           (state->flags & MODE_PARSE_BURST))
         ircd_strncpy(state->newmode.apass, t_str, KEYLEN);
       /* Make it VERY clear to the user that this is a one-time password */
