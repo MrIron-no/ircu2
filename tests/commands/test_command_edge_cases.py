@@ -127,8 +127,12 @@ async def test_privs_remote_oper(ircd_network, oper, make_client):
     leaf = ircd_network["leaf1"]
     leaf_oper = await make_client("prive_lop", host=leaf["host"], port=leaf["port"])
     await oper_up(leaf_oper)
+    # Make sure the hub has learned the leaf oper before querying its privs,
+    # so the PRIVS relay does not race the nick's propagation across the link.
+    await oper.send("WHOIS prive_lop")
+    await oper.wait_for("311", timeout=8.0)
     await oper.send("PRIVS prive_lop")
-    msg = await oper.wait_for("270", timeout=5.0)
+    msg = await oper.wait_for("270", timeout=8.0)
     privs = {p.lower() for p in msg.params[-1].split()}
     assert "unlimit_query" in privs, privs
 
