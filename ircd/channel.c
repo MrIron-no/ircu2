@@ -3420,6 +3420,7 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
   unsigned int t_mode;
   char *modestr;
   struct ParseState state;
+  int ts_present = 0;   /* a valid channel timestamp was seen (P11: mandatory) */
 
   assert(0 != cptr);
   assert(0 != sptr);
@@ -3524,10 +3525,20 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
 	time_t recv_ts;
 
 	if (Protocol(state.cptr) >= 11 && !strIsDigit(modestr)) {
+	  /* P11: the final parameter must be an all-digit channel TS.  A
+	   * non-numeric value is a protocol violation; drop the mode (apply
+	   * and propagate nothing) rather than let it diverge. */
 	  protocol_violation(state.cptr,
 			     "Non-numeric channel timestamp in MODE (%s)", modestr);
-	  break;
+	  if (state.mbuf) {
+	    state.mbuf->mb_add = 0;
+	    state.mbuf->mb_rem = 0;
+	    state.mbuf->mb_count = 0;
+	  }
+	  return state.args_used;
 	}
+
+	ts_present = 1;
 
 	if (!(state.flags & MODE_PARSE_SET))	  /* don't set earlier TS if */
 	  break;		     /* we're then going to bounce the mode! */
@@ -3584,6 +3595,22 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
    */
   if (!state.mbuf || state.flags & (MODE_PARSE_NOTOPER | MODE_PARSE_NOTMEMBER))
     return state.args_used; /* tell our parent how many args we gobbled */
+
+  /* On a P11 link the channel timestamp is a mandatory final parameter.  A
+   * set-mode from a P11 server that carried no timestamp is a protocol
+   * violation; drop it (apply and propagate nothing) rather than let it
+   * diverge from peers that did carry one.  Burst modes carry their TS in
+   * the burst message and are exempt. */
+  if (IsServer(state.cptr) && Protocol(state.cptr) >= 11
+      && (state.flags & MODE_PARSE_SET) && !(state.flags & MODE_PARSE_BURST)
+      && !ts_present) {
+    protocol_violation(state.cptr, "MODE for %s without a channel timestamp",
+		       state.chptr->chname);
+    state.mbuf->mb_add = 0;
+    state.mbuf->mb_rem = 0;
+    state.mbuf->mb_count = 0;
+    return state.args_used;
+  }
 
   t_mode = state.chptr->mode.mode;
 
