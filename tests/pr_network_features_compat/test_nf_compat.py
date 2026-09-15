@@ -635,7 +635,7 @@ async def test_first_account_still_reaches_prod(ircd_nf_compat, services):
         await user.disconnect()
 
 
-async def test_tls_plus_z_without_fingerprint_accepted_on_nf_true(
+async def test_tls_plus_z_without_fingerprint_accepted_on_p11_server(
     ircd_nf_compat, services
 ):
     """TLS client on B without a certificate reaches C over P11 as +z _.
