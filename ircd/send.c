@@ -587,18 +587,27 @@ void sendcmdto_one_hunted(struct Client *from, const char *cmd, const char *tok,
   int labeled = 0;
   struct LabelCapture *lc;
 
-  if (IsServer(cli_from(to)) && Protocol(cli_from(to)) >= 11
+  if (IsServer(cli_from(to))
       && (lc = label_capture_active_for(from)) != NULL) {
-    ircd_strncpy(label, lc->value, sizeof(label) - 1);
-    label[sizeof(label) - 1] = '\0';
+    /* The reply is produced by the remote server, so this server must hand
+     * the capture off and not close its own window with a spurious ACK.
+     * Attach the @label= tag only when the downstream link speaks P11 and
+     * can carry it; a P10 hop drops the label and the reply degrades to
+     * unlabeled with no ACK -- the outcome the IRCv3 labeled-response spec
+     * sanctions ("a server might not produce a labeled response, or even an
+     * ACK"). ACK is reserved for commands that normally produce no response,
+     * which a forwarded (response-producing) command is not. */
+    if (Protocol(cli_from(to)) >= 11) {
+      ircd_strncpy(label, lc->value, sizeof(label) - 1);
+      label[sizeof(label) - 1] = '\0';
+      labeled = 1;
+    }
 
     /* label_capture_abort() closes the active window, unlinks this
      * capture, flushes anything buffered on it unlabeled (a no-op if
      * nothing was), and frees the node -- exactly the release this
      * handoff needs. */
     label_capture_abort(from, lc->ref);
-
-    labeled = 1;
   }
 
   to = cli_from(to);
