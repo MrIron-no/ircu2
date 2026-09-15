@@ -1197,59 +1197,9 @@ int parse_server(struct Client *cptr, char *buffer, char *bufend)
   para[0] = cli_name(from);
 
   /*
-   * A server ALWAYS sends a prefix. When it starts with a ':' it's the
-   * protocol 9 prefix: a nick or a server name. Otherwise it's a numeric
-   * nick or server
+   * A server always sends a numeric prefix: a numeric nick or a numeric
+   * server. (The protocol 9 textual ':' prefix is no longer supported.)
    */
-  if (*ch == ':')
-  {
-    /* Let para[0] point to the name of the sender */
-    para[0] = ch + 1;
-    if (!(ch = strchr(ch, ' ')))
-      return -1;
-    *ch++ = '\0';
-
-    /* And let `from' point to its client structure,
-       opps.. a server is _also_ a client --Nem */
-    from = FindClient(para[0]);
-
-    /*
-     * If the client corresponding to the
-     * prefix is not found. We must ignore it,
-     * it is simply a lagged message traveling
-     * upstream a SQUIT that removed the client
-     * --Run
-     */
-    if (from == NULL)
-    {
-      Debug((DEBUG_NOTICE, "Unknown prefix (%s)(%s) from (%s)",
-          para[0], buffer, cli_name(cptr)));
-      ++ServerStats->is_unpf;
-      while (*ch == ' ')
-        ch++;
-      /*
-       * However, the only thing that MUST be
-       * allowed to travel upstream against an
-       * squit, is an SQUIT itself (the timestamp
-       * protects us from being used wrong)
-       */
-      if (ch[1] == 'Q')
-      {
-        para[0] = cli_name(cptr);
-        from = cptr;
-      }
-      else
-        return 0;
-    }
-    else if (cli_from(from) != cptr)
-    {
-      ++ServerStats->is_wrdi;
-      Debug((DEBUG_NOTICE, "Fake direction: Message (%s) coming from (%s)",
-          buffer, cli_name(cptr)));
-      return 0;
-    }
-  }
-  else
   {
     char numeric_prefix[6];
     int  i;
