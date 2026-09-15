@@ -409,18 +409,16 @@ int register_user(struct Client *cptr, struct Client *sptr)
       SetFlag(sptr, FLAG_KILLED);
       return exit_client(cptr, sptr, &me, "NICK server wrong direction");
     }
-    else if (HasFlag(acptr, FLAG_TS8))
-      SetFlag(sptr, FLAG_TS8);
 
     /*
      * Check to see if this user is being propagated
-     * as part of a net.burst, or is using protocol 9.
+     * as part of a net.burst.
      * FIXME: This can be sped up - its stupid to check it for
      * every NICK message in a burst again  --Run.
      */
     for (; acptr != &me; acptr = cli_serv(acptr)->up)
     {
-      if (IsBurst(acptr) || Protocol(acptr) < 10)
+      if (IsBurst(acptr))
         break;
     }
     if (!IPcheck_remote_connect(sptr, (acptr != &me)))

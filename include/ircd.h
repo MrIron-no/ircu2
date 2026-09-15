@@ -33,7 +33,7 @@ struct Daemon
 /* Miscellaneous defines */
 
 #define UDP_PORT        "7007"  /**< Default port for server-to-server pings. */
-#define MINOR_PROTOCOL  "09"    /**< Minimum protocol version supported. */
+#define MINOR_PROTOCOL  "10"    /**< Minimum protocol version supported. */
 
 /*
  * Proto types
