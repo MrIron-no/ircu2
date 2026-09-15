@@ -119,6 +119,9 @@ RUN chmod +x /opt/ircu/bin/iauth-trust-username.pl && chown ircu:ircu /opt/ircu/
 COPY tests/docker/iauth-test.pl /opt/ircu/bin/iauth-test.pl
 RUN chmod +x /opt/ircu/bin/iauth-test.pl && chown ircu:ircu /opt/ircu/bin/iauth-test.pl
 
+COPY tests/docker/iauth-tilded.pl /opt/ircu/bin/iauth-tilded.pl
+RUN chmod +x /opt/ircu/bin/iauth-tilded.pl && chown ircu:ircu /opt/ircu/bin/iauth-tilded.pl
+
 COPY tests/docker/ircd-entrypoint.sh /opt/ircu/lib/ircd-entrypoint.sh
 RUN chmod 755 /opt/ircu/lib/ircd-entrypoint.sh
 
