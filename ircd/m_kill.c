@@ -89,6 +89,7 @@
 #include "ircd_reply.h"
 #include "ircd_snprintf.h"
 #include "ircd_string.h"
+#include "list.h"
 #include "msg.h"
 #include "numeric.h"
 #include "numnicks.h"
@@ -98,6 +99,10 @@
 
 /* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <string.h>
+
+/** Longest kill path we relay; keeps a long path from squeezing the
+ *  reason out of the line. */
+#define KILLPATHLEN 300
 
 /*
  * do_kill - Performs the generic work involved in killing a client
@@ -131,8 +136,26 @@ static int do_kill(struct Client* cptr, struct Client* sptr,
    * Client suicide kills are NOT passed on --SRB
    */
   if (IsServer(cptr) || !MyConnect(victim)) {
-    sendcmdto_serv_butone(sptr, CMD_KILL, cptr, "%C :%s!%s %s", victim,
-                          inpath, path, msg);
+    char fullpath[KILLPATHLEN + 1];
+    struct DLink *lp;
+
+    /* Fold this hop onto the kill path, capped so a long path cannot
+     * squeeze the reason out of the line. */
+    ircd_snprintf(0, fullpath, sizeof(fullpath), "%s!%s", inpath, path);
+
+    /* Relay to each downlink.  A P11 peer carries the path as its own
+     * parameter and the reason as the trailing parameter; a P10 peer packs
+     * both into the trailing parameter, separated by a space. */
+    for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
+      if (cptr == lp->value.cptr)
+        continue;
+      if (Protocol(lp->value.cptr) >= 11)
+        sendcmdto_one(sptr, CMD_KILL, lp->value.cptr, "%C %s :%s",
+                      victim, fullpath, msg);
+      else
+        sendcmdto_one(sptr, CMD_KILL, lp->value.cptr, "%C :%s %s",
+                      victim, fullpath, msg);
+    }
 
     /*
      * Set FLAG_KILLED. This prevents exit_one_client from sending
@@ -189,12 +212,19 @@ int ms_kill(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
     return need_more_params(sptr, "KILL");
   }
 
-  path = parv[parc - 1];        /* Either defined or NULL (parc >= 3) */
-
-  if (!(msg = strchr(path, ' '))) /* Extract out the message */
-    msg = "(No reason supplied)";
-  else
-    *(msg++) = '\0'; /* Remove first character (space) and terminate path */
+  if (Protocol(cptr) >= 11 && parc >= 4) {
+    /* P11: the kill path and the reason are separate positional parameters. */
+    path = parv[parc - 2];
+    msg = parv[parc - 1];
+  } else {
+    /* P10: path and reason share the final parameter, split on the first
+     * space. */
+    path = parv[parc - 1];
+    if (!(msg = strchr(path, ' ')))
+      msg = "(No reason supplied)";
+    else
+      *(msg++) = '\0';
+  }
 
   if (!(victim = findNUser(parv[1]))) {
     if (IsUser(sptr))
@@ -220,8 +250,12 @@ int ms_kill(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
    * by the next hop (short lag) the bounce won't propagate further.
    */
   if (MyConnect(victim)) {
-    sendcmdto_one(&me, CMD_KILL, cptr, "%C :%s (Ghost 5 Numeric Collided)",
-                  victim, path);
+    if (Protocol(cptr) >= 11)
+      sendcmdto_one(&me, CMD_KILL, cptr, "%C %s :(Ghost 5 Numeric Collided)",
+                    victim, path);
+    else
+      sendcmdto_one(&me, CMD_KILL, cptr, "%C :%s (Ghost 5 Numeric Collided)",
+                    victim, path);
   }
   return do_kill(cptr, sptr, victim, cli_name(cptr), path, msg);
 }
