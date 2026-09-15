@@ -262,8 +262,13 @@ client_report_privs(struct Client *to, struct Client *client)
   int found1 = 0;
   int i;
 
-  mb = msgq_make(to, rpl_str(RPL_PRIVS), cli_name(&me), cli_name(to),
-		 cli_name(client));
+  /* Build the numeric for the link \a to sits behind, so that when \a to is
+   * a remote client the prefix and target render as numnicks and the reply
+   * is routable back over the server link (as send_reply() does).  Building
+   * it for \a to directly emitted a name-based numeric that a server link
+   * could not forward, so a PRIVS query for a remote user got no answer. */
+  mb = msgq_make(cli_from(to), "%:#C %s %C %s :", &me,
+		 get_error_numeric(RPL_PRIVS)->str, to, cli_name(client));
 
   for (i = 0; privtab[i].name; i++)
     if (HasPriv(client, privtab[i].priv))
