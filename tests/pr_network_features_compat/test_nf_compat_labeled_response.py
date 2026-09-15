@@ -1,53 +1,44 @@
-"""Labeled-response S2S propagation across a partially-upgraded network.
+"""Labeled-response S2S propagation across a partially-upgraded (P11/P10) network.
 
 Topology (see docker-compose ircd-nf-{a,b,c}):
 
-    A (prod release, u2.10.12.19 -- no labeled-response/BATCH S2S at all)
-      -- B (tree, NETWORK_FEATURES=FALSE)
-      -- C (tree, NETWORK_FEATURES=TRUE)
+    A (prod release, u2.10.12.19 -- P10, no labeled-response/BATCH S2S)
+      -- B (working tree, P11)
+      -- C (working tree, P11)
 
-sendcmdto_one_hunted() (send.c) and parse_server()'s labeled-response
-wrapper (parse.c) gate S2S @label= propagation on feature_bool(
-FEAT_NETWORK_FEATURES) -- a purely local, per-server flag with no per-
-link negotiation (same convention this codebase already uses for @time=
-and other federated tags, see msg_tag_key_federated()). Each hop decides
-independently whether to attach/relay the tag onward, so as long as
-every hop on the path gates correctly, a foreign server that has never
-heard of "label"/"batch" (A here) should never actually see one.
+The A--B link negotiates P10 (A caps at protocol 10); the B--C link
+negotiates P11.
 
-Two directions worth checking, since the shape of the fallback differs:
+Under P11, sendcmdto_one_hunted() (send.c) and parse_server()'s
+labeled-response wrapper (parse.c) gate S2S @label= propagation on the
+*negotiated link protocol* (Protocol(link) >= 11), not on a per-server
+feature flag. A hop attaches or relays the label only over a link whose
+peer speaks P11, so the P10 server A never sees an @label=/@batch= tag it
+would not understand.
 
-  1. A client on B (NF=FALSE) doing a labeled WHOIS-trick: B's own gate
-     is off, so sendcmdto_one_hunted() never touches the local capture at
-     all -- parse.c closes it as an immediate bare ACK, then the real
-     (unlabeled) reply follows. That's today's ordinary, already-
-     documented local-only-capture behavior for anything hunt_server_
-     cmd() forwards, unrelated to A being present at all.
+Two outcomes are checked here:
 
-  2. A client on C (NF=TRUE) doing the same, routed toward a target on A
-     through B: C's gate is *on*, so sendcmdto_one_hunted() hands the
-     local capture off and attaches @label= to the forward, betting the
-     label survives the whole path. It doesn't -- B (NF=FALSE) is a
-     deliberate firewall for exactly this tag -- so the reply that
-     eventually arrives carries no label and no batch, and the client
-     never receives an ACK for it either.
+  1. Federation succeeds on a P11-only path. A client on C doing a
+     labeled WHOIS-trick for a user on B is answered entirely over the
+     P11 B--C link, so the reply comes back wrapped in a labeled BATCH.
+     The P10 server A elsewhere in the network does not poison federation
+     on the P11 segment.
 
-     This is *not* a bug to fix: it's precisely the escape hatch the
-     labeled-response spec itself sanctions for a response a server
-     cannot honestly label ("servers might not produce a labeled
-     response... clients should handle these cases as they would
-     normally for a server without support for labeled responses") --
-     the same allowance label_capture_abort() already relies on for the
-     local overflow/interrupted-LIST cases. No ACK, no BATCH, just the
-     plain reply is a legal outcome, not a broken one; there is nothing
-     left dangling either (the capture is unlinked and freed at handoff,
-     not orphaned). What actually matters here, and what these tests
-     exist to confirm, is that this degrades cleanly: the real reply
-     still arrives complete, nothing hangs, and nothing crashes or
-     desyncs anywhere on the path (including the truly foreign prod
-     binary on A, which must never even see an @label=/@batch= tag it
-     wouldn't understand -- confirmed directly on the wire via spy_on_b,
-     not just inferred from the client's own view).
+  2. Degradation is clean when the path crosses a P10 hop. A labeled
+     WHOIS reached over the P10 A--B link cannot be labeled: the label is
+     dropped at the P10 boundary and the reply arrives complete but
+     unlabeled, with no ACK and no BATCH.
+
+     This is not a bug: it is the escape hatch the labeled-response spec
+     sanctions for a response a server cannot honestly label ("servers
+     might not produce a labeled response... clients should handle these
+     cases as they would normally for a server without support for
+     labeled responses"). ACK is reserved for commands that normally
+     produce no response, so a forwarded, response-producing command that
+     cannot be labeled degrades to unlabeled-with-no-ACK, never to a bare
+     ACK. Nothing is left dangling (the capture is unlinked and freed at
+     handoff), nothing hangs, and A never sees a tag it would not
+     understand (confirmed on the wire via spy_on_b).
 """
 
 from __future__ import annotations
@@ -158,19 +149,18 @@ async def test_whois_trick_via_p10_hop_degrades_unlabeled_no_ack(
     await _assert_still_alive(b, "nfaliveB1")
 
 
-async def test_whois_trick_from_nf_true_through_nf_false_to_prod_target(
+async def test_whois_trick_to_p10_target_degrades_unlabeled(
     ircd_nf_compat, spy_on_b,
 ):
-    """Client connects to C (NF=TRUE) and does a labeled WHOIS trick for a
-    user on A, routed C -> B -> A. C's gate is on, so it hands its local
-    capture off and attaches @label= to the forward -- but B (NF=FALSE)
-    is a deliberate firewall for that tag, so it never reaches A. The
-    real WHOIS reply still arrives complete, just with no ACK and no
-    BATCH: the spec-sanctioned "can't honestly label this" fallback
-    (label_capture_abort()'s own rationale, see send.c), not a bug.
-    Confirms it degrades cleanly rather than hanging or corrupting
-    anything: the reply is complete and unlabeled, and nothing crashes
-    or desyncs anywhere on the path.
+    """Client on C (P11) does a labeled WHOIS trick for a user on A (P10),
+    routed C -> B -> A. C federates @label= over the P11 C--B link and B
+    captures it, but the B--A link is P10, so B drops the label there
+    rather than send a tag the prod binary would not understand. The real
+    WHOIS reply still arrives complete, with no ACK and no BATCH -- the
+    spec-sanctioned "can't honestly label this" degradation (see send.c),
+    not a bug. Confirms it degrades cleanly rather than hanging or
+    corrupting anything, and that A never sees an @label=/@batch= tag
+    (confirmed on the wire via spy_on_b).
     """
     a = ircd_nf_compat["a"]
     b = ircd_nf_compat["b"]
@@ -189,11 +179,10 @@ async def test_whois_trick_from_nf_true_through_nf_false_to_prod_target(
         lines = await client.collect_until("318", timeout=10.0)
         assert any(m.command == "311" for m in lines), [m.command for m in lines]
 
-        # No ACK and no BATCH ever showed up for this label: the
-        # speculative handoff on C was never fulfilled, because B (NF=
-        # FALSE) never relayed @label=/@batch= toward A in the first
-        # place -- confirmed directly on the wire via spy_on_b, not just
-        # inferred from the client's own view.
+        # No ACK and no BATCH ever showed up for this label: the label
+        # was dropped at the P10 A--B boundary, so nothing labeled ever
+        # reached A -- confirmed directly on the wire via spy_on_b, not
+        # just inferred from the client's own view.
         for m in lines:
             assert not _tag_has(m.tags, "label"), m.raw
             assert not _tag_has(m.tags, "batch"), m.raw
@@ -206,8 +195,8 @@ async def test_whois_trick_from_nf_true_through_nf_false_to_prod_target(
             if line.startswith("@") and ("label=" in line or "batch=" in line)
         ]
         assert not tagged_toward_a, (
-            f"B must never relay @label=/@batch= toward a non-NETWORK_FEATURES "
-            f"peer: {tagged_toward_a!r}"
+            f"B must never relay @label=/@batch= toward the P10 peer A: "
+            f"{tagged_toward_a!r}"
         )
     finally:
         await _cleanup(client, target)
@@ -216,3 +205,46 @@ async def test_whois_trick_from_nf_true_through_nf_false_to_prod_target(
     await _assert_still_alive(a, "nfaliveA2")
     await _assert_still_alive(b, "nfaliveB2")
     await _assert_still_alive(c, "nfaliveC2")
+
+
+
+async def test_labeled_whois_federates_on_p11_only_path(ircd_nf_compat):
+    """Client on C (P11) does a labeled WHOIS trick for a user on B (P11).
+
+    The WHOIS is routed C -> B over the P11 B--C link and answered on B.
+    Because the whole path speaks P11, C's capture is federated: B wraps
+    its numerics in a BATCH labeled with the client's label and relays it
+    back, so the client receives a properly labeled response. This is the
+    positive counterpart to the P10-hop degradation tests -- the P10
+    server A elsewhere in the network does not poison federation on the
+    P11 segment.
+    """
+    b = ircd_nf_compat["b"]
+    c = ircd_nf_compat["c"]
+
+    target = IRCClient()
+    await target.connect(b["host"], b["port"])
+    await target.register("nfwhoistgt3", "testuser", "NF WHOIS Target on B")
+
+    client = await make_cap_client(c["host"], c["port"], "nflblc2", caps=LABELED_CAPS)
+    try:
+        await client.send(f"@label=viaCB WHOIS {target.nick} {target.nick}")
+
+        # WHOIS produces several numerics, so a successful labeled response
+        # is a BATCH: an opening "@label=viaCB BATCH +<ref>", the 3xx
+        # numerics tagged "@batch=<ref>", then a closing "BATCH -<ref>".
+        # collect_until("318") captures the open and the numerics.
+        lines = await client.collect_until("318", timeout=10.0)
+        assert any(m.command == "311" for m in lines), [m.command for m in lines]
+        batch_open = next(
+            (m for m in lines
+             if m.command == "BATCH" and m.params and m.params[0].startswith("+")),
+            None,
+        )
+        assert batch_open is not None, [m.raw for m in lines]
+        assert _tag_value(batch_open.tags, "label") == "viaCB", batch_open.raw
+    finally:
+        await _cleanup(client, target)
+
+    await _assert_still_alive(b, "nfaliveB3")
+    await _assert_still_alive(c, "nfaliveC3")
