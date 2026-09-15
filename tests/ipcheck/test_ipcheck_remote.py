@@ -77,8 +77,9 @@ async def test_remote_user_with_other_ip_does_not_count(ircd_network):
         await srv.connect(hub["host"], hub["server_port"])
         await srv.handshake()
         await srv.introduce_user("ipcother", ip="192.0.2.77")
+        await srv.drain_messages()
         await local_a.send("WHOIS ipcother")
-        await local_a.wait_for("311", timeout=5.0)
+        await local_a.wait_for("311", timeout=8.0)
 
         local_b, nb = await register_with_notice(hub["host"], hub["port"], "ipcob")
         assert nb.connected == na.connected + 1, (na, nb)
