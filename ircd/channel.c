@@ -3384,6 +3384,55 @@ mode_parse_mode(struct ParseState *state, int *flag_p)
  * \param[in] flags Set of bitwise MODE_PARSE_* flags.
  * \param[in] member If non-null, the channel member attempting to change the modes.
  */
+
+/** Undo the inline effects of a mode change we have decided to drop, and
+ * empty the mode buffer so nothing is propagated.
+ *
+ * mode_parse() applies the parametric modes as it walks the mode string:
+ * mode_parse_ban() links a ban (whose storage lives in the caller's stack
+ * @c banlist[] array) into the channel via apply_ban(), and the +l/+k/+U/+A
+ * helpers write straight into @c chptr->mode.  A drop happens only after the
+ * loop, so those effects must be unwound or the channel is left applied and,
+ * for a ban, pointing at stack memory that is freed on return.
+ *
+ * Bans: apply_ban() only ever links a brand-new node -- always flagged
+ * BAN_ADD -- into the list, and never sets BAN_ADD on a pre-existing ban.  So
+ * a listed node with BAN_ADD is exactly one this parse appended (stack
+ * storage); unlink it without freeing.  Every surviving node is a real,
+ * heap-allocated ban whose transient BAN_ADD/BAN_DEL/BAN_OVERLAPPED flags this
+ * parse may have set, so clear them.
+ *
+ * Parametric modes: restore the channel mode struct saved before the loop.
+ * Simple modes are only applied after the drop decision, so they need no undo.
+ *
+ * @param[in,out] state Parse state whose channel is to be restored.
+ * @param[in] saved The channel mode as it was before the parse loop.
+ */
+static void
+mode_parse_undo(struct ParseState *state, const struct Mode *saved)
+{
+  struct Ban **pp;
+  struct Ban *b;
+
+  for (pp = &state->chptr->banlist; (b = *pp); ) {
+    if (b->flags & BAN_ADD)  /* a ban this parse appended; storage is on the
+                                caller's stack, so unlink but do not free */
+      *pp = b->next;
+    else {
+      b->flags &= ~(BAN_ADD | BAN_DEL | BAN_OVERLAPPED);
+      pp = &b->next;
+    }
+  }
+
+  state->chptr->mode = *saved;
+
+  if (state->mbuf) {
+    state->mbuf->mb_add = 0;
+    state->mbuf->mb_rem = 0;
+    state->mbuf->mb_count = 0;
+  }
+}
+
 int
 mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
 	   struct Channel *chptr, int parc, char *parv[], unsigned int flags,
@@ -3421,6 +3470,7 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
   char *modestr;
   struct ParseState state;
   int ts_present = 0;   /* a valid channel timestamp was seen (P11: mandatory) */
+  struct Mode saved_mode; /* channel modes before the loop, for a P11 TS drop */
 
   assert(0 != cptr);
   assert(0 != sptr);
@@ -3452,6 +3502,11 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
     state.cli_change[i].flag = 0;
     state.cli_change[i].client = 0;
   }
+
+  /* Snapshot the channel modes before the loop applies any of them inline,
+   * so a P11 timestamp drop (or the bursting-peer future-TS case) can undo
+   * a partial application rather than leave the channel corrupted. */
+  saved_mode = chptr->mode;
 
   modestr = state.parv[state.args_used++];
   state.parc--;
@@ -3530,11 +3585,7 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
 	   * and propagate nothing) rather than let it diverge. */
 	  protocol_violation(state.cptr,
 			     "Non-numeric channel timestamp in MODE (%s)", modestr);
-	  if (state.mbuf) {
-	    state.mbuf->mb_add = 0;
-	    state.mbuf->mb_rem = 0;
-	    state.mbuf->mb_count = 0;
-	  }
+	  mode_parse_undo(&state, &saved_mode);
 	  return state.args_used;
 	}
 
@@ -3563,9 +3614,7 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
              * bounce that could desync modes from our side (that
              * have already been sent).
              */
-            state.mbuf->mb_add = 0;
-            state.mbuf->mb_rem = 0;
-            state.mbuf->mb_count = 0;
+            mode_parse_undo(&state, &saved_mode);
             return state.args_used;
           } else {
             /* Server is desynced; bounce the mode and deop the source
@@ -3606,9 +3655,7 @@ mode_parse(struct ModeBuf *mbuf, struct Client *cptr, struct Client *sptr,
       && !ts_present) {
     protocol_violation(state.cptr, "MODE for %s without a channel timestamp",
 		       state.chptr->chname);
-    state.mbuf->mb_add = 0;
-    state.mbuf->mb_rem = 0;
-    state.mbuf->mb_count = 0;
+    mode_parse_undo(&state, &saved_mode);
     return state.args_used;
   }
 
