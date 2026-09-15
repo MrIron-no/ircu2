@@ -1090,13 +1090,6 @@ The send window size used for connections to other servers.
 
 The receive window size used for connections to other servers.
 
-## ANNOUNCE_INVITES
-
-* **Type:** boolean
-* **Default:** `FALSE`
-
-If set, send `RPL_ISSUEDINVITE` (345) to a channel's operators to announce when someone is invited to the channel.
-
 ## LOCAL_CHANNELS
 
 * **Type:** boolean

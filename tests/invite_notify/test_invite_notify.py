@@ -68,6 +68,7 @@ async def test_invite_notify_ops_with_and_without_cap(ircd_network):
         assert chan.lower() in " ".join(cap_msg.params).lower()
 
         await nocap_op.assert_no_message("INVITE", timeout=1.5)
+        # RPL_ISSUEDINVITE (345) was removed with FEAT_ANNOUNCE_INVITES.
         await nocap_op.assert_no_message("345", timeout=0.5)
     finally:
         for c in (inviter, cap_op, nocap_op, target):

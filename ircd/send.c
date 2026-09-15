@@ -1022,6 +1022,7 @@ void sendcmdto_channel_butserv_butone(struct Client *from, const char *cmd,
 void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
                                       const char *tok, struct Channel *to,
                                       struct Client *one, unsigned int skip,
+                                      unsigned short min_prot,
                                       const char *pattern, ...)
 {
   struct VarData vd;
@@ -1044,6 +1045,7 @@ void sendcmdto_channel_servers_butone(struct Client *from, const char *cmd,
         || IsZombie(member)
         || cli_fd(cli_from(member->user)) < 0
         || cli_sentalong(member->user) == sentalong_marker
+        || Protocol(cli_from(member->user)) < min_prot
         || (skip & SKIP_NONOPS && !IsChanOp(member))
         || (skip & SKIP_NONVOICES && !IsChanOp(member) && !HasVoice(member)))
       continue;
