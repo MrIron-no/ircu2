@@ -231,10 +231,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
     if (IsServer(acptr)) {
       const char* protocol_str;
 
-      if (Protocol(acptr) > 9)
-        protocol_str = IsBurst(acptr) ? "J" : "P";
-      else
-        protocol_str = IsBurst(acptr) ? "J0" : "P0";
+      protocol_str = IsBurst(acptr) ? "J" : "P";
 
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;

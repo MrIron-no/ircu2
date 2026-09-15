@@ -146,7 +146,7 @@ void do_trace(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   } else {
     /* Got "TRACE <tname> :<target>" */
     parc = 3;
-    if (MyUser(sptr) || Protocol(cptr) < 10)
+    if (MyUser(sptr))
       acptr = find_match_server(parv[2]);
     else
       acptr = FindNServer(parv[2]);
