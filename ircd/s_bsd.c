@@ -1041,7 +1041,7 @@ int connect_server(struct ConfItem* aconf, struct Client* by)
       }
       return 0;
     }
-    else if (IsHandshake(cptr) || IsConnecting(cptr)) {
+    else if (IsHandshake(cptr) || IsConnecting(cptr) || IsServerStaged(cptr)) {
       if (by && IsUser(by)) {
         sendcmdto_one(&me, CMD_NOTICE, by, "%C :Connection to %s already in "
                       "progress", by, cli_name(cptr));

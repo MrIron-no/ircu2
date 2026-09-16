@@ -27,6 +27,7 @@
 #include "config.h"
 
 #include "client.h"
+#include "handlers.h"
 #include "ircd.h"
 #include "ircd_chattr.h"
 #include "ircd_log.h"
@@ -481,6 +482,11 @@ m_cap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
   char *subcmd, *caplist = 0;
   struct subcmd *cmd;
+
+  /* A staged P11 server handshake uses CAP :<list> as its post-SERVER
+   * line (doc/P11.md); it has no subcommand and may have no parameter. */
+  if (IsServerStaged(cptr))
+    return mr_server_cap(cptr, sptr, parc, parv);
 
   if (parc < 2) /* a subcommand is required */
     return 0;
