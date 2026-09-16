@@ -167,11 +167,13 @@ static int ban_meta_wins(const char *who_new, time_t when_new,
 
 /** Members of one BURST we can record for the relay.
  *
- * An incoming BURST line is at most BUFSIZE bytes and every member of it
- * costs a numeric and a separator, so a well-formed line can never reach
+ * An incoming BURST line is at most BUFSIZE bytes and every member costs a
+ * token plus a separator, i.e. at least two bytes: a short numnick resolves
+ * just as well as a full one, so the bound must count the smallest token a
+ * member can occupy, not the largest.  A well-formed line can never reach
  * this; it bounds a hostile one.
  */
-#define BURST_RELAY_MEMBERS (BUFSIZE / (NUMNICKLEN + 1) + 1)
+#define BURST_RELAY_MEMBERS (BUFSIZE / 2 + 1)
 
 /** Bans of one BURST we can record for the relay.
  *
@@ -189,14 +191,19 @@ struct BurstRelayMember {
 
 /** One ban accepted from an incoming BURST, held for the relay.
  *
- * The two strings are not copied: they point into the channel's ban list,
- * which is why ms_burst() sends the relay before it frees the overlapped
- * and wiped-out bans.
+ * The mask and setter are copied inline rather than aliased into the
+ * channel's ban list: a later '+' parameter of the SAME BURST can free a
+ * ban we recorded (mode_parse() -> mode_process_bans() -> free_ban() for a
+ * ban staged ADD then DEL), and free_ban() recycles the slot onto a static
+ * free-list, so a surviving pointer would be a use-after-free the relay
+ * then formats to every downlink.  Owning the bytes keeps the relay correct
+ * no matter what the rest of the parse does to the ban list.  The inline
+ * arrays cost ~126 bytes each; see #BURST_RELAY_BANS for the array size.
  */
 struct BurstRelayBan {
-  const char *mask;		/**< Canonicalised mask. */
+  char mask[NICKLEN + USERLEN + HOSTLEN + 4];	/**< Canonicalised mask. */
   time_t when;			/**< Set time we stored for it. */
-  const char *who;		/**< Setter we stored for it; "" relays as "*". */
+  char who[NICKLEN + 1];	/**< Setter we stored for it; "" relays as "*". */
   int p11_only;			/**< Metadata-only update: P11 links only. */
 };
 
@@ -204,9 +211,9 @@ struct BurstRelayBan {
  *
  * @param[out] rbans Bans recorded so far.
  * @param[in,out] nrbans Number of entries in \a rbans.
- * @param[in] mask Canonicalised mask, owned by the channel's ban list.
+ * @param[in] mask Canonicalised mask; copied, not aliased.
  * @param[in] when Set time we stored for the ban.
- * @param[in] who Setter we stored for the ban.
+ * @param[in] who Setter we stored for the ban; copied, not aliased.
  * @param[in] p11_only Non-zero for a metadata-only update, which is
  * relayed to P11 downlinks only because a P10 one cannot express it.
  */
@@ -217,9 +224,11 @@ static void burst_record_ban(struct BurstRelayBan *rbans, int *nrbans,
   if (*nrbans >= BURST_RELAY_BANS)
     return; /* unreachable for a BUFSIZE line; see BURST_RELAY_BANS */
 
-  rbans[*nrbans].mask = mask;
+  /* Copy the strings: the channel's ban list can be reshaped or freed by a
+   * later parameter of this same BURST before the relay runs. */
+  ircd_strncpy(rbans[*nrbans].mask, mask, sizeof(rbans[*nrbans].mask) - 1);
   rbans[*nrbans].when = when;
-  rbans[*nrbans].who = who;
+  ircd_strncpy(rbans[*nrbans].who, who, sizeof(rbans[*nrbans].who) - 1);
   rbans[*nrbans].p11_only = p11_only;
   (*nrbans)++;
 }
@@ -372,8 +381,9 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
       newban->when = when;
       newban->flags |= BAN_BURSTED;
       newban->next = 0;
-      /* Record the stored copy, not our locals: the relay reads these
-       * strings out of the ban list itself. */
+      /* burst_record_ban() takes its own copy of the mask and setter, so it
+       * is safe to hand it the ban-list entry that a later '+' parameter of
+       * this BURST may go on to free. */
       burst_record_ban(rbans, nrbans, newban->banstr, newban->when,
 		       newban->who, 0);
       if (lp)
@@ -417,6 +427,14 @@ static int burst_relay_spec(char *spec, size_t speclen, unsigned int mode,
   size_t loc = 0;
 
   assert(speclen > 3 + MAXOPLEVELDIGITS);
+  /* An op level outside this range would print more digits than the buffer
+   * and spec[loc] below would write past its end.  It is only ever printed
+   * for an opped member -- a member without status carries the -1 sentinel
+   * -- so the invariant is guarded on CHFL_CHANOP.  The parse-time clamp in
+   * ms_burst() keeps an opped level in range; this catches a future caller
+   * that does not.  ircd_snprintf() returns the WOULD-BE length, not what it
+   * wrote, so loc is taken from strlen() after every format, never from it. */
+  assert(!(mode & CHFL_CHANOP) || (oplevel >= 0 && oplevel <= MAXOPLEVEL));
 
   if (mode != last_mode) {
     if (!mode)
@@ -431,16 +449,20 @@ static int burst_relay_spec(char *spec, size_t speclen, unsigned int mode,
       /* A group change always restates the *absolute* level. */
       if (oplevel == MAXOPLEVEL)
         spec[loc++] = 'o';
-      else
-        loc += ircd_snprintf(0, spec + loc, speclen - loc, "%u", oplevel);
+      else {
+        ircd_snprintf(0, spec + loc, speclen - loc, "%u",
+                      (unsigned int)oplevel);
+        loc = strlen(spec);
+      }
     }
   } else if ((mode & CHFL_CHANOP) && oplevel != last_oplevel) {
     if (oplevel < last_oplevel)
       return 0; /* a decrement is not an increment */
 
     spec[loc++] = ':';
-    loc += ircd_snprintf(0, spec + loc, speclen - loc, "%u",
-                         oplevel - last_oplevel);
+    ircd_snprintf(0, spec + loc, speclen - loc, "%u",
+                  (unsigned int)(oplevel - last_oplevel));
+    loc = strlen(spec);
   }
 
   spec[loc] = '\0';
@@ -561,8 +583,13 @@ static void burst_relay(struct Client *sptr, struct Client *cptr,
       /* Either the transition or the room ran out; continue on a fresh
        * line, where the status starts over at "none", and encode this
        * member again as its first entry. */
-      if (attempt)
-        break; /* unreachable: an entry is at most twelve bytes */
+      if (attempt) {
+        /* Unreachable: an entry is at most twelve bytes and a fresh line
+         * has the whole budget.  Report rather than drop silently, so a
+         * future budget miss is visible instead of losing channel state. */
+        protocol_violation(sptr, "BURST relay entry does not fit any line");
+        break;
+      }
       sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, min_prot, max_prot,
                                  "%s", line);
       len = burst_relay_head(line, sizeof(line), chptr);
@@ -598,8 +625,12 @@ static void burst_relay(struct Client *sptr, struct Client *cptr,
         break;
       }
 
-      if (attempt)
-        break; /* unreachable: an entry is at most ~131 bytes */
+      if (attempt) {
+        /* Unreachable: a ban entry is at most ~131 bytes and a fresh line
+         * has the whole budget.  Report rather than drop silently. */
+        protocol_violation(sptr, "BURST relay entry does not fit any line");
+        break;
+      }
       sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, min_prot, max_prot,
                                  "%s", line);
       len = burst_relay_head(line, sizeof(line), chptr);
@@ -704,7 +735,11 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   if (parc < 3)
     return protocol_violation(sptr,"Too few parameters for BURST");
   
-  if (!IsChannelName(parv[1]))
+  /* A server-sourced BURST is not subject to get_channel()'s CHANNELLEN
+   * truncation (that is gated on MyUser), so a peer could otherwise create a
+   * name long enough to leave the relay head no room and silently drop
+   * entries.  Reject it here instead. */
+  if (!IsChannelName(parv[1]) || strlen(parv[1]) > CHANNELLEN)
     return protocol_violation(sptr, "Invalid channel name in BURST");
 
   if (!(chptr = get_channel(sptr, parv[1], CGT_CREATE)))
@@ -944,7 +979,17 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 		  }
 		  current_mode = (current_mode & ~(CHFL_DEOPPED | CHFL_DELAYED | CHFL_DELAYED_TARGET)) | CHFL_CHANOP;
 		  do {
-		    level_increment = 10 * level_increment + *ptr++ - '0';
+		    level_increment = 10 * level_increment + (*ptr++ - '0');
+		    if (level_increment > MAXOPLEVEL) {
+		      /* Stop before the accumulator overflows int and wraps
+		       * negative: a negative oplevel printed with "%u" in the
+		       * relay is ten digits and overruns its buffer.  Pin it
+		       * just past the limit so the clamp below always fires. */
+		      while (IsDigit(*ptr))
+			ptr++;
+		      level_increment = MAXOPLEVEL + 1;
+		      break;
+		    }
 		  } while (IsDigit(*ptr));
 		  --ptr;
 		  oplevel += level_increment;
@@ -1011,10 +1056,16 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 	    /* A hidden member never has status, so reveal it before granting
 	     * any, as mode_process_clients() does.  Otherwise the member
 	     * carries both and every encoder that groups by status has to
-	     * guess which group it belongs to. */
+	     * guess which group it belongs to.  A zombie (kicked behind us but
+	     * still listed by a peer that has not seen the KICK) is never
+	     * revealed: that would send a JOIN for a gone user to local
+	     * clients.  Clear the delayed-target flag too, for parity with
+	     * mode_process_clients(). */
 	    if ((current_mode & (CHFL_CHANOP | CHFL_VOICE))
-		&& IsDelayedJoin(member))
+		&& IsDelayedJoin(member) && !IsZombie(member))
 	      RevealDelayedJoin(member);
+	    if (current_mode & (CHFL_CHANOP | CHFL_VOICE))
+	      ClearDelayedTarget(member);
 	    /* Synchronize with the burst. */
 	    member->status |= CHFL_BURST_JOINED | (current_mode & (CHFL_CHANOP|CHFL_VOICE));
 	    SetOpLevel(member, oplevel);
@@ -1033,9 +1084,9 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     modestr[0] = '\0';
 
   /* Relay each layout to the downlinks that speak it; the two calls
-   * partition the downlinks at protocol 11.  This must stay ahead of the
-   * ban loop below: the recorded bans point into the channel's ban list and
-   * that loop frees the overlapped and wiped-out entries. */
+   * partition the downlinks at protocol 11.  The recorded bans hold their
+   * own copies of the mask and setter (see struct BurstRelayBan), so the
+   * relay is unaffected by the ban loop below freeing entries. */
   burst_relay(sptr, cptr, chptr, modestr, rmembers, nrmembers,
 	      rbans, nrbans, 11, 0, 1);
   burst_relay(sptr, cptr, chptr, modestr, rmembers, nrmembers,
