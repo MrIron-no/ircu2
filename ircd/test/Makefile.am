@@ -1,7 +1,7 @@
 AM_CPPFLAGS = -I$(top_srcdir)/include -I../..
 AM_CFLAGS = -g -Wall
 
-check_PROGRAMS = cidr_lookups_t ipcheck_t ircd_chattr_t ircd_in_addr_t ircd_match_t ircd_string_t msgq_excise_t tls_io_t servcap_t
+check_PROGRAMS = cidr_lookups_t ipcheck_t ircd_chattr_t ircd_in_addr_t ircd_match_t ircd_string_t msgq_excise_t tls_io_t servcap_t numnick_mask_t
 
 TESTS = $(check_PROGRAMS)
 
@@ -36,3 +36,6 @@ ircd_string_t_LDADD = ../ircd_string.o
 servcap_t_CPPFLAGS = $(AM_CPPFLAGS) -DIRCU2_BUILD
 servcap_t_SOURCES = servcap_t.c test_stub.c
 servcap_t_LDADD = ../servcap.o
+
+numnick_mask_t_SOURCES = numnick_mask_t.c test_stub.c
+numnick_mask_t_LDADD = ../ircd_alloc.o ../ircd_string.o ../match.o ../numnicks.o
