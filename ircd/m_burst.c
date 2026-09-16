@@ -138,12 +138,86 @@ netride_modes(int parc, char **parv, const char *curr_key)
   return result;
 }
 
+/** Decide whether ban metadata offered by a BURST beats what we store.
+ *
+ * Both sides of a heal run this over the same two pairs and must pick the
+ * same winner, or the ban's setter and set time would keep flapping.  The
+ * order is the one in doc/P11.md 8.1: a known setter beats an unknown one,
+ * then the lower set time wins, then the strcmp()-smaller setter.
+ *
+ * @param[in] who_new Setter offered by the burst; "*" when unknown.
+ * @param[in] when_new Set time offered by the burst.
+ * @param[in] who_old Setter we currently store.
+ * @param[in] when_old Set time we currently store.
+ * @return Non-zero when the new metadata wins; zero when ours stands, which
+ * includes the case of the two being identical.
+ */
+static int ban_meta_wins(const char *who_new, time_t when_new,
+                         const char *who_old, time_t when_old)
+{
+  int new_known = (strcmp(who_new, "*") != 0);
+  int old_known = (strcmp(who_old, "*") != 0);
+
+  if (new_known != old_known)
+    return new_known;
+  if (when_new != when_old)
+    return when_new < when_old;
+  return strcmp(who_new, who_old) < 0;
+}
+
+/** Append one entry to a relayed BURST ban list.
+ *
+ * Both relay buffers are BUFSIZE bytes and every entry originates in the
+ * incoming line, but a P10-learned ban gains up to 22 bytes of synthesised
+ * metadata on its way to a P11 downlink, so the result is not bounded by
+ * the input any more.  An entry that would not fit is dropped: losing a ban
+ * from the relay is recoverable, writing past the buffer is not.
+ *
+ * @param[out] buf Ban list being built; it is a BUFSIZE buffer.
+ * @param[in,out] pos Write position in \a buf.
+ * @param[in] ban Mask to append.
+ * @param[in] with_meta Non-zero to append the \<ts\> \<who\> of a P11 triple.
+ * @param[in] when Set time, used when \a with_meta is non-zero.
+ * @param[in] who Setter, used when \a with_meta is non-zero.
+ */
+static void burst_append_ban(char *buf, int *pos, const char *ban,
+                             int with_meta, time_t when, const char *who)
+{
+  /* The 20 is a safe upper bound for a decimal time_t. */
+  int need = (*pos ? 1 : 3) + (int)strlen(ban);
+
+  if (with_meta)
+    need += 1 + 20 + 1 + (int)strlen(who);
+
+  if (*pos + need + 1 > BUFSIZE) /* the +1 keeps room for the '\0' */
+    return;
+
+  if (!*pos) {
+    buf[(*pos)++] = ' ';
+    buf[(*pos)++] = ':';
+    buf[(*pos)++] = '%';
+  } else
+    buf[(*pos)++] = ' ';
+
+  if (with_meta)
+    *pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%s %Tu %s",
+			  ban, when, who);
+  else
+    *pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%s", ban);
+}
+
 /** Parse the ban section of a BURST message and apply it to \a chptr.
  *
+ * On a P10 link the section is a list of masks and the receiver invents the
+ * metadata: an unknown setter and its own current time.  On a P11 link it is
+ * a list of \<mask\> \<ts\> \<who\> triples (doc/P11.md 8.1); a framing error
+ * there rejects the whole section, while a ts out of range or an overlong
+ * setter is repaired, because a ban is never dropped over its metadata.
+ *
  * Each ban that is genuinely new to the channel is appended to the channel's
- * ban list and to both relay buffers.  The two buffers receive identical text
- * here; the P11 buffer is the one that will later carry the
- * \<mask\> \<ts\> \<who\> triples described in doc/P11.md 8.1.
+ * ban list and to both relay buffers, as a mask in the P10 one and as a
+ * triple in the P11 one.  A mask we already knew is relayed to P11 downlinks
+ * too, but only when its metadata changed here, so that they converge.
  *
  * @param[in] cptr Local server connection the BURST arrived on.
  * @param[in] sptr Server that sent the BURST.
@@ -164,18 +238,63 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
                             char *banstr11, int *banpos11)
 {
   char *p = 0, *ban, *ptr;
+  char *tok[BUFSIZE / 2];
   struct Ban *lp, *newban;
   int new_bans = 0;
-
-  (void)cptr;
-  (void)sptr;
+  int p11 = (Protocol(cptr) >= 11);
+  int ntok = 0, i, step;
 
   if (!(parse_flags & MODE_PARSE_SET))
     return 0;
 
-  for (ban = ircd_strtok(&p, section, " "); ban;
-       ban = ircd_strtok(&p, 0, " ")) {
-    ban = collapse(pretty_mask(ban));
+  for (ptr = ircd_strtok(&p, section, " "); ptr;
+       ptr = ircd_strtok(&p, 0, " ")) {
+    if (ntok >= (int)(sizeof(tok) / sizeof(tok[0])))
+      break;
+    tok[ntok++] = ptr;
+  }
+
+  if (p11) {
+    /* Validate the framing of the whole section before applying any of it,
+     * so that a rejected section leaves the ban list untouched. */
+    if (ntok % 3 != 0) {
+      protocol_violation(sptr, "BURST ban section has %d tokens, not a "
+			 "multiple of 3", ntok);
+      return 0;
+    }
+
+    for (i = 0; i < ntok; i += 3) {
+      /* strIsDigit() is vacuously true for the empty string. */
+      if (!tok[i + 1][0] || !strIsDigit(tok[i + 1])) {
+	protocol_violation(sptr, "Invalid ban timestamp '%s' in BURST",
+			   tok[i + 1]);
+	return 0;
+      }
+    }
+  }
+
+  step = p11 ? 3 : 1;
+  for (i = 0; i < ntok; i += step) {
+    char whobuf[NICKLEN + 1];
+    const char *who;
+    time_t when;
+
+    ban = collapse(pretty_mask(tok[i]));
+
+    if (p11) {
+      when = atotime(tok[i + 1]);
+      /* Repair rather than reject: a ban is never dropped over its
+       * metadata (doc/P11.md 8.1). */
+      if (when < OLDEST_TS || when > TStime() + 60)
+	when = TStime();
+      /* who[] is NICKLEN+1 bytes, so this truncates and stays terminated. */
+      ircd_strncpy(whobuf, tok[i + 2], NICKLEN);
+      who = whobuf;
+    } else {
+      /* A P10 peer has nothing to say about a ban but its mask. */
+      when = TStime();
+      who = "*";
+    }
 
       /*
        * Yeah, we should probably do this elsewhere, and make it better
@@ -187,6 +306,16 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
        */
     for (lp = chptr->banlist; lp; lp = lp->next) {
       if (!ircd_strcmp(lp->banstr, ban)) {
+	/* The mask already exists, but its metadata may still be wrong
+	 * here.  Overwriting it is silent: no MODE is shown to local
+	 * clients, who see the new values on their next ban-list request.
+	 * The change does go to P11 downlinks, so that they converge. */
+	if (ban_meta_wins(who, when, lp->who, lp->when)) {
+	  ircd_strncpy(lp->who, who, NICKLEN);
+	  lp->when = when;
+	  lp->flags |= BAN_BURST_META;
+	  burst_append_ban(banstr11, banpos11, ban, 1, when, who);
+	}
 	ban = 0; /* don't add ban */
 	lp->flags &= ~BAN_BURST_WIPEOUT; /* not wiping out */
 	break; /* new ban already existed; don't even repropagate */
@@ -202,28 +331,14 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
     }
 
     if (ban) { /* add the new ban to the end of the list */
-      /* Build the ban buffer for both relay variants. */
-      if (!*banpos10) {
-	banstr10[(*banpos10)++] = ' ';
-	banstr10[(*banpos10)++] = ':';
-	banstr10[(*banpos10)++] = '%';
-      } else
-	banstr10[(*banpos10)++] = ' ';
-      for (ptr = ban; *ptr; ptr++) /* add ban to buffer */
-	banstr10[(*banpos10)++] = *ptr;
-
-      if (!*banpos11) {
-	banstr11[(*banpos11)++] = ' ';
-	banstr11[(*banpos11)++] = ':';
-	banstr11[(*banpos11)++] = '%';
-      } else
-	banstr11[(*banpos11)++] = ' ';
-      for (ptr = ban; *ptr; ptr++) /* add ban to buffer */
-	banstr11[(*banpos11)++] = *ptr;
+      /* Build the ban buffer for both relay variants: the P10 one carries
+       * the mask alone, the P11 one the triple. */
+      burst_append_ban(banstr10, banpos10, ban, 0, when, who);
+      burst_append_ban(banstr11, banpos11, ban, 1, when, who);
 
       newban = make_ban(ban); /* create new ban */
-      strcpy(newban->who, "*");
-      newban->when = TStime();
+      ircd_strncpy(newban->who, who, NICKLEN);
+      newban->when = when;
       newban->flags |= BAN_BURSTED;
       newban->next = 0;
       if (lp)
