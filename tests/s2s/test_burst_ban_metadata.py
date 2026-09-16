@@ -375,6 +375,36 @@ async def test_out_of_range_ts_becomes_now(ircd_hub, make_client):
         await stub.disconnect()
 
 
+async def test_future_ts_becomes_now(ircd_hub, make_client):
+    """A ts more than 60s in the future is repaired, not a reason to drop it.
+
+    Mirrors test_out_of_range_ts_becomes_now, at the other end of the valid
+    range (doc/P11.md 8.1 receiver-validation rule 4).
+    """
+    chan = "#bm14"
+    stub = await _link(ircd_hub, 11)
+    try:
+        sa = await stub.introduce_user("sa14")
+        future_ts = int(time.time()) + 3600
+        await stub._send(
+            f"{stub.server_numnick} B {chan} 1700000000 +t {sa} "
+            f":%*!*@one.example {future_ts} zed"
+        )
+        await asyncio.sleep(0.5)
+
+        client = await make_client("bm14watch")
+        await client.send(f"JOIN {chan}")
+        await client.wait_for("JOIN", timeout=5.0)
+
+        bans = await _ban_list(client, chan)
+        assert len(bans) == 1, f"the ban was dropped over its future ts: {bans!r}"
+        mask, who, ts = bans[0]
+        assert (mask, who) == ("*!*@one.example", "zed"), f"unexpected ban: {bans!r}"
+        assert abs(int(ts) - time.time()) < 30, f"future ts was not repaired: {ts!r}"
+    finally:
+        await stub.disconnect()
+
+
 async def test_long_who_is_truncated(ircd_hub, make_client):
     """A ``<who>`` longer than NICKLEN is truncated, not rejected."""
     chan = "#bm8"
@@ -518,7 +548,10 @@ async def test_line_continuation_keeps_all_bans(ircd_hub, make_client):
         await asyncio.sleep(4.5)
 
     accepted = {mask for mask, _who, _ts in await _ban_list(client, chan)}
-    assert len(accepted) >= 10, f"the server accepted only {len(accepted)} bans"
+    assert len(accepted) == len(masks), (
+        f"the server accepted only {len(accepted)} of {len(masks)} bans: "
+        f"missing {sorted(set(masks) - accepted)!r}"
+    )
 
     stub = await _link(ircd_hub, 11)
     try:
