@@ -1013,9 +1013,10 @@ int compare_member_oplevel(const void *mp1, const void *mp2)
  */
 void send_channel_modes(struct Client *cptr, struct Channel *chptr)
 {
-  /* The order in which modes are generated is now mandatory */
-  static unsigned int current_flags[4] =
-      { 0, CHFL_VOICE, CHFL_CHANOP, CHFL_CHANOP | CHFL_VOICE };
+  /* The order in which modes are generated is now mandatory.  The hidden
+   * (delayed join) group is P11 only; see doc/P11.md 8.1. */
+  static unsigned int current_flags[5] =
+      { 0, CHFL_DELAYED, CHFL_VOICE, CHFL_CHANOP, CHFL_CHANOP | CHFL_VOICE };
   int                first = 1;
   int                full  = 1;
   int                flag_cnt = 0;
@@ -1031,6 +1032,11 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
   struct Membership** opped_members = NULL;
   int                 last_oplevel = 0;
   int                 send_oplevels = 0;
+  int                 p11 = (Protocol(cptr) >= 11);
+  /* Toward a P10 link the hidden group matches nobody, so hidden members
+   * fall into the status-less group exactly as they always did. */
+  unsigned int        status_mask = p11 ? (CHFL_VOICED_OR_OPPED | CHFL_DELAYED)
+                                        : CHFL_VOICED_OR_OPPED;
 
   assert(0 != cptr);
   assert(0 != chptr); 
@@ -1068,32 +1074,42 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
      * Attach nicks, comma separated " nick[:modes],nick[:modes],..."
      *
      * First find all opless members.
-     * Run 2 times over all members, to group the members with
-     * and without voice together.
+     * Run 3 times over all members, to group the members without status,
+     * the hidden (delayed join) members and the voiced members together.
      * Then run 2 times over all opped members (which are ordered
      * by op-level) to also group voice and non-voice together.
      */
-    for (first = 1; flag_cnt < 4; new_mode = 1, ++flag_cnt)
+    for (first = 1; flag_cnt < 5; new_mode = 1, ++flag_cnt)
     {
       while (member)
       {
-	if (flag_cnt < 2 && IsChanOp(member))
+	/* The group this member belongs to.  A hidden member never has
+	 * status, but one that somehow carried both bits would match none
+	 * of the five groups and fall out of the burst entirely, so fold it
+	 * into its status group here rather than drop it. */
+	unsigned int key = member->status & status_mask;
+
+	if (key & CHFL_VOICED_OR_OPPED)
+	  key &= ~CHFL_DELAYED;
+
+	if (flag_cnt < 3 && IsChanOp(member))
 	{
 	  /*
 	   * The first loop (to find all non-voice/op), we count the ops.
-	   * The second loop (to find all voiced non-ops), store the ops
-	   * in a dynamic array.
+	   * The second loop (to find all hidden members), store the ops
+	   * in a dynamic array.  The third loop (to find all voiced
+	   * non-ops) must not store them a second time.
 	   */
 	  if (flag_cnt == 0)
 	    ++number_of_ops;
-	  else
+	  else if (flag_cnt == 1)
 	    opped_members[opped_members_index++] = member;
           /* We also send oplevels if anyone is below the weakest level.  */
           if (OpLevel(member) < MAXOPLEVEL)
             send_oplevels = 1;
 	}
 	/* Only handle the members with the flags that we are interested in. */
-        if ((member->status & CHFL_VOICED_OR_OPPED) == current_flags[flag_cnt])
+        if (key == current_flags[flag_cnt])
 	{
 	  if (msgq_bufleft(mb) < NUMNICKLEN + 3 + MAXOPLEVELDIGITS)
 	    /* The 3 + MAXOPLEVELDIGITS is a possible ",:v999". */
@@ -1115,10 +1131,10 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
 	  if (new_mode)
 	  {
 	    /*
-	     * This means we are at the _first_ member that has only
-	     * voice, or the first member that has only ops, or the
-	     * first member that has voice and ops (so we get here
-	     * at most three times, plus once for every start of
+	     * This means we are at the _first_ member that is hidden, or
+	     * that has only voice, or the first member that has only ops,
+	     * or the first member that has voice and ops (so we get here
+	     * at most four times, plus once for every start of
 	     * a continued BURST line where only these modes is current.
 	     * In the two cases where the current mode includes ops,
 	     * we need to add the _absolute_ value of the oplevel to the mode.
@@ -1126,9 +1142,11 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
 	    char tbuf[3 + MAXOPLEVELDIGITS] = ":";
 	    int loc = 1;
 
-	    if (HasVoice(member))	/* flag_cnt == 1 or 3 */
+	    if (current_flags[flag_cnt] == CHFL_DELAYED)	/* flag_cnt == 1 */
+	      tbuf[loc++] = 'd';
+	    if (HasVoice(member))	/* flag_cnt == 2 or 4 */
 	      tbuf[loc++] = 'v';
-	    if (IsChanOp(member))	/* flag_cnt == 2 or 3 */
+	    if (IsChanOp(member))	/* flag_cnt == 3 or 4 */
 	    {
               /* append the absolute value of the oplevel */
               if (send_oplevels)
@@ -1140,7 +1158,7 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
 	    msgq_append(&me, mb, tbuf);
 	    new_mode = 0;
 	  }
-	  else if (send_oplevels && flag_cnt > 1 && last_oplevel != member->oplevel)
+	  else if (send_oplevels && flag_cnt > 2 && last_oplevel != member->oplevel)
 	  {
 	    /*
 	     * This can't be the first member of a (continued) BURST
@@ -1154,7 +1172,7 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
 	  }
 	}
 	/* Go to the next `member'. */
-	if (flag_cnt < 2)
+	if (flag_cnt < 3)
 	  member = member->next_member;
 	else
 	  member = opped_members[++opped_members_index];
@@ -1172,36 +1190,64 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
 	  MyMalloc((number_of_ops + 1) * sizeof(struct Membership*));
 	opped_members[number_of_ops] = NULL;	/* Needed for loop termination */
       }
+      else if (flag_cnt == 1)
+	/* The third loop runs over all members again, for the voiced ones. */
+	member = chptr->members;
       else
       {
-	/* At the end of the second loop, sort the opped members with
+	/* At the end of the third loop, sort the opped members with
 	 * increasing op-level, so that we will output them in the
 	 * correct order (and all op-level increments stay positive) */
-	if (flag_cnt == 1)
+	if (flag_cnt == 2)
 	  qsort(opped_members, number_of_ops,
 	        sizeof(struct Membership*), compare_member_oplevel);
-	/* The third and fourth loop run only over the opped members. */
+	/* The fourth and fifth loop run only over the opped members. */
 	member = opped_members[(opped_members_index = 0)];
       }
 
-    } /* loop over 0,+v,+o,+ov */
+    } /* loop over 0,d,+v,+o,+ov */
 
     if (!full)
     {
-      /* Attach all bans, space separated " :%ban ban ..." */
+      /* Attach all bans: " :%ban ban ..." on a P10 link, and the
+       * " :%ban ts who ban ts who ..." triples of doc/P11.md 8.1 on a P11
+       * one. */
       for (first = 2; lp2; lp2 = lp2->next)
       {
-        len = strlen(lp2->banstr);
-	if (msgq_bufleft(mb) < len + 1 + first)
-          /* The +1 stands for the added ' '.
-           * The +first stands for the added ":%".
-           */
+        if (p11)
         {
-          full = 1;
-          break;
+          /* mode_parse_ban() always leaves a nick or a "*" behind, but a
+           * ban that somehow lost its setter would put an empty field on
+           * the wire, so fall back here as well.  The 20 is a safe upper
+           * bound for a decimal time_t. */
+          const char *who = lp2->who[0] ? lp2->who : "*";
+
+          len = strlen(lp2->banstr) + 1 + 20 + 1 + strlen(who);
+          if (msgq_bufleft(mb) < len + 1 + first)
+            /* The +1 stands for the added ' '.
+             * The +first stands for the added ":%".
+             */
+          {
+            full = 1;
+            break;
+          }
+          msgq_append(&me, mb, " %s%s %Tu %s", first ? ":%" : "",
+                      lp2->banstr, lp2->when, who);
         }
-	msgq_append(&me, mb, " %s%s", first ? ":%" : "",
-		    lp2->banstr);
+        else
+        {
+          len = strlen(lp2->banstr);
+          if (msgq_bufleft(mb) < len + 1 + first)
+            /* The +1 stands for the added ' '.
+             * The +first stands for the added ":%".
+             */
+          {
+            full = 1;
+            break;
+          }
+          msgq_append(&me, mb, " %s%s", first ? ":%" : "",
+                      lp2->banstr);
+        }
 	first = 0;
       }
     }
