@@ -167,3 +167,30 @@ async def test_p10_peer_receives_no_cap(ircd_hub):
     finally:
         await srv.disconnect()
 
+
+async def test_bogus_numeric_mask_refused(ircd_hub):
+    """A SERVER mask that is neither 3 nor 5 characters is refused."""
+    srv = _stub(numnick_mask="ABCD")
+    try:
+        await _begin(srv, ircd_hub)
+        lines = await _read_until_closed(srv, timeout=10.0)
+        joined = "\n".join(lines)
+        assert "ERROR :Closing Link" in joined, joined
+        assert "Bogus numeric mask (ABCD)" in joined, joined
+    finally:
+        await srv.disconnect()
+
+
+async def test_legacy_three_char_mask_accepted(ircd_hub):
+    """The legacy one-plus-two (YXX) mask still links."""
+    srv = _stub(numnick_mask="G]]")
+    assert srv.server_numnick == "G"
+    try:
+        await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
+        try:
+            await srv.handshake()
+        except TimeoutError as exc:
+            raise AssertionError(f"{exc}; received: {srv.received[-10:]}") from exc
+        assert srv.handshake_order[:3] == ["SERVER", "CAP", "BURST"], srv.handshake_order
+    finally:
+        await srv.disconnect()
