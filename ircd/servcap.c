@@ -22,6 +22,7 @@
  */
 #include "config.h"
 
+#include "ircd_chattr.h"
 #include "servcap.h"
 
 #include <string.h>
@@ -35,14 +36,6 @@
 const struct ServCapEntry servcap_table[] = {
   { 0, 0, 0 }
 };
-
-/** Return non-zero if \a c may appear in a capability name. */
-static int
-servcap_name_char(char c)
-{
-  return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-      || c == '-' || c == '/';
-}
 
 /** Find the table entry for the name of length \a len at \a name.
  * @param[in] name Start of the name (not NUL-terminated at \a len).
@@ -131,7 +124,7 @@ servcap_parse(const char *list, const struct ServCapEntry *table)
     if (nlen == 0 || nlen > SERVCAP_NAME_MAX)
       valid = 0;
     for (i = 0; valid && i < nlen; ++i)
-      if (!servcap_name_char(tok[i]))
+      if (!IsCapChar(tok[i]))
         valid = 0;
     if (!valid)
       continue;

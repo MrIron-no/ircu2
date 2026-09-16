@@ -35,7 +35,7 @@ ircd_string_t_LDADD = ../ircd_string.o
 
 servcap_t_CPPFLAGS = $(AM_CPPFLAGS) -DIRCU2_BUILD
 servcap_t_SOURCES = servcap_t.c test_stub.c
-servcap_t_LDADD = ../servcap.o
+servcap_t_LDADD = ../servcap.o ../ircd_string.o
 
 numnick_mask_t_SOURCES = numnick_mask_t.c test_stub.c
 numnick_mask_t_LDADD = ../ircd_alloc.o ../ircd_string.o ../match.o ../numnicks.o
