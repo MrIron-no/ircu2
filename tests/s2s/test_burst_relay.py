@@ -146,3 +146,63 @@ async def test_relay_translates_d_per_downlink(ircd_hub):
         finally:
             await stub_a.disconnect()
             await stub_b.disconnect()
+
+
+async def test_relay_synthesises_d_from_p10_uplink_on_plus_D_channel(ircd_hub):
+    """A P10 uplink cannot say ``d``; the hub infers it from ``+D``.
+
+    A P10 peer has no hidden-member group, so every member of a ``+D``
+    channel arrives bare in the status-less group (doc/P11.md 8.1, P10
+    case).  Relaying that toward a P11 downlink must put those members
+    back in the hidden group, i.e. synthesise the ``d`` specifier.
+    """
+    chan = "#relay5"
+    stub_a, stub_b = await _two_stubs_with_users(ircd_hub, 10, 11)
+    try:
+        u1 = await stub_a.introduce_user("p10d1")
+        u2 = await stub_a.introduce_user("p10d2")
+        await stub_b.drain_messages(timeout=1.0)
+
+        await stub_a._send(
+            f"{stub_a.server_numnick} B {chan} 1700000000 +D {u1},{u2}"
+        )
+        relayed = await _relayed_burst(stub_b)
+        # Both members are hidden, so the whole list is the hidden group and
+        # the specifier rides on its first member, carrying to the second.
+        expected = (
+            f"{stub_a.server_numnick} B {chan} 1700000000 +D {u1}:d,{u2}"
+        )
+        assert relayed == expected, (
+            f"relayed {relayed!r}, expected {expected!r}"
+        )
+    finally:
+        await stub_a.disconnect()
+        await stub_b.disconnect()
+
+
+async def test_relay_no_d_from_p10_uplink_on_minus_D_channel(ircd_hub):
+    """The control case: without ``+D`` nothing is inferred.
+
+    The same bare member list on a channel that is not ``+D`` relays to a
+    P11 downlink with no specifier at all.
+    """
+    chan = "#relay6"
+    stub_a, stub_b = await _two_stubs_with_users(ircd_hub, 10, 11)
+    try:
+        u1 = await stub_a.introduce_user("p10n1")
+        u2 = await stub_a.introduce_user("p10n2")
+        await stub_b.drain_messages(timeout=1.0)
+
+        await stub_a._send(
+            f"{stub_a.server_numnick} B {chan} 1700000000 +t {u1},{u2}"
+        )
+        relayed = await _relayed_burst(stub_b)
+        expected = (
+            f"{stub_a.server_numnick} B {chan} 1700000000 +t {u1},{u2}"
+        )
+        assert relayed == expected, (
+            f"relayed {relayed!r}, expected {expected!r}"
+        )
+    finally:
+        await stub_a.disconnect()
+        await stub_b.disconnect()
