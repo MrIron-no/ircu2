@@ -48,6 +48,7 @@
 #include "s_misc.h"
 #include "s_serv.h"
 #include "send.h"
+#include "servcap.h"
 #include "userload.h"
 #include "sasl.h"
 
@@ -222,7 +223,9 @@ check_loop_and_lh(struct Client* cptr, struct Client *sptr, time_t *ghost, const
      * This is a doubtful test though, what else would it be
      * when it has a server.name ?
      */
-    else if (!IsServer(acptr) && !IsHandshake(acptr))
+    else if (acptr == cptr && (IsHandshake(acptr) || IsUnknown(acptr)))
+      break;                    /* the connection completing right now */
+    else if (!IsServer(acptr) && !IsHandshake(acptr) && !IsServerStaged(acptr))
       return exit_client_msg(cptr, cptr, &me,
                              "Nickname %s already exists!", host);
     /*
@@ -498,6 +501,58 @@ void set_server_flags(struct Client *cptr, const char *flags)
     }
 }
 
+/** Finish registering a peer whose SERVER line has been accepted.
+ *
+ * Runs once the handshake is complete: immediately for a P10 peer, or after
+ * the CAP exchange on a P11 link (see mr_server_cap()).  Because time may
+ * have passed since the SERVER line, the Connect block and the loop/hub
+ * checks are re-evaluated here, and only now is the numeric slot claimed.
+ * @param[in] cptr Peer whose handshake is complete.
+ * @return CPTR_KILLED if \a cptr was exited, else the server_estab() result.
+ */
+static int server_complete(struct Client *cptr)
+{
+  struct ConfItem *aconf;
+  time_t           ghost;
+  time_t           recv_time = cli_serv(cptr)->stage_recv_time;
+  int              ret;
+
+  if (!(aconf = find_conf_byname(cli_confs(cptr), cli_name(cptr), CONF_SERVER))) {
+    ++ServerStats->is_not_server;
+    sendto_opmask_butone(0, SNO_OLDSNO, "Access denied. No conf line for "
+                         "server %s", cli_name(cptr));
+    return exit_client_msg(cptr, cptr, &me,
+                           "Access denied. No conf line for server %s", cli_name(cptr));
+  }
+
+  ret = check_loop_and_lh(cptr, cptr, &ghost, cli_name(cptr),
+                          cli_serv(cptr)->stage_mask, cli_serv(cptr)->timestamp,
+                          cli_hopcount(cptr), 1);
+  if (ret != 1)
+    return ret;
+  cli_serv(cptr)->ghost = ghost;
+
+  SetServerYXX(cptr, cptr, cli_serv(cptr)->stage_mask);
+
+  check_start_timestamp(cptr, cli_serv(cptr)->timestamp,
+                        cli_serv(cptr)->stage_start_ts, recv_time);
+  ret = server_estab(cptr, aconf);
+
+  if (feature_bool(FEAT_RELIABLE_CLOCK) &&
+      labs(cli_serv(cptr)->timestamp - recv_time) > 30) {
+    sendto_opmask_butone(0, SNO_OLDSNO, "Connected to a net with a "
+			 "timestamp-clock difference of %Td seconds! "
+			 "Used SETTIME to correct this.",
+			 cli_serv(cptr)->timestamp - recv_time);
+    sendcmdto_prio_one(&me, CMD_SETTIME, cptr, "%Tu :%s", TStime(),
+		       cli_name(&me));
+  }
+
+  compute_secure_path_groups();
+
+  return ret;
+}
+
 /** Handle a SERVER message from an unregistered connection.
  *
  * \a parv has the following elements:
@@ -526,7 +581,6 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   unsigned short   prot;
   time_t           start_timestamp;
   time_t           timestamp;
-  time_t           recv_time;
   time_t           ghost;
 
   if (IsUserPort(cptr) || IsWebsocketPort(cptr))
@@ -654,7 +708,6 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   cli_serv(cptr)->ghost = ghost;
   memset(cli_privs(cptr), 255, sizeof(struct Privs));
   ClrPriv(cptr, PRIV_SET);
-  SetServerYXX(cptr, cptr, parv[6]);
 
   /* Attach any necessary UWorld config items. */
   attach_confs_byhost(cptr, host, CONF_UWORLD);
@@ -662,23 +715,66 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   if (*parv[7] == '+')
     set_server_flags(cptr, parv[7] + 1);
 
-  recv_time = TStime();
-  check_start_timestamp(cptr, timestamp, start_timestamp, recv_time);
-  ret = server_estab(cptr, aconf);
+  /* From here on the connection is findable by server name, so a second
+   * link attempt for the same server (oper CONNECT, crossed connect) sees
+   * it.  exit_one_client() unhashes unconditionally if we refuse later. */
+  if (!IsHandshake(cptr))
+    hAddClient(cptr);
 
-  if (feature_bool(FEAT_RELIABLE_CLOCK) &&
-      labs(cli_serv(cptr)->timestamp - recv_time) > 30) {
-    sendto_opmask_butone(0, SNO_OLDSNO, "Connected to a net with a "
-			 "timestamp-clock difference of %Td seconds! "
-			 "Used SETTIME to correct this.",
-			 timestamp - recv_time);
-    sendcmdto_prio_one(&me, CMD_SETTIME, cptr, "%Tu :%s", TStime(),
-		       cli_name(&me));
+  /* Keep what registration needs; server_complete() runs it.  The numeric
+   * slot (SetServerYXX) is claimed there too, so a link that never
+   * completes leaves no trace in server_list[]. */
+  cli_serv(cptr)->stage_start_ts = start_timestamp;
+  cli_serv(cptr)->stage_recv_time = TStime();
+  ircd_strncpy(cli_serv(cptr)->stage_mask, parv[6], 5);
+
+  server_estab_send(cptr, aconf);
+
+  /* P11: capability exchange (doc/P11.md, "Link capabilities").  Only now
+   * do we know the peer speaks P11, so only now may CAP go out; a P10 peer
+   * never sees it.  Registration and the burst wait in server_complete()
+   * until the peer's CAP arrives (mr_server_cap()); while staged the
+   * connection stays unregistered, so it receives no relayed traffic and
+   * the ordinary CONNECTTIMEOUT bounds the wait. */
+  if (prot >= 11) {
+    char caps[BUFSIZE];
+
+    servcap_announce(caps, sizeof(caps));
+    sendrawto_one(cptr, MSG_CAP " :%s", caps);
+    SetServerStaged(cptr);
+    return 0;
   }
 
-  compute_secure_path_groups();
+  return server_complete(cptr);
+}
 
-  return ret;
+/** Handle the CAP line of a staged P11 server handshake.
+ *
+ * \a parv has the following elements:
+ * \li \a parv[1] is the peer's space-separated capability list (may be
+ * empty or absent).
+ *
+ * The negotiated set is the intersection with servcap_table.  Reached from
+ * m_cap() while IsServerStaged(cptr); any other command in this slot is
+ * refused by parse_client().
+ * @param[in] cptr Client that sent us the message.
+ * @param[in] sptr Original source of message.
+ * @param[in] parc Number of arguments.
+ * @param[in] parv Argument vector.
+ */
+int mr_server_cap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  const char *list = (parc > 1) ? parv[1] : "";
+  char names[BUFSIZE];
+
+  assert(IsServerStaged(cptr));
+
+  cli_serv(cptr)->caps = servcap_parse(list, servcap_table);
+  servcap_names(cli_serv(cptr)->caps, names, sizeof(names), servcap_table);
+  log_write(LS_NETWORK, L_NOTICE, LOG_NOSNOTICE,
+            "CAP: %s offered [%s] negotiated [%s]", cli_name(cptr), list, names);
+  ClearServerStaged(cptr);
+  return server_complete(cptr);
 }
 
 /** Handle a SERVER message from another server.

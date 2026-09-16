@@ -59,6 +59,9 @@ struct Server {
   unsigned int    clients;      /**< Number of clients on the server */
   unsigned short  prot;         /**< Major protocol */
   servcap_t       caps;         /**< P11 link capabilities negotiated (servcap.h) */
+  time_t          stage_start_ts;   /**< SERVER start timestamp, kept while staged */
+  time_t          stage_recv_time;  /**< TStime() when SERVER was accepted */
+  char            stage_mask[6];    /**< SERVER numeric mask, kept while staged */
   unsigned int    nn_mask;      /**< Number of clients supported by server, minus 1 */
   char          nn_capacity[4]; /**< Numeric representation of server capacity */
 
