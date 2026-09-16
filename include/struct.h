@@ -28,6 +28,9 @@
 #include <stdint.h>
 #define INCLUDED_stdint_h
 #endif
+#ifndef INCLUDED_servcap_h
+#include "servcap.h"
+#endif
 #ifndef INCLUDED_sys_types_h
 #include <sys/types.h>      /* time_t */
 #define INCLUDED_sys_types_h
@@ -55,6 +58,7 @@ struct Server {
   int             lag;          /**< Approximation of the amount of lag to this server */
   unsigned int    clients;      /**< Number of clients on the server */
   unsigned short  prot;         /**< Major protocol */
+  servcap_t       caps;         /**< P11 link capabilities negotiated (servcap.h) */
   unsigned int    nn_mask;      /**< Number of clients supported by server, minus 1 */
   char          nn_capacity[4]; /**< Numeric representation of server capacity */
 
