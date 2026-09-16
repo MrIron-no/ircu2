@@ -22,6 +22,7 @@ extern int exit_new_server(struct Client* cptr, struct Client* sptr,
                            const char* host, time_t timestamp, const char* fmt, ...);
 extern int a_kills_b_too(struct Client *a, struct Client *b);
 extern int server_estab_send(struct Client *cptr, struct ConfItem *aconf);
+extern int server_cap_negotiate(struct Client *cptr, const char *list);
 extern int server_estab(struct Client *cptr, struct ConfItem *aconf);
 extern void compute_secure_path_groups(void);
 extern int is_secure_path(struct Client *c1, struct Client *c2);
