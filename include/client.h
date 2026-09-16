@@ -221,6 +221,7 @@ enum Flag
     FLAG_SPAMHOLD,                  /**< user is the sender or recipient of a message on hold */
     FLAG_HIDEIDLE,                  /**< Hide idle time from non-opers */
     FLAG_COMMONCHANS,               /**< only accepts messages from users in common channels */
+    FLAG_SERVER_STAGED,             /**< server handshake staged, awaiting CAP (P11) */
     FLAG_LAST_FLAG,                 /**< number of flags */
     FLAG_LOCAL_UMODES = FLAG_LOCOP, /**< First local mode flag */
     FLAG_GLOBAL_UMODES = FLAG_OPER, /**< First global mode flag */
@@ -716,6 +717,8 @@ struct Client {
 #define IsSpamHold(x)           HasFlag(x, FLAG_SPAMHOLD)
 /** Return non-zero if the client has mode +c (only messages from common channels). */
 #define IsCommonChans(x)        HasFlag(x, FLAG_COMMONCHANS)
+/** Return non-zero if the server handshake is staged awaiting CAP. */
+#define IsServerStaged(x)       HasFlag(x, FLAG_SERVER_STAGED)
 /** Return non-zero if the client is exempt from input throttling. */
 #define IsExemptThrottle(x)     HasFlag(x, FLAG_EXEMPT_THROTTLE)
 
@@ -778,6 +781,8 @@ struct Client {
 #define SetSpamHold(x)          SetFlag(x, FLAG_SPAMHOLD)
 /** Mark a client as having mode +c (only messages from those in common channels). */
 #define SetCommonChans(x)       SetFlag(x, FLAG_COMMONCHANS)
+/** Mark the server handshake as staged awaiting CAP. */
+#define SetServerStaged(x)      SetFlag(x, FLAG_SERVER_STAGED)
 /** Mark a client as being exempt from input throttling. */
 #define SetExemptThrottle(x)    SetFlag(x, FLAG_EXEMPT_THROTTLE)
 
@@ -825,6 +830,8 @@ struct Client {
 #define ClearSpamHold(x)         ClrFlag(x, FLAG_SPAMHOLD)
 /** Remove mode +c (only accepts messages from common channels) from the client. */
 #define ClearCommonChans(x)      ClrFlag(x, FLAG_COMMONCHANS)
+/** Clear the staged server handshake mark. */
+#define ClearServerStaged(x)     ClrFlag(x, FLAG_SERVER_STAGED)
 /** Mark a client as no longer exempt from input throttling. */
 #define ClearExemptThrottle(x)   ClrFlag(x, FLAG_EXEMPT_THROTTLE)
 

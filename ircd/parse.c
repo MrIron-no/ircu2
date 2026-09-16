@@ -681,7 +681,7 @@ struct Message msgtab[] = {
     TOK_CAP,
     0, MAXPARA, 0, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
-    { m_cap, m_cap, m_ignore, m_cap, m_ignore }
+    { mr_cap, m_cap, m_ignore, m_cap, m_ignore }
   },
   /* This command is an alias for QUIT during the unregistered part of
    * of the server.  This is because someone jumping via a broken web
@@ -995,7 +995,24 @@ parse_client(struct Client *cptr, char *buffer, char *bufend)
   if ((s = strchr(ch, ' ')))
     *s++ = '\0';
 
-  if ((mptr = msg_tree_parse(ch, &msg_tree)) == NULL)
+  mptr = msg_tree_parse(ch, &msg_tree);
+
+  /* P11 (doc/P11.md, "Link capabilities"): a server whose SERVER line has
+   * been accepted but whose handshake is staged may send only CAP (or an
+   * ERROR).  Anything else in that slot is a protocol violation. */
+  if (IsServerStaged(cptr)
+      && (!mptr || (strcmp(mptr->cmd, MSG_CAP) && strcmp(mptr->cmd, MSG_ERROR)))) {
+    sendto_opmask_butone(0, SNO_OLDSNO,
+                         "Protocol violation from %s: expected CAP after SERVER, got %s",
+                         cli_name(cptr), ch);
+    log_write(LS_NETWORK, L_NOTICE, LOG_NOSNOTICE,
+              "CAP: %s protocol violation, expected CAP after SERVER, got %s",
+              cli_name(cptr), ch);
+    return exit_client_msg(cptr, cptr, &me,
+                           "Protocol violation: expected CAP after SERVER, got %s", ch);
+  }
+
+  if (mptr == NULL)
   {
     /*
      * Note: Give error message *only* to recognized

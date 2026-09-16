@@ -144,6 +144,7 @@ ircd_SOURCES = \
 	s_user.c \
 	sasl.c \
 	send.c \
+	servcap.c \
 	sline.c \
 	tls_io.c \
 	uping.c \

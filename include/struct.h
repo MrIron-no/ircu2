@@ -28,6 +28,9 @@
 #include <stdint.h>
 #define INCLUDED_stdint_h
 #endif
+#ifndef INCLUDED_servcap_h
+#include "servcap.h"
+#endif
 #ifndef INCLUDED_sys_types_h
 #include <sys/types.h>      /* time_t */
 #define INCLUDED_sys_types_h
@@ -55,6 +58,10 @@ struct Server {
   int             lag;          /**< Approximation of the amount of lag to this server */
   unsigned int    clients;      /**< Number of clients on the server */
   unsigned short  prot;         /**< Major protocol */
+  servcap_t       caps;         /**< P11 link capabilities negotiated (servcap.h) */
+  time_t          stage_start_ts;   /**< SERVER start timestamp, kept while staged */
+  time_t          stage_recv_time;  /**< TStime() when SERVER was accepted */
+  char            stage_mask[6];    /**< SERVER numeric mask, kept while staged */
   unsigned int    nn_mask;      /**< Number of clients supported by server, minus 1 */
   char          nn_capacity[4]; /**< Numeric representation of server capacity */
 

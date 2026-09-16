@@ -114,7 +114,39 @@ int a_kills_b_too(struct Client *a, struct Client *b)
   return (a == b ? 1 : 0);
 }
 
-/** Handle a connection that has sent a valid PASS and SERVER.
+/** Send our side of the handshake to a peer that has sent a valid
+ * PASS and SERVER.  An accepted (inbound) connection gets our PASS and
+ * SERVER; an outbound connection already sent them from
+ * completed_connection().  Registration and the burst are separate
+ * (server_estab()) because on a P11 link the CAP exchange sits between
+ * the two.
+ * @param cptr New peer server.
+ * @param aconf Connect block for \a cptr.
+ * @return Zero.
+ */
+int server_estab_send(struct Client *cptr, struct ConfItem *aconf)
+{
+  assert(0 != cptr);
+  assert(0 != cli_local(cptr));
+
+  if (IsUnknown(cptr)) {
+    if (aconf->passwd[0])
+      sendrawto_one(cptr, MSG_PASS " :%s", aconf->passwd);
+    /*
+     *  Pass my info to the new server
+     */
+    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6 :%s",
+		  cli_name(&me), cli_serv(&me)->timestamp,
+		  cli_serv(cptr)->timestamp, MAJOR_PROTOCOL, NumServCap(&me),
+		  feature_bool(FEAT_HUB) ? "h" : "",
+		  *(cli_info(&me)) ? cli_info(&me) : "IRCers United");
+  }
+  return 0;
+}
+
+/** Register a peer that has completed the handshake and burst to it.
+ * The caller has already hashed \a cptr by name and called
+ * server_estab_send().
  * @param cptr New peer server.
  * @param aconf Connect block for \a cptr.
  * @return Zero.
@@ -130,23 +162,8 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
 
   inpath = cli_name(cptr);
 
-  if (IsUnknown(cptr)) {
-    if (aconf->passwd[0])
-      sendrawto_one(cptr, MSG_PASS " :%s", aconf->passwd);
-    /*
-     *  Pass my info to the new server
-     */
-    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6 :%s",
-		  cli_name(&me), cli_serv(&me)->timestamp,
-		  cli_serv(cptr)->timestamp, MAJOR_PROTOCOL, NumServCap(&me),
-		  feature_bool(FEAT_HUB) ? "h" : "",
-		  *(cli_info(&me)) ? cli_info(&me) : "IRCers United");
-  }
-
   det_confs_butmask(cptr, CONF_SERVER | CONF_UWORLD);
 
-  if (!IsHandshake(cptr))
-    hAddClient(cptr);
   SetServer(cptr);
   cli_handler(cptr) = SERVER_HANDLER;
   Count_unknownbecomesserver(UserStats);

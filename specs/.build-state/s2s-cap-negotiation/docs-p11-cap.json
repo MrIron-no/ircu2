@@ -1,0 +1,18 @@
+{
+ "name": "Documentation",
+ "status": "completed",
+ "agentType": "sequential",
+ "startedAt": null,
+ "completedAt": "2026-09-16T12:44:39.750765+02:00",
+ "lastUpdated": "2026-09-16T12:44:39.750765+02:00",
+ "description": "P11.md new \u00a73 Link capabilities (CAP), sections renumbered, \u00a75 prefix exception + fixed-width numerics/legacy YXX note, \u00a711 compat bullet; readme.cap.md pointer; p10.md CAP row.",
+ "commitSha": "dee0761",
+ "filesChanged": [
+  "doc/P11.md",
+  "doc/readme.cap.md",
+  "doc/p10.md"
+ ],
+ "dependsOn": [
+  "outbound-network-tests"
+ ]
+}

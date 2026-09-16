@@ -1,0 +1,14 @@
+{
+ "name": "Stub: send and record CAP in the client role",
+ "status": "completed",
+ "agentType": "sequential",
+ "startedAt": null,
+ "completedAt": "2026-09-16T10:37:50.667229+02:00",
+ "lastUpdated": "2026-09-16T10:37:50.667229+02:00",
+ "description": "P10Server gained caps/send_cap/first_line/numnick_mask, records peer SERVER/CAP/BURST order, answers CAP slot on P11. s2s+commands suites: 66 passed.",
+ "commitSha": "33ff3bd",
+ "filesChanged": [
+  "tests/p10_server.py"
+ ],
+ "dependsOn": []
+}
