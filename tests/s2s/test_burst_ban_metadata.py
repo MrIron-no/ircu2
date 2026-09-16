@@ -33,6 +33,9 @@ STUB_CAPACITY = 63
 # include/ircd_defs.h
 NICKLEN = 15
 
+# include/ircd.h: any timestamp older than this is bogus and is repaired.
+OLDEST_TS = 780000000
+
 _sync_seq = itertools.count(1)
 
 
@@ -345,7 +348,13 @@ async def test_non_numeric_ts_rejects_section(ircd_hub, make_client, oper):
         await client.wait_for("JOIN", timeout=5.0)
 
         assert await _ban_list(client, chan) == [], "a bogus ts applied the ban"
-        await _wait_for_violation(oper, "Invalid ban timestamp 'abc'")
+        # The peer's own bytes are never echoed into a network-wide wallops:
+        # the violation reports the length of the offending field instead.
+        text = await _wait_for_violation(
+            oper, "Invalid ban timestamp (3 bytes, not numeric)")
+        assert "abc" not in text, (
+            f"the raw peer bytes reached the wallops after all: {text!r}"
+        )
     finally:
         await stub.disconnect()
 
@@ -579,5 +588,116 @@ async def test_line_continuation_keeps_all_bans(ircd_hub, make_client):
         for mask, ts, who in triples:
             assert ts.isdigit(), f"non-numeric ts for {mask}: {ts!r}"
             assert who == "bm13set", f"wrong setter for {mask}: {who!r}"
+    finally:
+        await stub.disconnect()
+
+
+async def test_ts_exactly_oldest_ts_is_kept(ircd_hub, make_client):
+    """OLDEST_TS itself is in range: the boundary is ``<``, not ``<=``.
+
+    The companion of test_out_of_range_ts_becomes_now: one second below this
+    value is repaired, this value is not.
+    """
+    chan = "#bm15"
+    stub = await _link(ircd_hub, 11)
+    try:
+        sa = await stub.introduce_user("sa15")
+        await stub._send(
+            f"{stub.server_numnick} B {chan} 1700000000 +t {sa} "
+            f":%*!*@one.example {OLDEST_TS} zed"
+        )
+        await asyncio.sleep(0.5)
+
+        client = await make_client("bm15watch")
+        await client.send(f"JOIN {chan}")
+        await client.wait_for("JOIN", timeout=5.0)
+
+        assert await _ban_list(client, chan) == [
+            ("*!*@one.example", "zed", str(OLDEST_TS))
+        ]
+    finally:
+        await stub.disconnect()
+
+
+async def test_ts_below_oldest_ts_becomes_now(ircd_hub, make_client):
+    """One second below OLDEST_TS is out of range and is repaired."""
+    chan = "#bm16"
+    stub = await _link(ircd_hub, 11)
+    try:
+        sa = await stub.introduce_user("sa16")
+        await stub._send(
+            f"{stub.server_numnick} B {chan} 1700000000 +t {sa} "
+            f":%*!*@one.example {OLDEST_TS - 1} zed"
+        )
+        await asyncio.sleep(0.5)
+
+        client = await make_client("bm16watch")
+        await client.send(f"JOIN {chan}")
+        await client.wait_for("JOIN", timeout=5.0)
+
+        bans = await _ban_list(client, chan)
+        assert len(bans) == 1, f"the ban was dropped over its ts: {bans!r}"
+        mask, who, ts = bans[0]
+        assert (mask, who) == ("*!*@one.example", "zed"), f"unexpected ban: {bans!r}"
+        assert abs(int(ts) - time.time()) < 30, f"ts was not repaired: {ts!r}"
+    finally:
+        await stub.disconnect()
+
+
+# --------------------------------------------------------------------------
+# setter validation
+# --------------------------------------------------------------------------
+
+
+async def test_who_with_invalid_nick_chars_becomes_star(ircd_hub, make_client):
+    """A setter that is not a valid nick degrades to the unknown setter.
+
+    ``<who>`` is echoed in RPL_BANLIST and relayed onward verbatim, so a peer
+    must not be able to park arbitrary bytes in it.  Anything that is not a
+    nick is stored as ``*``; the ban itself is still kept.
+    """
+    chan = "#bm17"
+    stub = await _link(ircd_hub, 11)
+    try:
+        sa = await stub.introduce_user("sa17")
+        await stub._send(
+            f"{stub.server_numnick} B {chan} 1700000000 +t {sa} "
+            f":%*!*@one.example 1700000100 bad#nick"
+        )
+        await asyncio.sleep(0.5)
+
+        client = await make_client("bm17watch")
+        await client.send(f"JOIN {chan}")
+        await client.wait_for("JOIN", timeout=5.0)
+
+        assert await _ban_list(client, chan) == [
+            ("*!*@one.example", "*", "1700000100")
+        ]
+    finally:
+        await stub.disconnect()
+
+
+async def test_who_star_is_kept(ircd_hub, make_client):
+    """The control case: ``*`` is the unknown setter and is not a nick.
+
+    It has to survive the nick-character check that rewrites everything else.
+    """
+    chan = "#bm18"
+    stub = await _link(ircd_hub, 11)
+    try:
+        sa = await stub.introduce_user("sa18")
+        await stub._send(
+            f"{stub.server_numnick} B {chan} 1700000000 +t {sa} "
+            f":%*!*@one.example 1700000100 *"
+        )
+        await asyncio.sleep(0.5)
+
+        client = await make_client("bm18watch")
+        await client.send(f"JOIN {chan}")
+        await client.wait_for("JOIN", timeout=5.0)
+
+        assert await _ban_list(client, chan) == [
+            ("*!*@one.example", "*", "1700000100")
+        ]
     finally:
         await stub.disconnect()
