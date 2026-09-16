@@ -1083,6 +1083,15 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
     {
       while (member)
       {
+	/* The group this member belongs to.  A hidden member never has
+	 * status, but one that somehow carried both bits would match none
+	 * of the five groups and fall out of the burst entirely, so fold it
+	 * into its status group here rather than drop it. */
+	unsigned int key = member->status & status_mask;
+
+	if (key & CHFL_VOICED_OR_OPPED)
+	  key &= ~CHFL_DELAYED;
+
 	if (flag_cnt < 3 && IsChanOp(member))
 	{
 	  /*
@@ -1100,7 +1109,7 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
             send_oplevels = 1;
 	}
 	/* Only handle the members with the flags that we are interested in. */
-        if ((member->status & status_mask) == current_flags[flag_cnt])
+        if (key == current_flags[flag_cnt])
 	{
 	  if (msgq_bufleft(mb) < NUMNICKLEN + 3 + MAXOPLEVELDIGITS)
 	    /* The 3 + MAXOPLEVELDIGITS is a possible ",:v999". */

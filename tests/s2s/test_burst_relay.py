@@ -21,14 +21,22 @@ pytestmark = pytest.mark.single_server
 
 
 async def _two_stubs(hub, proto_a, proto_b) -> tuple[P11Server, P11Server]:
-    """Link two stub servers to the hub and complete both handshakes."""
+    """Link two stub servers to the hub and complete both handshakes.
+
+    The capacity has to be 2**n - 1: the ircd uses the announced value
+    verbatim as the link's numnick slot mask, and the relay emits the
+    canonical numeric of each member it resolved, so a mask that collapses
+    several numerics onto one slot would relay one member three times.
+    """
     stub_a = P11Server(name="notulined.test.net", numeric=5,
-                       password="testpass", server_flags="", protocol=proto_a)
+                       password="testpass", server_flags="", protocol=proto_a,
+                       max_clients=63)
     await stub_a.connect(hub["host"], hub["server_port"])
     await stub_a.handshake()
 
     stub_b = P11Server(name="uworldonly.test.net", numeric=6,
-                       password="testpass", server_flags="", protocol=proto_b)
+                       password="testpass", server_flags="", protocol=proto_b,
+                       max_clients=63)
     await stub_b.connect(hub["host"], hub["server_port"])
     await stub_b.handshake()
 
@@ -275,3 +283,81 @@ async def test_relay_synthesises_ban_metadata_from_p10_uplink(ircd_hub):
     finally:
         await stub_a.disconnect()
         await stub_b.disconnect()
+
+
+async def _three_stubs(hub):
+    """A P11 source plus a P10 and a P11 downlink, all linked to the hub.
+
+    ``services.test.net`` is the source; the two observers are the other two
+    Connect blocks of tests/docker/ircd-hub.conf.  All three announce the
+    same 2**n - 1 capacity so every introduced user gets its own slot.
+    """
+    src = P11Server(name="services.test.net", numeric=4, password="testpass",
+                    protocol=11, max_clients=63)
+    await src.connect(hub["host"], hub["server_port"])
+    await src.handshake()
+
+    p10 = P11Server(name="notulined.test.net", numeric=5, password="testpass",
+                    server_flags="", protocol=10, max_clients=63)
+    await p10.connect(hub["host"], hub["server_port"])
+    await p10.handshake()
+
+    p11 = P11Server(name="uworldonly.test.net", numeric=6, password="testpass",
+                    server_flags="", protocol=11, max_clients=63)
+    await p11.connect(hub["host"], hub["server_port"])
+    await p11.handshake()
+
+    return src, p10, p11
+
+
+def _burst_lines_for(stub: P11Server, chan: str) -> list[str]:
+    """Every BURST line for ``chan`` the stub has read, tags stripped."""
+    lines = []
+    for line in stub.received:
+        payload = strip_msg_tags(line)
+        parts = payload.split()
+        if len(parts) >= 3 and parts[1] == "B" and parts[2].lower() == chan.lower():
+            lines.append(payload)
+    return lines
+
+
+async def test_mixed_p10_and_p11_downlinks_get_their_own_variant_from_one_burst(
+        ircd_hub):
+    """One incoming BURST produces one line per downlink, in its own layout.
+
+    The P11 downlink gets the hidden-member ``d`` and the ban triple; the P10
+    one gets the member bare and the mask alone.  Neither gets a second line:
+    the state fits on one, so the continuation machinery must stay out of the
+    way.
+    """
+    chan = "#relay9"
+    src, p10, p11 = await _three_stubs(ircd_hub)
+    try:
+        u1 = await src.introduce_user("mixrelay1")
+        u2 = await src.introduce_user("mixrelay2")
+        await p10.drain_messages(timeout=1.0)
+        await p11.drain_messages(timeout=1.0)
+
+        await src._send(
+            f"{src.server_numnick} B {chan} 1700000000 +tD {u1}:d,{u2}:o "
+            f":%*!*@mixed.example 1700000100 zed"
+        )
+        # A second line, if any, would arrive right after the first; drain a
+        # full second so that "exactly one" is a real assertion.
+        await p11.drain_messages(timeout=1.0)
+        await p10.drain_messages(timeout=1.0)
+
+        p11_lines = _burst_lines_for(p11, chan)
+        p10_lines = _burst_lines_for(p10, chan)
+
+        assert p11_lines == [
+            f"{src.server_numnick} B {chan} 1700000000 +tD {u1}:d,{u2}:o "
+            f":%*!*@mixed.example 1700000100 zed"
+        ], f"P11 downlink saw {p11_lines!r}"
+        assert p10_lines == [
+            f"{src.server_numnick} B {chan} 1700000000 +tD {u1},{u2}:o "
+            f":%*!*@mixed.example"
+        ], f"P10 downlink saw {p10_lines!r}"
+    finally:
+        for stub in (src, p10, p11):
+            await stub.disconnect()

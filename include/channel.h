@@ -251,7 +251,6 @@ struct Mode {
 #define BAN_BURSTED        0x0004  /**< Ban part of last BURST */
 #define BAN_BURST_WIPEOUT  0x0008  /**< Ban will be wiped at EOB */
 #define BAN_EXCEPTION      0x0010  /**< Ban is an exception */
-#define BAN_BURST_META     0x0020  /**< Metadata updated by last BURST; relay on P11, no client MODE */
 #define BAN_DEL            0x4000  /**< Ban is being removed */
 #define BAN_ADD            0x8000  /**< Ban is being added */
 
