@@ -708,6 +708,10 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   cli_serv(cptr)->ghost = ghost;
   memset(cli_privs(cptr), 255, sizeof(struct Privs));
   ClrPriv(cptr, PRIV_SET);
+  /* check_loop_and_lh() walks ->up towards &me for any candidate it finds,
+   * including a staged inbound connection like this one; server_estab()
+   * sets it again at registration. */
+  cli_serv(cptr)->up = &me;
 
   /* Attach any necessary UWorld config items. */
   attach_confs_byhost(cptr, host, CONF_UWORLD);
