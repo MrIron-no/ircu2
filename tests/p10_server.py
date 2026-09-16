@@ -102,18 +102,25 @@ class P10Server:
         first_line: str | None = None,
         numnick_mask: str | None = None,
         cap_delay: float = 0.0,
+        announce_ipv6: bool = True,
     ):
         self.name = name
         self.numeric = numeric
         self.password = password
         self.max_clients = max_clients
         self.description = description
-        self.server_flags = server_flags
         # Protocol number announced in our SERVER line.  ircd gates the
         # P11 extensions (message tags, TAGMSG, TLS fingerprints, remote
         # OPMODE +x, already-authed ACCOUNT updates) per link on this, so
         # pass protocol=10 to observe what a legacy P10 peer receives.
         self.protocol = protocol
+        # A direct P10 peer must announce the IPv6 server flag ('6') or the
+        # ircd refuses the link (doc/P11.md, "Server flags"); a P11 peer
+        # implies it and never sends it.  ``announce_ipv6=False`` withholds
+        # the flag to provoke that refusal.
+        if protocol < 11 and announce_ipv6 and "6" not in server_flags:
+            server_flags += "6"
+        self.server_flags = server_flags
         # P11 link capabilities (doc/P11.md, "Link capabilities").  On a P11
         # link each side sends one unprefixed ``CAP :<list>`` line right
         # after SERVER and before its burst.  ``caps`` is our announced

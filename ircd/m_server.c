@@ -496,7 +496,8 @@ void set_server_flags(struct Client *cptr, const char *flags)
     while (*flags) switch (*flags++) {
     case 'h': SetHub(cptr); break;
     case 's': SetService(cptr); break;
-    case '6': SetIPv6(cptr); break;
+    /* '6' (IPv6-capable) is no longer stored: P11 implies it and a direct
+     * P10 peer must announce it (mr_server()). */
     case 'z': SetTLS(cptr); break;
     }
 }
@@ -627,6 +628,13 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
                            "Incompatible protocol: %s", parv[5]);
   if (!is_valid_numeric_mask(parv[6]))
     return exit_client_msg(cptr, cptr, &me, "Bogus numeric mask (%s)", parv[6]);
+
+  /* Client IPs always go out in the full P10 IPv6 form (iptobase64()).
+   * A P11 peer implies support; a P10 peer must announce it, otherwise it
+   * has to link behind a P10 hub that still downgrades for it. */
+  if (prot < 11 && !strchr(parv[7], '6'))
+    return exit_client_msg(cptr, cptr, &me,
+                           "P10 peers must support IPv6 (+6); link through a P10 hub");
 
   Debug((DEBUG_INFO, "Got SERVER %s with timestamp [%s] age %Tu (%Tu)",
 	 host, parv[4], start_timestamp, cli_serv(&me)->timestamp));
@@ -800,6 +808,7 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 {
   int              i;
   char*            host;
+  char             flagbuf[5];
   struct Client*   acptr;
   struct Client*   bcptr;
   int              hop;
@@ -901,11 +910,10 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       continue;
     if (0 == match(cli_name(&me), cli_name(acptr)))
       continue;
-    sendcmdto_one(sptr, CMD_SERVER, bcptr, "%s %d 0 %s %s %s%s +%s%s%s%s :%s",
+    sendcmdto_one(sptr, CMD_SERVER, bcptr, "%s %d 0 %s %s %s%s +%s :%s",
                   cli_name(acptr), hop + 1, parv[4], parv[5],
-                  NumServCap(acptr), IsHub(acptr) ? "h" : "",
-                  IsService(acptr) ? "s" : "", IsIPv6(acptr) ? "6" : "",
-                  IsTLS(acptr) ? "z" : "", cli_info(acptr));
+                  NumServCap(acptr), server_flags_str(acptr, bcptr, flagbuf),
+                  cli_info(acptr));
   }
   
   compute_secure_path_groups();

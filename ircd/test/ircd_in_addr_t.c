@@ -13,8 +13,7 @@ struct address_test {
     const char *text; /**< Textual address to parse. */
     const char *canonical; /**< Canonical form of address. */
     struct irc_in_addr expected; /**< Parsed address. */
-    const char *base64_v4; /**< v4-only compatible base64 encoding. */
-    const char *base64_v6; /**< v6-compatible base64 encoding. */
+    const char *base64; /**< base64 encoding (numnicks IPv6 form). */
     unsigned int is_valid : 1; /**< is address valid? */
     unsigned int is_ipv4 : 1; /**< is address ipv4? */
     unsigned int is_loopback : 1; /**< is address loopback? */
@@ -24,32 +23,32 @@ struct address_test {
 static struct address_test test_addrs[] = {
     { "::", "0::",
       {{ 0, 0, 0, 0, 0, 0, 0, 0 }},
-      "AAAAAA", "_", 0, 0, 0 },
+      "_", 0, 0, 0 },
     { "::1", "0::1",
       {{ 0, 0, 0, 0, 0, 0, 0, 1 }},
-      "AAAAAA", "_AAB", 1, 0, 1 },
+      "_AAB", 1, 0, 1 },
     { "127.0.0.1", "127.0.0.1",
       {{ 0, 0, 0, 0, 0, 0xffff, 0x7f00, 1 }},
-      "B]AAAB", "B]AAAB", 1, 1, 1 },
+      "B]AAAB", 1, 1, 1 },
     { "::ffff:127.0.0.3", "127.0.0.3",
       {{ 0, 0, 0, 0, 0, 0xffff, 0x7f00, 3 }},
-      "B]AAAD", "B]AAAD", 1, 1, 1 },
+      "B]AAAD", 1, 1, 1 },
     { "::127.0.0.1", "127.0.0.1",
       {{ 0, 0, 0, 0, 0, 0, 0x7f00, 1 }},
-      "B]AAAB", "B]AAAB", 1, 1, 1 },
+      "B]AAAB", 1, 1, 1 },
     { "2002:7f00:3::1", "2002:7f00:3::1",
       {{ 0x2002, 0x7f00, 3, 0, 0, 0, 0, 1 }},
-      "B]AAAD", "CACH8AAAD_AAB", 1, 0, 0 },
+      "CACH8AAAD_AAB", 1, 0, 0 },
     { "8352:0344:0:0:0:0:2001:1204", "8352:344::2001:1204",
       {{ 0x8352, 0x344, 0, 0, 0, 0, 0x2001, 0x1204 }},
-      "AAAAAA", "INSANE_CABBIE", 1, 0, 0 },
+      "INSANE_CABBIE", 1, 0, 0 },
     { "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7:8",
       {{ 1, 2, 3, 4, 5, 6, 7, 8 }},
-      "AAAAAA", "AABAACAADAAEAAFAAGAAHAAI", 1, 0, 0 },
+      "AABAACAADAAEAAFAAGAAHAAI", 1, 0, 0 },
     { "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
       "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
       {{ 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535 }},
-      "AAAAAA", "P]]P]]P]]P]]P]]P]]P]]P]]", 0, 0, 0 },
+      "P]]P]]P]]P]]P]]P]]P]]P]]", 0, 0, 0 },
     { 0 },
 };
 
@@ -61,7 +60,7 @@ test_address(struct address_test *addr)
 {
     struct irc_in_addr parsed;
     unsigned int ii, len, val;
-    char unparsed[64], base64_v4[64], base64_v6[64];
+    char unparsed[64], base64[64];
 
     /* Convert expected address to network order. */
     for (ii = 0; ii < 8; ++ii)
@@ -74,12 +73,9 @@ test_address(struct address_test *addr)
     ircd_ntoa_r(unparsed, &parsed);
     assert(!strcmp(unparsed, addr->canonical));
     /* Check IP-to-base64 conversion. */
-    iptobase64(base64_v4, &parsed, sizeof(base64_v4), 0);
-    iptobase64(base64_v6, &parsed, sizeof(base64_v6), 1);
-    if (addr->base64_v4)
-        assert(!strcmp(base64_v4, addr->base64_v4));
-    if (addr->base64_v6)
-        assert(!strcmp(base64_v6, addr->base64_v6));
+    iptobase64(base64, &parsed, sizeof(base64));
+    if (addr->base64)
+        assert(!strcmp(base64, addr->base64));
     /* Check testable attributes. */
     val = irc_in_addr_valid(&parsed);
     assert(!!val == addr->is_valid);
@@ -88,15 +84,13 @@ test_address(struct address_test *addr)
     val = irc_in_addr_is_loopback(&parsed);
     assert(!!val == addr->is_loopback);
     /* Check base64-to-IP conversion. */
-    if (addr->is_ipv4) {
-        base64toip(addr->base64_v4, &parsed);
+    base64toip(addr->base64, &parsed);
+    if (addr->is_ipv4)
         assert(!memcmp(parsed.in6_16+6, addr->expected.in6_16+6, 4));
-    } else {
-        base64toip(addr->base64_v6, &parsed);
+    else
         assert(!memcmp(&parsed, &addr->expected, sizeof(parsed)));
-    }
     /* Tests completed. */
-    printf("Passed: %s (%s/%s)\n", addr->text, base64_v4, base64_v6);
+    printf("Passed: %s (%s)\n", addr->text, base64);
 }
 
 /** Structure to describe a test for IP mask parsing. */
@@ -246,7 +240,7 @@ test_base64_robustness(void)
     for (ii = 0; test_addrs[ii].text; ++ii) {
         struct irc_in_addr parsed, rt;
         ircd_aton(&parsed, test_addrs[ii].text);
-        iptobase64(buf, &parsed, sizeof(buf), 1);
+        iptobase64(buf, &parsed, sizeof(buf));
         decode_guarded(test_addrs[ii].text, buf, &rt);
         if (strlen(buf) == 6)
             assert(!memcmp(rt.in6_16 + 6, parsed.in6_16 + 6, 4));
@@ -259,7 +253,7 @@ test_base64_robustness(void)
     {
         struct irc_in_addr parsed, rt;
         ircd_aton(&parsed, "1:2:3:4:5:6:7:8");
-        iptobase64(buf, &parsed, sizeof(buf), 1);
+        iptobase64(buf, &parsed, sizeof(buf));
         assert(strlen(buf) == 24);
         decode_guarded("max-length 24-char encoding", buf, &rt);
         assert(!memcmp(&rt, &parsed, sizeof(rt)));

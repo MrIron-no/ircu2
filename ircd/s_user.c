@@ -445,8 +445,9 @@ int register_user(struct Client *cptr, struct Client *sptr)
     ++UserStats.opers;
 
   /* Introduce the user to each server link in the form that link
-   * negotiated: a full IPv6 address only to +6 peers (fake IPv4-mapped
-   * otherwise) and the TLS fingerprint parameter only on P11 links. */
+   * negotiated: the TLS fingerprint parameter only on P11 links.  The IP
+   * is always the full form; every linked peer understands it (see
+   * iptobase64()). */
   for (lp = cli_serv(&me)->down; lp; lp = lp->next) {
     struct Client *link = lp->value.cptr;
 
@@ -459,8 +460,7 @@ int register_user(struct Client *cptr, struct Client *sptr)
                   cli_lastnick(sptr),
                   user->username, user->realhost,
                   *tmpstr ? "+" : "", tmpstr, *tmpstr ? " " : "",
-                  iptobase64(ip_base64, &cli_ip(sptr), sizeof(ip_base64),
-                             IsIPv6(link)),
+                  iptobase64(ip_base64, &cli_ip(sptr), sizeof(ip_base64)),
                   NumNick(sptr), cli_info(sptr));
   }
 

@@ -114,6 +114,36 @@ int a_kills_b_too(struct Client *a, struct Client *b)
   return (a == b ? 1 : 0);
 }
 
+/** Build the flag string used to introduce \a server to \a link in a
+ * SERVER message: "h" (hub), "s" (service), "6" and "z" (TLS).
+ *
+ * The IPv6 flag is not a property of \a server any more.  It is emitted
+ * to every P10 link, because a P10 receiver downgrades client IPs for a
+ * peer that lacks it, and never to a P11 link, where it is implied.  A
+ * P10 peer therefore sees every server as IPv6-capable, which holds for
+ * everything that may link to a P11 server (see mr_server()).
+ * @param[in] server Server being introduced.
+ * @param[in] link Peer the SERVER message is sent to.
+ * @param[out] buf Buffer of at least 5 bytes.
+ * @return \a buf.
+ */
+const char *server_flags_str(const struct Client *server,
+                             const struct Client *link, char *buf)
+{
+  char *p = buf;
+
+  if (IsHub(server))
+    *p++ = 'h';
+  if (IsService(server))
+    *p++ = 's';
+  if (Protocol(link) < 11)
+    *p++ = '6';
+  if (IsTLS(server))
+    *p++ = 'z';
+  *p = '\0';
+  return buf;
+}
+
 /** Send our side of the handshake to a peer that has sent a valid
  * PASS and SERVER.  An accepted (inbound) connection gets our PASS and
  * SERVER; an outbound connection already sent them from
@@ -133,12 +163,15 @@ int server_estab_send(struct Client *cptr, struct ConfItem *aconf)
     if (aconf->passwd[0])
       sendrawto_one(cptr, MSG_PASS " :%s", aconf->passwd);
     /*
-     *  Pass my info to the new server
+     *  Pass my info to the new server.  The peer's SERVER line has been
+     *  parsed, so the IPv6 flag goes out only where P10 still reads it
+     *  (see server_flags_str()).
      */
-    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6 :%s",
+    sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s%s :%s",
 		  cli_name(&me), cli_serv(&me)->timestamp,
 		  cli_serv(cptr)->timestamp, MAJOR_PROTOCOL, NumServCap(&me),
 		  feature_bool(FEAT_HUB) ? "h" : "",
+		  Protocol(cptr) < 11 ? "6" : "",
 		  *(cli_info(&me)) ? cli_info(&me) : "IRCers United");
   }
   return 0;
@@ -155,6 +188,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
 {
   struct Client* acptr = 0;
   const char*    inpath;
+  char           flagbuf[5];
   int            i;
 
   assert(0 != cptr);
@@ -209,10 +243,9 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
     if (!match(cli_name(&me), cli_name(cptr)))
       continue;
     sendcmdto_one(&me, CMD_SERVER, acptr,
-		  "%s 2 0 %Tu J%02u %s%s +%s%s%s%s :%s", cli_name(cptr),
+		  "%s 2 0 %Tu J%02u %s%s +%s :%s", cli_name(cptr),
 		  cli_serv(cptr)->timestamp, Protocol(cptr), NumServCap(cptr),
-		  IsHub(cptr) ? "h" : "", IsService(cptr) ? "s" : "",
-		  IsIPv6(cptr) ? "6" : "", IsTLS(cptr) ? "z" : "", cli_info(cptr));
+		  server_flags_str(cptr, acptr, flagbuf), cli_info(cptr));
   }
 
   /* Send these as early as possible so that glined users/juped servers can
@@ -253,11 +286,10 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
       if (0 == match(cli_name(&me), cli_name(acptr)))
         continue;
       sendcmdto_one(cli_serv(acptr)->up, CMD_SERVER, cptr,
-		    "%s %d 0 %Tu %s%u %s%s +%s%s%s%s :%s", cli_name(acptr),
+		    "%s %d 0 %Tu %s%u %s%s +%s :%s", cli_name(acptr),
 		    cli_hopcount(acptr) + 1, cli_serv(acptr)->timestamp,
 		    protocol_str, Protocol(acptr), NumServCap(acptr),
-		    IsHub(acptr) ? "h" : "", IsService(acptr) ? "s" : "",
-		    IsIPv6(acptr) ? "6" : "", IsTLS(acptr) ? "z" : "", cli_info(acptr));
+		    server_flags_str(acptr, cptr, flagbuf), cli_info(acptr));
     }
   }
 
@@ -275,7 +307,7 @@ int server_estab(struct Client *cptr, struct ConfItem *aconf)
 		    cli_name(acptr), cli_hopcount(acptr) + 1, cli_lastnick(acptr),
 		    cli_user(acptr)->username, cli_user(acptr)->realhost,
 		    *s ? "+" : "", s, *s ? " " : "",
-		    iptobase64(xxx_buf, &cli_ip(acptr), sizeof(xxx_buf), IsIPv6(cptr)),
+		    iptobase64(xxx_buf, &cli_ip(acptr), sizeof(xxx_buf)),
 		    NumNick(acptr), cli_info(acptr));
       if (feature_bool(FEAT_AWAY_BURST) && cli_user(acptr)->away)
         sendcmdto_one(acptr, CMD_AWAY, cptr, ":%s", cli_user(acptr)->away);
