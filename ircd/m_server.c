@@ -504,7 +504,7 @@ void set_server_flags(struct Client *cptr, const char *flags)
 /** Finish registering a peer whose SERVER line has been accepted.
  *
  * Runs once the handshake is complete: immediately for a P10 peer, or after
- * the CAP exchange on a P11 link (see mr_server_cap()).  Because time may
+ * the CAP exchange on a P11 link (see server_cap_negotiate()).  Because time may
  * have passed since the SERVER line, the Connect block and the loop/hub
  * checks are re-evaluated here, and only now is the numeric slot claimed.
  * @param[in] cptr Peer whose handshake is complete.
@@ -739,7 +739,7 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   /* P11: capability exchange (doc/P11.md, "Link capabilities").  Only now
    * do we know the peer speaks P11, so only now may CAP go out; a P10 peer
    * never sees it.  Registration and the burst wait in server_complete()
-   * until the peer's CAP arrives (mr_server_cap()); while staged the
+   * until the peer's CAP arrives (server_cap_negotiate()); while staged the
    * connection stays unregistered, so it receives no relayed traffic and
    * the ordinary CONNECTTIMEOUT bounds the wait. */
   if (prot >= 11) {
@@ -754,23 +754,18 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   return server_complete(cptr);
 }
 
-/** Handle the CAP line of a staged P11 server handshake.
+/** Negotiate link capabilities from the CAP line of a staged P11 server
+ * handshake and complete the registration.
  *
- * \a parv has the following elements:
- * \li \a parv[1] is the peer's space-separated capability list (may be
- * empty or absent).
- *
- * The negotiated set is the intersection with servcap_table.  Reached from
- * m_cap() while IsServerStaged(cptr); any other command in this slot is
- * refused by parse_client().
- * @param[in] cptr Client that sent us the message.
- * @param[in] sptr Original source of message.
- * @param[in] parc Number of arguments.
- * @param[in] parv Argument vector.
+ * The negotiated set is the intersection of \a list with servcap_table.
+ * Reached from mr_cap() while IsServerStaged(cptr); any other command in
+ * that slot is refused by parse_client().
+ * @param[in] cptr Staged peer that sent the CAP line.
+ * @param[in] list The peer's space-separated capability list ("" if none).
+ * @return CPTR_KILLED if \a cptr was exited, else the server_estab() result.
  */
-int mr_server_cap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+int server_cap_negotiate(struct Client *cptr, const char *list)
 {
-  const char *list = (parc > 1) ? parv[1] : "";
   char names[BUFSIZE];
 
   assert(IsServerStaged(cptr));

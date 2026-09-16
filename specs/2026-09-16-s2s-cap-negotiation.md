@@ -114,7 +114,7 @@ If either `SERVER` announces 10, that side registers immediately as today.
 - `ircd/m_server.c` — `mr_server()` (inbound and outbound SERVER handling),
   `ms_server()` (relayed introductions), `check_loop_and_lh()`,
   `parse_protocol()`, `set_server_flags()`. Staging, completion, mask
-  validation, and the new `mr_server_cap()` live here.
+  validation, and the new `server_cap_negotiate()` live here.
 - `ircd/s_serv.c` — `server_estab()`: currently sends PASS/SERVER (acceptor),
   registers (`SetServer`, `hAddClient`, `add_dlink` to `me->down`,
   introduces the server to other links) and bursts. Split into send half and
@@ -130,7 +130,7 @@ If either `SERVER` announces 10, that side registers immediately as today.
 - `ircd/numnicks.c` / `include/numnicks.h` — add `is_valid_numeric_mask()`.
 - `include/client.h` — `FLAG_SERVER_STAGED` and its macros.
 - `include/struct.h` — `struct Server`: `caps`, staged fields.
-- `include/handlers.h` — `mr_server_cap()` prototype.
+- `include/handlers.h` — `mr_cap()` prototype (UNREG column of the CAP entry).
 - `include/s_serv.h` — `server_estab_send()` prototype.
 - `ircd/Makefile.in` — add `servcap.c` to both source lists (lines ~122
   and ~490 region, alphabetically next to `s_conf.c`/`send.c`).
@@ -379,8 +379,10 @@ network, write the P11.md section, review, validate.
     (after its PASS/SERVER) and the connector (which sent SERVER earlier in
     `completed_connection()`) reach this point only after seeing the peer's
     protocol, so a P10 peer never receives `CAP`.
-  - Add `int mr_server_cap(struct Client *cptr, struct Client *sptr, int parc, char *parv[])`
-    in `m_server.c`, prototype in `include/handlers.h`:
+  - Add `int server_cap_negotiate(struct Client *cptr, const char *list)`
+    in `m_server.c`, prototype in `include/s_serv.h` (built as: table UNREG
+    column for CAP becomes `mr_cap()` in m_cap.c, which calls this for a
+    staged server and `m_cap()` otherwise):
     ```c
     const char *list = (parc > 1) ? parv[1] : "";
     char names[BUFSIZE];
@@ -392,7 +394,8 @@ network, write the P11.md section, review, validate.
     return server_complete(cptr);
     ```
   - `ircd/m_cap.c` `m_cap()`: insert as the very first statement
-    `if (IsServerStaged(cptr)) return mr_server_cap(cptr, sptr, parc, parv);`
+    `if (IsServerStaged(cptr)) return server_cap_negotiate(cptr, parc > 1 ? parv[1] : "");`
+    (as built: this lives in the new `mr_cap()` rather than inside `m_cap()`)
     (before the `parc < 2` check, since `CAP :` arrives with `parv[1] == ""`
     and a bare `CAP` with `parc == 1`). Include `handlers.h` is already
     present; add `#include "client.h"` if the macro is not visible.
@@ -692,7 +695,7 @@ network, write the P11.md section, review, validate.
   - The strict gate cannot be bypassed by a `CAP` line carrying message tags
     or leading spaces, and does not fire for non-staged unregistered
     clients (ordinary client `CAP LS` still works, `tests/cap/` green).
-  - `mr_server_cap()` handles `parc == 1`, `parv[1] == ""`, and a 500-byte
+  - `mr_cap()` / `server_cap_negotiate()` handle `parc == 1`, `parv[1] == ""`, and a 500-byte
     list without overflow (`names`/`caps` buffers are `BUFSIZE`).
   - The P10 path in `mr_server()` is byte-for-byte unchanged on the wire.
   - `is_valid_numeric_mask()` is applied in both `mr_server()` and

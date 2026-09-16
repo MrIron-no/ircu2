@@ -40,6 +40,7 @@
 #include "s_auth.h"
 #include "s_user.h"
 #include "s_bsd.h"
+#include "s_serv.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -483,11 +484,6 @@ m_cap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   char *subcmd, *caplist = 0;
   struct subcmd *cmd;
 
-  /* A staged P11 server handshake uses CAP :<list> as its post-SERVER
-   * line (doc/P11.md); it has no subcommand and may have no parameter. */
-  if (IsServerStaged(cptr))
-    return mr_server_cap(cptr, sptr, parc, parv);
-
   if (parc < 2) /* a subcommand is required */
     return 0;
   subcmd = parv[1];
@@ -503,4 +499,25 @@ m_cap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 
   /* then execute it... */
   return cmd->proc ? (cmd->proc)(sptr, caplist) : 0;
+}
+
+/** Handle a CAP message from an unregistered connection.
+ *
+ * Two things arrive here: a client's capability negotiation, handled by
+ * m_cap(), and the post-SERVER line of a staged P11 server handshake,
+ * ``CAP :<list>`` (doc/P11.md, "Link capabilities"), which has no
+ * subcommand and may have no parameter at all.  The staged case is the
+ * only way a server ever sends CAP; a registered server's CAP is ignored.
+ *
+ * @param[in] cptr Client that sent us the message.
+ * @param[in] sptr Original source of message.
+ * @param[in] parc Number of arguments.
+ * @param[in] parv Argument vector.
+ */
+int
+mr_cap(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  if (IsServerStaged(cptr))
+    return server_cap_negotiate(cptr, (parc > 1) ? parv[1] : "");
+  return m_cap(cptr, sptr, parc, parv);
 }
