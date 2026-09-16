@@ -1,0 +1,21 @@
+{
+ "name": "Capability module and unit test",
+ "status": "completed",
+ "agentType": "sequential",
+ "startedAt": null,
+ "completedAt": "2026-09-16T10:40:04.547360+02:00",
+ "lastUpdated": "2026-09-16T10:40:04.547360+02:00",
+ "description": "servcap.h/.c with empty servcap_table, servcap_announce/parse/names, HasServCap; struct Server.caps; servcap_t unit test (make check: 9/9 PASS).",
+ "commitSha": "c4a8a22",
+ "filesChanged": [
+  "include/servcap.h",
+  "include/struct.h",
+  "ircd/servcap.c",
+  "ircd/Makefile.am",
+  "ircd/test/servcap_t.c",
+  "ircd/test/Makefile.am"
+ ],
+ "dependsOn": [
+  "stub-cap-client"
+ ]
+}

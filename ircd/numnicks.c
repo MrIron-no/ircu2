@@ -194,6 +194,37 @@ struct Client* FindNServer(const char* numeric)
   return FindXNServer(numeric);
 }
 
+/** Check a SERVER line's numeric mask before it is used.
+ *
+ * The mask is read by two rules: FindNServer() (collision check) selects the
+ * server_list[] slot by length, and SetServerYXX() (registration) stores
+ * either the five-character YYXXX form or, for anything else, the legacy
+ * one-plus-two YXX form.  For a length of 3 or 5 both agree; for any other
+ * length the collision check looks at one slot while registration writes
+ * another, silently replacing a live server's entry.  Refusing every other
+ * length keeps the two readers consistent.  Length 3 is the legacy form
+ * (ircu 2.10.00 to 2.10.10): still accepted, never emitted.
+ * @param[in] mask Numeric mask parameter of a SERVER line.
+ * @return Non-zero if the mask is 3 or 5 numnick-alphabet characters.
+ */
+int is_valid_numeric_mask(const char* mask)
+{
+  size_t len;
+  size_t i;
+
+  if (!mask)
+    return 0;
+  len = strlen(mask);
+  if (len != 3 && len != 5)
+    return 0;
+  for (i = 0; i < len; ++i) {
+    unsigned char c = (unsigned char) mask[i];
+    if (c != 'A' && convert2n[c] == 0)   /* 'A' encodes 0; all else non-zero */
+      return 0;
+  }
+  return 1;
+}
+
 /** Look up a user by numnick string.
  * See @ref numnicks for more details.
  * @param[in] yxx %Numeric nickname of user.

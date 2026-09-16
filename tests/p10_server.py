@@ -97,6 +97,11 @@ class P10Server:
         description: str = "Test Services",
         server_flags: str = "s",
         protocol: int = 11,
+        caps: str = "",
+        send_cap: bool = True,
+        first_line: str | None = None,
+        numnick_mask: str | None = None,
+        cap_delay: float = 0.0,
     ):
         self.name = name
         self.numeric = numeric
@@ -109,6 +114,30 @@ class P10Server:
         # OPMODE +x, already-authed ACCOUNT updates) per link on this, so
         # pass protocol=10 to observe what a legacy P10 peer receives.
         self.protocol = protocol
+        # P11 link capabilities (doc/P11.md, "Link capabilities").  On a P11
+        # link each side sends one unprefixed ``CAP :<list>`` line right
+        # after SERVER and before its burst.  ``caps`` is our announced
+        # list (space separated, empty by default -> the literal ``CAP :``).
+        # ``send_cap=False`` withholds the line (silent peer); ``first_line``
+        # replaces it verbatim with something else (to provoke the strict
+        # gate).  Neither has any effect when either side is P10.
+        self.caps = caps
+        self.send_cap = send_cap
+        self.first_line = first_line
+        # Accepting role only: seconds to wait before sending our CAP line,
+        # to hold the connector in its CAP wait.
+        self.cap_delay = cap_delay
+        # Accepting role bookkeeping (see serve()).
+        self.accepted_count = 0
+        self.peer_password: str | None = None
+        self._server: asyncio.AbstractServer | None = None
+        self.connection_closed = asyncio.Event()
+        # Peer-side observations, filled in during the handshake.
+        self.peer_protocol: int | None = None
+        self.peer_cap_line: str | None = None
+        self.peer_caps: str = ""
+        # Order in which the peer's SERVER, CAP and first burst line arrived.
+        self.handshake_order: list[str] = []
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -119,8 +148,19 @@ class P10Server:
         # `server_numick` property below for tests that need to send a message
         # with the server itself (not one of its users) as the source.
         self._num = server_numeric(numeric)
-        # Numnick mask: server numeric (2) + max clients (3)
-        self._numnick_mask = self._num + int_to_b64(max_clients, 3)
+        # Numnick mask: server numeric (2) + max clients (3).  A verbatim
+        # override lets tests send a malformed or legacy (3-char YXX) mask.
+        if numnick_mask is None:
+            self._numnick_mask = self._num + int_to_b64(max_clients, 3)
+        else:
+            self._numnick_mask = numnick_mask
+            # Our prefix must match what we announced: YYXXX has a 2-char
+            # server part, the legacy YXX form a 1-char one.  A malformed
+            # mask keeps the default numeric (the ircd refuses it anyway).
+            if len(numnick_mask) == 5:
+                self._num = numnick_mask[:2]
+            elif len(numnick_mask) == 3:
+                self._num = numnick_mask[:1]
 
         # Users we've seen, keyed by nick (lowercase)
         self.users: dict[str, dict] = {}
@@ -272,16 +312,60 @@ class P10Server:
             f"{flag_field} :{self.description}"
         )
 
-        # Read hub's burst until we see EB (end of burst)
+        # Read hub's PASS/SERVER (+ CAP on a P11 link) and burst until EB.
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 raise TimeoutError("Timed out waiting for end of burst")
             line = await self._recv(timeout=remaining)
+            await self._observe_handshake_line(line)
             tok = self._get_token(line)
             if tok == "EB" or line == "EB":
                 break
+
+    @staticmethod
+    def _parse_server_protocol(tokens: list[str]) -> int | None:
+        """Return the protocol number from a SERVER line's ``[JP]NN`` field."""
+        for tok in tokens[1:]:
+            if len(tok) >= 2 and tok[0] in "JP" and tok[1:].isdigit():
+                return int(tok[1:])
+        return None
+
+    async def _observe_handshake_line(self, line: str):
+        """Track the peer's SERVER / CAP / first burst line and answer CAP.
+
+        Called for every line read during the handshake (both roles).  When
+        the peer's SERVER shows protocol >= 11 and we are P11 ourselves, our
+        own CAP line (or ``first_line``) goes out immediately, before any
+        further line is read -- this is the slot P11 reserves for it.
+        """
+        payload = strip_msg_tags(line)
+        tokens = payload.split()
+        if not tokens:
+            return
+        if tokens[0] == "PASS" and self.peer_protocol is None:
+            return
+        if tokens[0] == "SERVER" and self.peer_protocol is None:
+            self.peer_protocol = self._parse_server_protocol(tokens)
+            self.handshake_order.append("SERVER")
+            if (self.peer_protocol or 0) >= 11 and self.protocol >= 11:
+                await self._send_cap_slot()
+            return
+        if tokens[0] == "CAP" and self.peer_cap_line is None:
+            self.peer_cap_line = payload
+            self.peer_caps = payload.split(":", 1)[1] if ":" in payload else ""
+            self.handshake_order.append("CAP")
+            return
+        if "SERVER" in self.handshake_order and "BURST" not in self.handshake_order:
+            self.handshake_order.append("BURST")
+
+    async def _send_cap_slot(self):
+        """Send whatever we put in the post-SERVER slot on a P11 link."""
+        if self.first_line is not None:
+            await self._send(self.first_line)
+        elif self.send_cap:
+            await self._send(f"CAP :{self.caps}")
 
     async def send_end_of_burst(self):
         """Send our EB, marking the end of our (possibly empty) burst."""
@@ -303,6 +387,83 @@ class P10Server:
         await self._send(f"{self._num} EA")
         self.burst_complete = True
         logger.info("P10 handshake complete, connected as %s (%s)", self.name, self._num)
+
+    # ------------------------------------------------------------------
+    # Accepting role: the ircd connects to us (CONNECT / autoconnect)
+    # ------------------------------------------------------------------
+
+    async def serve(self, host: str, port: int) -> asyncio.AbstractServer:
+        """Listen for one inbound server link and run accept_handshake() on it.
+
+        A second connection while one is active is counted in
+        ``accepted_count`` and closed immediately.  ``connection_closed`` is
+        set once the active link has gone away.
+        """
+        self._server = await asyncio.start_server(self._on_accept, host, port)
+        return self._server
+
+    async def _on_accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        self.accepted_count += 1
+        if self._reader is not None:
+            logger.info("Refusing a second inbound connection (#%d)", self.accepted_count)
+            writer.close()
+            return
+        self._reader, self._writer = reader, writer
+        self.connected = True
+        try:
+            await self.accept_handshake()
+            while True:                     # stay linked until the peer goes
+                await self._recv(timeout=3600.0)
+        except (ConnectionError, asyncio.TimeoutError, TimeoutError) as exc:
+            logger.info("Inbound link ended: %s", exc)
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+            self.connected = False
+            self.connection_closed.set()
+
+    async def accept_handshake(self, timeout: float = 15.0):
+        """Accepting-role handshake: read PASS + SERVER, answer, then burst.
+
+        Mirrors what an ircd acceptor does: our SERVER goes out after the
+        connector's; on a P11 link our CAP (or ``first_line``) follows it,
+        after ``cap_delay``; then the connector's CAP and burst are read
+        through EB, and EB/EA are exchanged.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+
+        while self.peer_protocol is None:
+            line = await self._recv(timeout=max(0.1, deadline - loop.time()))
+            tokens = strip_msg_tags(line).split()
+            if tokens and tokens[0] == "PASS":
+                self.peer_password = tokens[-1].lstrip(":")
+            elif tokens and tokens[0] == "SERVER":
+                self.peer_protocol = self._parse_server_protocol(tokens)
+                self.handshake_order.append("SERVER")
+
+        now = int(time.time())
+        flag_field = f"+{self.server_flags}" if self.server_flags else "+"
+        await self._send(f"PASS :{self.password}")
+        await self._send(
+            f"SERVER {self.name} 1 {now} {now} J{self.protocol} {self._numnick_mask} "
+            f"{flag_field} :{self.description}"
+        )
+        if (self.peer_protocol or 0) >= 11 and self.protocol >= 11:
+            if self.cap_delay:
+                await asyncio.sleep(self.cap_delay)
+            await self._send_cap_slot()
+
+        while True:
+            line = await self._recv(timeout=max(0.1, deadline - loop.time()))
+            await self._observe_handshake_line(line)
+            tok = self._get_token(line)
+            if tok == "EB" or line == "EB":
+                break
+        await self.send_end_of_burst()
+        await self.complete_handshake(timeout=max(1.0, deadline - loop.time()))
 
     def _parse_nick(self, line: str):
         """Parse a P10 N (NICK) message and store user info.

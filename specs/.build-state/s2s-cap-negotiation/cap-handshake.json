@@ -1,0 +1,25 @@
+{
+ "name": "CAP handshake: staging, handler, strict gate, log",
+ "status": "completed",
+ "agentType": "sequential",
+ "startedAt": null,
+ "completedAt": "2026-09-16T12:34:56.231941+02:00",
+ "lastUpdated": "2026-09-16T12:34:56.231941+02:00",
+ "description": "P11 peers: CAP :<list> after SERVER, FLAG_SERVER_STAGED wait, mr_server_cap() in m_cap.c branch, parse_client strict gate, mr_error/connect_server staged-aware, LS_NETWORK log; hub/leaf LOG feature; tests/s2s/test_cap_handshake.py (6 tests green). CONNECTTIMEOUT set per-test via SET, not in conf.",
+ "commitSha": "9276268",
+ "filesChanged": [
+  "ircd/m_server.c",
+  "ircd/m_cap.c",
+  "ircd/parse.c",
+  "ircd/m_error.c",
+  "ircd/s_bsd.c",
+  "include/handlers.h",
+  "tests/docker/ircd-hub.conf",
+  "tests/docker/ircd-leaf1.conf",
+  "tests/docker/ircd-leaf2.conf",
+  "tests/s2s/test_cap_handshake.py"
+ ],
+ "dependsOn": [
+  "estab-split"
+ ]
+}
