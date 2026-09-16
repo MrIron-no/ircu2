@@ -97,18 +97,24 @@ class P10Server:
         description: str = "Test Services",
         server_flags: str = "s",
         protocol: int = 11,
+        announce_ipv6: bool = True,
     ):
         self.name = name
         self.numeric = numeric
         self.password = password
         self.max_clients = max_clients
         self.description = description
-        self.server_flags = server_flags
         # Protocol number announced in our SERVER line.  ircd gates the
         # P11 extensions (message tags, TAGMSG, TLS fingerprints, remote
         # OPMODE +x, already-authed ACCOUNT updates) per link on this, so
         # pass protocol=10 to observe what a legacy P10 peer receives.
         self.protocol = protocol
+        # A direct P10 peer must announce the IPv6 server flag ('6') or the
+        # ircd refuses the link; a P11 peer implies it and never sends it.
+        # ``announce_ipv6=False`` withholds the flag to provoke that refusal.
+        if protocol < 11 and announce_ipv6 and "6" not in server_flags:
+            server_flags += "6"
+        self.server_flags = server_flags
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
