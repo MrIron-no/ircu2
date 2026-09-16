@@ -385,7 +385,7 @@ reply.
 On the network the query travels as a P10 `XQUERY` with the routing
 token prefixed by `iauth:`; the server strips that prefix again before
 relaying the reply to the iauth instance (see section 11 of
-`doc/p10.md`).
+`doc/P11.md`).
 
 *Compatibility:* This is an Undernet extension and ircd does not send
 it.
@@ -705,7 +705,7 @@ Indicates that the iauth instance believes the specified client should
 be allowed onto the network, pre-authenticated to the account listed.
 The account may carry a numeric account id and a flag word, separated
 by colons, which are stamped onto the client (compare the `ACCOUNT`
-message in `doc/p10.md`). If a class parameter is given, the client
+message in `doc/P11.md`). If a class parameter is given, the client
 should be assigned to that class.
 
 *Compatibility:* This is an Undernet extension and ircd does not
