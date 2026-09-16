@@ -572,6 +572,8 @@ int mr_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   else if (prot < atoi(MINOR_PROTOCOL))
     return exit_new_server(cptr, sptr, host, timestamp,
                            "Incompatible protocol: %s", parv[5]);
+  if (!is_valid_numeric_mask(parv[6]))
+    return exit_client_msg(cptr, cptr, &me, "Bogus numeric mask (%s)", parv[6]);
 
   /* Client IPs always go out in the full P10 IPv6 form (iptobase64()).
    * A P11 peer implies support; a P10 peer must announce it, otherwise it
@@ -744,6 +746,8 @@ int ms_server(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
   else if (prot < atoi(MINOR_PROTOCOL))
     return exit_new_server(cptr, sptr, host, timestamp,
                            "Incompatible protocol: %s", parv[5]);
+  if (!is_valid_numeric_mask(parv[6]))
+    return exit_client_msg(cptr, cptr, &me, "Bogus numeric mask (%s)", parv[6]);
 
   Debug((DEBUG_INFO, "Got SERVER %s with timestamp [%s] age %Tu (%Tu)",
 	 host, parv[4], start_timestamp, cli_serv(&me)->timestamp));
