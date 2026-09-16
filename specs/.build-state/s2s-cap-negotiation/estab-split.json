@@ -1,1 +1,20 @@
-{"name":"Split registration into send and completion halves","status":"pending","agentType":"sequential","startedAt":null,"completedAt":null,"lastUpdated":"2026-09-16T10:30:57+02:00","description":null,"commitSha":null,"filesChanged":[],"dependsOn":["servcap-module"]}
+{
+ "name": "Split registration into send and completion halves",
+ "status": "completed",
+ "agentType": "sequential",
+ "startedAt": null,
+ "completedAt": "2026-09-16T12:34:56.231941+02:00",
+ "lastUpdated": "2026-09-16T12:34:56.231941+02:00",
+ "description": "mr_server split into staging + server_complete(); server_estab_send()/server_estab(); hAddClient moved before staging; SetServerYXX deferred; check_loop_and_lh self-find accepts Unknown/Handshake/staged. Regression: s2s+commands+relay 86/87 (1 flake later re-passed), multi_server 268/268.",
+ "commitSha": "9276268",
+ "filesChanged": [
+  "include/client.h",
+  "include/struct.h",
+  "include/s_serv.h",
+  "ircd/s_serv.c",
+  "ircd/m_server.c"
+ ],
+ "dependsOn": [
+  "servcap-module"
+ ]
+}

@@ -1,1 +1,16 @@
-{"name":"Connector-side and multi-server integration tests","status":"pending","agentType":"sequential","startedAt":null,"completedAt":null,"lastUpdated":"2026-09-16T10:30:57+02:00","description":null,"commitSha":null,"filesChanged":[],"dependsOn":["stub-listener-sidecar"]}
+{
+ "name": "Connector-side and multi-server integration tests",
+ "status": "completed",
+ "agentType": "sequential",
+ "startedAt": null,
+ "completedAt": "2026-09-16T12:44:39.750765+02:00",
+ "lastUpdated": "2026-09-16T12:44:39.750765+02:00",
+ "description": "tests/s2s/test_cap_handshake_outbound.py: 4 connector-side sidecar tests + network CAP log + crossed connects x3. Full CAP suite 14/14 passed.",
+ "commitSha": "4724c0f",
+ "filesChanged": [
+  "tests/s2s/test_cap_handshake_outbound.py"
+ ],
+ "dependsOn": [
+  "stub-listener-sidecar"
+ ]
+}
