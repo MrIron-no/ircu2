@@ -5,6 +5,7 @@
 ircu supports IRCv3 capability negotiation via the `CAP` command (`ircd/m_cap.c`, `include/capab.h`).
 Clients can list, request, and clear capabilities before or after registration.
 During registration on user or WebSocket ports, `CAP LS` / `CAP REQ` suspends auth until `CAP END`.
+The `CAP` token is also used, unprefixed, in the P11 server handshake; see [P11.md](P11.md).
 
 Most capabilities are gated by a matching `CAP_*` feature (default `TRUE`).
 Setting a feature to `FALSE` removes the capability from `LS`/`REQ` (see `doc/readme.features.md`).
