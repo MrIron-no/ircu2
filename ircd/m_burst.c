@@ -607,7 +607,7 @@ static void burst_relay(struct Client *sptr, struct Client *cptr,
 
     /* mode_parse_ban() always leaves a nick or a "*" behind, but a ban that
      * somehow lost its setter would put an empty field on the wire. */
-    who = (bans[i].who && bans[i].who[0]) ? bans[i].who : "*";
+    who = bans[i].who[0] ? bans[i].who : "*";
 
     for (attempt = 0; attempt < 2; attempt++) {
       if (p11)
