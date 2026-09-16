@@ -36,3 +36,6 @@ ircu.tags
 tests/debug-output/*
 !tests/debug-output/.gitkeep
 tests/debug-output/failures/
+
+# dream-team planning specs and build state (local only)
+specs/
