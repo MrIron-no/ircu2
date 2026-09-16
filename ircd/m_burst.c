@@ -138,6 +138,105 @@ netride_modes(int parc, char **parv, const char *curr_key)
   return result;
 }
 
+/** Parse the ban section of a BURST message and apply it to \a chptr.
+ *
+ * Each ban that is genuinely new to the channel is appended to the channel's
+ * ban list and to both relay buffers.  The two buffers receive identical text
+ * here; the P11 buffer is the one that will later carry the
+ * \<mask\> \<ts\> \<who\> triples described in doc/P11.md 8.1.
+ *
+ * @param[in] cptr Local server connection the BURST arrived on.
+ * @param[in] sptr Server that sent the BURST.
+ * @param[in,out] chptr Channel the bans belong to.
+ * @param[in] section Ban section of the BURST, i.e. the text after the '%'.
+ * @param[in] parse_flags Mode parser flags for this BURST; the bans are only
+ * applied when MODE_PARSE_SET is set.
+ * @param[out] banstr10 Ban text for the P10 relay variant.
+ * @param[in,out] banpos10 Write position in \a banstr10.
+ * @param[out] banstr11 Ban text for the P11 relay variant.
+ * @param[in,out] banpos11 Write position in \a banstr11.
+ * @return Number of new bans added to the channel.
+ */
+static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
+                            struct Channel *chptr, char *section,
+                            unsigned int parse_flags,
+                            char *banstr10, int *banpos10,
+                            char *banstr11, int *banpos11)
+{
+  char *p = 0, *ban, *ptr;
+  struct Ban *lp, *newban;
+  int new_bans = 0;
+
+  (void)cptr;
+  (void)sptr;
+
+  if (!(parse_flags & MODE_PARSE_SET))
+    return 0;
+
+  for (ban = ircd_strtok(&p, section, " "); ban;
+       ban = ircd_strtok(&p, 0, " ")) {
+    ban = collapse(pretty_mask(ban));
+
+      /*
+       * Yeah, we should probably do this elsewhere, and make it better
+       * and more general; this will hold until we get there, though.
+       * I dislike the current add_banid API... -Kev
+       *
+       * I wish there were a better algo. for this than the n^2 one
+       * shown below *sigh*
+       */
+    for (lp = chptr->banlist; lp; lp = lp->next) {
+      if (!ircd_strcmp(lp->banstr, ban)) {
+	ban = 0; /* don't add ban */
+	lp->flags &= ~BAN_BURST_WIPEOUT; /* not wiping out */
+	break; /* new ban already existed; don't even repropagate */
+      } else if (!(lp->flags & BAN_BURST_WIPEOUT) &&
+		 !mmatch(lp->banstr, ban)) {
+	ban = 0; /* don't add ban unless wiping out bans */
+	break; /* new ban is encompassed by an existing one; drop */
+      } else if (!mmatch(ban, lp->banstr))
+	lp->flags |= BAN_OVERLAPPED; /* remove overlapping ban */
+
+      if (!lp->next)
+	break;
+    }
+
+    if (ban) { /* add the new ban to the end of the list */
+      /* Build the ban buffer for both relay variants. */
+      if (!*banpos10) {
+	banstr10[(*banpos10)++] = ' ';
+	banstr10[(*banpos10)++] = ':';
+	banstr10[(*banpos10)++] = '%';
+      } else
+	banstr10[(*banpos10)++] = ' ';
+      for (ptr = ban; *ptr; ptr++) /* add ban to buffer */
+	banstr10[(*banpos10)++] = *ptr;
+
+      if (!*banpos11) {
+	banstr11[(*banpos11)++] = ' ';
+	banstr11[(*banpos11)++] = ':';
+	banstr11[(*banpos11)++] = '%';
+      } else
+	banstr11[(*banpos11)++] = ' ';
+      for (ptr = ban; *ptr; ptr++) /* add ban to buffer */
+	banstr11[(*banpos11)++] = *ptr;
+
+      newban = make_ban(ban); /* create new ban */
+      strcpy(newban->who, "*");
+      newban->when = TStime();
+      newban->flags |= BAN_BURSTED;
+      newban->next = 0;
+      if (lp)
+	lp->next = newban; /* link it in */
+      else
+	chptr->banlist = newban;
+      new_bans++;
+    }
+  }
+
+  return new_bans;
+}
+
 /*
  * ms_burst - server message handler
  *
@@ -204,6 +303,10 @@ netride_modes(int parc, char **parv, const char *curr_key)
  * is sent upstream as reaction to a DESTRUCT message.  For
  * these BURST messages it is possible that the listed channel
  * members are already joined.
+ *
+ * The relayed BURST is built in two variants: the P10 variant must stay
+ * byte-identical to the 2.10.12 form; the P11 variant may add per-link
+ * extensions (see doc/P11.md 8.1).
  */
 int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 {
@@ -213,8 +316,16 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   struct Membership *member, *nmember;
   struct Ban *lp, **lp_p;
   unsigned int parse_flags = (MODE_PARSE_FORCE | MODE_PARSE_BURST);
-  int param, nickpos = 0, banpos = 0;
-  char modestr[BUFSIZE], nickstr[BUFSIZE], banstr[BUFSIZE];
+  int param, nickpos10 = 0, nickpos11 = 0, banpos10 = 0, banpos11 = 0;
+  int new_bans = 0;
+  int p11 = (Protocol(cptr) >= 11);
+  char modestr[BUFSIZE];
+  char nickstr10[BUFSIZE], nickstr11[BUFSIZE];
+  char banstr10[BUFSIZE], banstr11[BUFSIZE];
+
+  /* The link-protocol gate the P11 BURST extensions hang off; the two relay
+   * variants below are still identical, so nothing reads it yet. */
+  (void)p11;
 
   if (parc < 3)
     return protocol_violation(sptr,"Too few parameters for BURST");
@@ -374,61 +485,9 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
       break;
 
     case '%': /* parameter contains bans */
-      if (parse_flags & MODE_PARSE_SET) {
-	char *banlist = parv[param] + 1, *p = 0, *ban, *ptr;
-	struct Ban *newban;
-
-	for (ban = ircd_strtok(&p, banlist, " "); ban;
-	     ban = ircd_strtok(&p, 0, " ")) {
-	  ban = collapse(pretty_mask(ban));
-
-	    /*
-	     * Yeah, we should probably do this elsewhere, and make it better
-	     * and more general; this will hold until we get there, though.
-	     * I dislike the current add_banid API... -Kev
-	     *
-	     * I wish there were a better algo. for this than the n^2 one
-	     * shown below *sigh*
-	     */
-	  for (lp = chptr->banlist; lp; lp = lp->next) {
-	    if (!ircd_strcmp(lp->banstr, ban)) {
-	      ban = 0; /* don't add ban */
-	      lp->flags &= ~BAN_BURST_WIPEOUT; /* not wiping out */
-	      break; /* new ban already existed; don't even repropagate */
-	    } else if (!(lp->flags & BAN_BURST_WIPEOUT) &&
-		       !mmatch(lp->banstr, ban)) {
-	      ban = 0; /* don't add ban unless wiping out bans */
-	      break; /* new ban is encompassed by an existing one; drop */
-	    } else if (!mmatch(ban, lp->banstr))
-	      lp->flags |= BAN_OVERLAPPED; /* remove overlapping ban */
-
-	    if (!lp->next)
-	      break;
-	  }
-
-	  if (ban) { /* add the new ban to the end of the list */
-	    /* Build ban buffer */
-	    if (!banpos) {
-	      banstr[banpos++] = ' ';
-	      banstr[banpos++] = ':';
-	      banstr[banpos++] = '%';
-	    } else
-	      banstr[banpos++] = ' ';
-	    for (ptr = ban; *ptr; ptr++) /* add ban to buffer */
-	      banstr[banpos++] = *ptr;
-
-	    newban = make_ban(ban); /* create new ban */
-            strcpy(newban->who, "*");
-	    newban->when = TStime();
-	    newban->flags |= BAN_BURSTED;
-	    newban->next = 0;
-	    if (lp)
-	      lp->next = newban; /* link it in */
-	    else
-	      chptr->banlist = newban;
-	  }
-	}
-      } 
+      new_bans += burst_parse_bans(cptr, sptr, chptr, parv[param] + 1,
+				   parse_flags, banstr10, &banpos10,
+				   banstr11, &banpos11);
       param++; /* look at next param */
       break;
 
@@ -517,30 +576,42 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 	  if (!(acptr = findNUser(nick)) || cli_from(acptr) != cptr)
 	    continue; /* ignore this client */
 
-	  /* Build nick buffer */
-	  nickstr[nickpos] = nickpos ? ',' : ' '; /* first char */
-	  nickpos++;
+	  /* Build the nick buffer for both relay variants */
+	  nickstr10[nickpos10] = nickpos10 ? ',' : ' '; /* first char */
+	  nickpos10++;
+	  nickstr11[nickpos11] = nickpos11 ? ',' : ' '; /* first char */
+	  nickpos11++;
 
-	  for (ptr = nick; *ptr; ptr++) /* store nick */
-	    nickstr[nickpos++] = *ptr;
+	  for (ptr = nick; *ptr; ptr++) { /* store nick */
+	    nickstr10[nickpos10++] = *ptr;
+	    nickstr11[nickpos11++] = *ptr;
+	  }
 
 	  if (current_mode != last_mode) { /* if mode changed... */
 	    last_mode = current_mode;
 	    last_oplevel = oplevel;
 
-	    nickstr[nickpos++] = ':'; /* add a specifier */
-	    if (current_mode & CHFL_VOICE)
-	      nickstr[nickpos++] = 'v';
+	    nickstr10[nickpos10++] = ':'; /* add a specifier */
+	    nickstr11[nickpos11++] = ':'; /* add a specifier */
+	    if (current_mode & CHFL_VOICE) {
+	      nickstr10[nickpos10++] = 'v';
+	      nickstr11[nickpos11++] = 'v';
+	    }
 	    if (current_mode & CHFL_CHANOP)
             {
-              if (oplevel != MAXOPLEVEL)
-	        nickpos += ircd_snprintf(0, nickstr + nickpos, sizeof(nickstr) - nickpos, "%u", oplevel);
-              else
-                nickstr[nickpos++] = 'o';
+              if (oplevel != MAXOPLEVEL) {
+	        nickpos10 += ircd_snprintf(0, nickstr10 + nickpos10, sizeof(nickstr10) - nickpos10, "%u", oplevel);
+	        nickpos11 += ircd_snprintf(0, nickstr11 + nickpos11, sizeof(nickstr11) - nickpos11, "%u", oplevel);
+              } else {
+                nickstr10[nickpos10++] = 'o';
+                nickstr11[nickpos11++] = 'o';
+              }
             }
 	  } else if (current_mode & CHFL_CHANOP && oplevel != last_oplevel) { /* if just op level changed... */
-	    nickstr[nickpos++] = ':'; /* add a specifier */
-	    nickpos += ircd_snprintf(0, nickstr + nickpos, sizeof(nickstr) - nickpos, "%u", oplevel - last_oplevel);
+	    nickstr10[nickpos10++] = ':'; /* add a specifier */
+	    nickpos10 += ircd_snprintf(0, nickstr10 + nickpos10, sizeof(nickstr10) - nickpos10, "%u", oplevel - last_oplevel);
+	    nickstr11[nickpos11++] = ':'; /* add a specifier */
+	    nickpos11 += ircd_snprintf(0, nickstr11 + nickpos11, sizeof(nickstr11) - nickpos11, "%u", oplevel - last_oplevel);
             last_oplevel = oplevel;
 	  }
 
@@ -573,8 +644,10 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     } /* switch (*parv[param]) */
   } /* while (param < parc) */
 
-  nickstr[nickpos] = '\0';
-  banstr[banpos] = '\0';
+  nickstr10[nickpos10] = '\0';
+  nickstr11[nickpos11] = '\0';
+  banstr10[banpos10] = '\0';
+  banstr11[banpos11] = '\0';
 
   if (parse_flags & MODE_PARSE_SET) {
     modebuf_extract(mbuf, modestr + 1); /* for sending BURST onward */
@@ -582,10 +655,16 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   } else
     modestr[0] = '\0';
 
-  sendcmdto_serv_butone(sptr, CMD_BURST, cptr, "%H %Tu%s%s%s", chptr,
-			chptr->creationtime, modestr, nickstr, banstr);
+  /* Relay each variant to the downlinks that speak it; the two calls
+   * partition the downlinks at protocol 11. */
+  sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, 11, 0, "%H %Tu%s%s%s",
+			     chptr, chptr->creationtime, modestr, nickstr11,
+			     banstr11);
+  sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, 0, 11, "%H %Tu%s%s%s",
+			     chptr, chptr->creationtime, modestr, nickstr10,
+			     banstr10);
 
-  if (parse_flags & MODE_PARSE_WIPEOUT || banpos)
+  if (parse_flags & MODE_PARSE_WIPEOUT || new_bans)
     mode_ban_invalidate(chptr);
 
   if (parse_flags & MODE_PARSE_SET) { /* any modes changed? */
