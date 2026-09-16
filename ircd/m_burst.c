@@ -165,45 +165,63 @@ static int ban_meta_wins(const char *who_new, time_t when_new,
   return strcmp(who_new, who_old) < 0;
 }
 
-/** Append one entry to a relayed BURST ban list.
+/** Members of one BURST we can record for the relay.
  *
- * Both relay buffers are BUFSIZE bytes and every entry originates in the
- * incoming line, but a P10-learned ban gains up to 22 bytes of synthesised
- * metadata on its way to a P11 downlink, so the result is not bounded by
- * the input any more.  An entry that would not fit is dropped: losing a ban
- * from the relay is recoverable, writing past the buffer is not.
- *
- * @param[out] buf Ban list being built; it is a BUFSIZE buffer.
- * @param[in,out] pos Write position in \a buf.
- * @param[in] ban Mask to append.
- * @param[in] with_meta Non-zero to append the \<ts\> \<who\> of a P11 triple.
- * @param[in] when Set time, used when \a with_meta is non-zero.
- * @param[in] who Setter, used when \a with_meta is non-zero.
+ * An incoming BURST line is at most BUFSIZE bytes and every member of it
+ * costs a numeric and a separator, so a well-formed line can never reach
+ * this; it bounds a hostile one.
  */
-static void burst_append_ban(char *buf, int *pos, const char *ban,
-                             int with_meta, time_t when, const char *who)
+#define BURST_RELAY_MEMBERS (BUFSIZE / (NUMNICKLEN + 1) + 1)
+
+/** Bans of one BURST we can record for the relay.
+ *
+ * The ban section is tokenised into at most BUFSIZE / 2 tokens and every
+ * ban costs at least one of them; see #BURST_RELAY_MEMBERS.
+ */
+#define BURST_RELAY_BANS (BUFSIZE / 2 + 1)
+
+/** One member accepted from an incoming BURST, held for the relay. */
+struct BurstRelayMember {
+  struct Client *user;		/**< The member itself. */
+  unsigned int mode;		/**< Membership flags parsed for it. */
+  int oplevel;			/**< Op level parsed for it. */
+};
+
+/** One ban accepted from an incoming BURST, held for the relay.
+ *
+ * The two strings are not copied: they point into the channel's ban list,
+ * which is why ms_burst() sends the relay before it frees the overlapped
+ * and wiped-out bans.
+ */
+struct BurstRelayBan {
+  const char *mask;		/**< Canonicalised mask. */
+  time_t when;			/**< Set time we stored for it. */
+  const char *who;		/**< Setter we stored for it; "" relays as "*". */
+  int p11_only;			/**< Metadata-only update: P11 links only. */
+};
+
+/** Record one accepted ban for the relay, if there is room for it.
+ *
+ * @param[out] rbans Bans recorded so far.
+ * @param[in,out] nrbans Number of entries in \a rbans.
+ * @param[in] mask Canonicalised mask, owned by the channel's ban list.
+ * @param[in] when Set time we stored for the ban.
+ * @param[in] who Setter we stored for the ban.
+ * @param[in] p11_only Non-zero for a metadata-only update, which is
+ * relayed to P11 downlinks only because a P10 one cannot express it.
+ */
+static void burst_record_ban(struct BurstRelayBan *rbans, int *nrbans,
+                             const char *mask, time_t when, const char *who,
+                             int p11_only)
 {
-  /* The 20 is a safe upper bound for a decimal time_t. */
-  int need = (*pos ? 1 : 3) + (int)strlen(ban);
+  if (*nrbans >= BURST_RELAY_BANS)
+    return; /* unreachable for a BUFSIZE line; see BURST_RELAY_BANS */
 
-  if (with_meta)
-    need += 1 + 20 + 1 + (int)strlen(who);
-
-  if (*pos + need + 1 > BUFSIZE) /* the +1 keeps room for the '\0' */
-    return;
-
-  if (!*pos) {
-    buf[(*pos)++] = ' ';
-    buf[(*pos)++] = ':';
-    buf[(*pos)++] = '%';
-  } else
-    buf[(*pos)++] = ' ';
-
-  if (with_meta)
-    *pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%s %Tu %s",
-			  ban, when, who);
-  else
-    *pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%s", ban);
+  rbans[*nrbans].mask = mask;
+  rbans[*nrbans].when = when;
+  rbans[*nrbans].who = who;
+  rbans[*nrbans].p11_only = p11_only;
+  (*nrbans)++;
 }
 
 /** Parse the ban section of a BURST message and apply it to \a chptr.
@@ -215,9 +233,11 @@ static void burst_append_ban(char *buf, int *pos, const char *ban,
  * setter is repaired, because a ban is never dropped over its metadata.
  *
  * Each ban that is genuinely new to the channel is appended to the channel's
- * ban list and to both relay buffers, as a mask in the P10 one and as a
- * triple in the P11 one.  A mask we already knew is relayed to P11 downlinks
- * too, but only when its metadata changed here, so that they converge.
+ * ban list and recorded for the relay.  A mask we already knew is recorded
+ * too, but only when its metadata changed here and only for P11 downlinks,
+ * which are the only ones that can express the change, so that they
+ * converge.  Nothing is encoded here: burst_relay() does that once per link
+ * layout, when the whole message has been parsed and its size is known.
  *
  * @param[in] cptr Local server connection the BURST arrived on.
  * @param[in] sptr Server that sent the BURST.
@@ -225,17 +245,14 @@ static void burst_append_ban(char *buf, int *pos, const char *ban,
  * @param[in] section Ban section of the BURST, i.e. the text after the '%'.
  * @param[in] parse_flags Mode parser flags for this BURST; the bans are only
  * applied when MODE_PARSE_SET is set.
- * @param[out] banstr10 Ban text for the P10 relay variant.
- * @param[in,out] banpos10 Write position in \a banstr10.
- * @param[out] banstr11 Ban text for the P11 relay variant.
- * @param[in,out] banpos11 Write position in \a banstr11.
+ * @param[out] rbans Bans accepted so far, for the relay.
+ * @param[in,out] nrbans Number of entries in \a rbans.
  * @return Number of new bans added to the channel.
  */
 static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
                             struct Channel *chptr, char *section,
                             unsigned int parse_flags,
-                            char *banstr10, int *banpos10,
-                            char *banstr11, int *banpos11)
+                            struct BurstRelayBan *rbans, int *nrbans)
 {
   char *p = 0, *ban, *ptr;
   char *tok[BUFSIZE / 2];
@@ -249,8 +266,13 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
 
   for (ptr = ircd_strtok(&p, section, " "); ptr;
        ptr = ircd_strtok(&p, 0, " ")) {
-    if (ntok >= (int)(sizeof(tok) / sizeof(tok[0])))
-      break;
+    if (ntok >= (int)(sizeof(tok) / sizeof(tok[0]))) {
+      /* Running out of token slots means the section is not what it claims
+       * to be; applying the part that fitted would leave the ban list in a
+       * state neither side agreed on. */
+      protocol_violation(sptr, "BURST ban section has too many tokens");
+      return 0;
+    }
     tok[ntok++] = ptr;
   }
 
@@ -266,8 +288,11 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
     for (i = 0; i < ntok; i += 3) {
       /* strIsDigit() is vacuously true for the empty string. */
       if (!tok[i + 1][0] || !strIsDigit(tok[i + 1])) {
-	protocol_violation(sptr, "Invalid ban timestamp '%s' in BURST",
-			   tok[i + 1]);
+	/* protocol_violation() wallops the whole network, so report the
+	 * shape of the offending field, never its bytes. */
+	protocol_violation(sptr, "Invalid ban timestamp (%u bytes, not "
+			   "numeric) in BURST",
+			   (unsigned int)strlen(tok[i + 1]));
 	return 0;
       }
     }
@@ -289,6 +314,18 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
 	when = TStime();
       /* who[] is NICKLEN+1 bytes, so this truncates and stays terminated. */
       ircd_strncpy(whobuf, tok[i + 2], NICKLEN);
+      /* The setter is echoed in RPL_BANLIST and relayed onward verbatim, so
+       * a peer must not be able to park arbitrary bytes in it.  Anything
+       * that is not a nick (and not the "*" that means "unknown", which is
+       * not one either) degrades to "*"; the ban itself is still kept. */
+      if (strcmp(whobuf, "*")) {
+	const char *q;
+	for (q = whobuf; *q; q++)
+	  if (!IsNickChar(*q))
+	    break;
+	if (*q || !whobuf[0])
+	  strcpy(whobuf, "*");
+      }
       who = whobuf;
     } else {
       /* A P10 peer has nothing to say about a ban but its mask. */
@@ -313,8 +350,7 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
 	if (ban_meta_wins(who, when, lp->who, lp->when)) {
 	  ircd_strncpy(lp->who, who, NICKLEN);
 	  lp->when = when;
-	  lp->flags |= BAN_BURST_META;
-	  burst_append_ban(banstr11, banpos11, ban, 1, when, who);
+	  burst_record_ban(rbans, nrbans, lp->banstr, lp->when, lp->who, 1);
 	}
 	ban = 0; /* don't add ban */
 	lp->flags &= ~BAN_BURST_WIPEOUT; /* not wiping out */
@@ -331,16 +367,15 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
     }
 
     if (ban) { /* add the new ban to the end of the list */
-      /* Build the ban buffer for both relay variants: the P10 one carries
-       * the mask alone, the P11 one the triple. */
-      burst_append_ban(banstr10, banpos10, ban, 0, when, who);
-      burst_append_ban(banstr11, banpos11, ban, 1, when, who);
-
       newban = make_ban(ban); /* create new ban */
       ircd_strncpy(newban->who, who, NICKLEN);
       newban->when = when;
       newban->flags |= BAN_BURSTED;
       newban->next = 0;
+      /* Record the stored copy, not our locals: the relay reads these
+       * strings out of the ban list itself. */
+      burst_record_ban(rbans, nrbans, newban->banstr, newban->when,
+		       newban->who, 0);
       if (lp)
 	lp->next = newban; /* link it in */
       else
@@ -352,64 +387,228 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
   return new_bans;
 }
 
-/** Append one member to a relayed BURST nick list.
+/** Build the status specifier for one member of a relayed BURST line.
  *
- * Writes the leading ' ' or ',', the numeric and, when the status changed
- * since the previous member, a specifier for it.  \a last_mode and
- * \a last_oplevel track that state per relay variant, because the two
- * variants do not change status at the same members: the P10 variant never
- * sees the hidden-member bit at all.
+ * Two transitions cannot be expressed in the middle of a line and need a
+ * continuation line, which starts over in the "no status" state
+ * (doc/P11.md 8.1):
  *
- * @param[out] buf Nick list being built; it is a BUFSIZE buffer.
- * @param[in,out] pos Write position in \a buf.
- * @param[in] nick Numeric of the member to append.
- * @param[in] mode Membership flags parsed for this member.
- * @param[in] oplevel Op level parsed for this member.
- * @param[in,out] last_mode Status the list is currently in.
- * @param[in,out] last_oplevel Op level the list is currently at.
- * @param[in] with_delayed Non-zero on a P11 link, where the hidden
- * (delayed join) member group is expressed with a 'd' specifier; zero on a
- * P10 link, where CHFL_DELAYED is masked out so that it neither shows up as
- * a specifier nor counts as a status change (doc/P11.md 8.1).
+ *  - Returning to "no status" after a status group.  A bare ':' does not
+ *    say it: a receiver parsing \<numeric\>':' runs no specifier iteration
+ *    at all and carries the previous status forward, silently opping a
+ *    member that has none.
+ *  - An op level lower than the previous one.  The grammar only has
+ *    increments, and a decrement printed unsigned becomes a ten-digit
+ *    level that no receiver can parse back.
+ *
+ * @param[out] spec Buffer for the specifier; set to "" when none is needed.
+ * @param[in] speclen Size of \a spec.
+ * @param[in] mode Status of this member, already masked for the link.
+ * @param[in] oplevel Op level of this member.
+ * @param[in] last_mode Status the current line is in; 0 is "no status".
+ * @param[in] last_oplevel Op level the current line is at.
+ * @return Non-zero when \a spec holds the specifier to use, zero when this
+ * member cannot be expressed on the current line at all.
  */
-static void burst_append_member(char *buf, int *pos, const char *nick,
-                                unsigned int mode, int oplevel,
-                                unsigned int *last_mode, int *last_oplevel,
-                                int with_delayed)
+static int burst_relay_spec(char *spec, size_t speclen, unsigned int mode,
+                            int oplevel, unsigned int last_mode,
+                            int last_oplevel)
 {
-  const char *ptr;
+  size_t loc = 0;
 
-  if (!with_delayed)
-    mode &= ~CHFL_DELAYED;
+  assert(speclen > 3 + MAXOPLEVELDIGITS);
 
-  buf[*pos] = *pos ? ',' : ' '; /* first char */
-  (*pos)++;
+  if (mode != last_mode) {
+    if (!mode)
+      return 0; /* "no status" after a status group */
 
-  for (ptr = nick; *ptr; ptr++) /* store nick */
-    buf[(*pos)++] = *ptr;
-
-  if (mode != *last_mode) { /* if mode changed... */
-    *last_mode = mode;
-    *last_oplevel = oplevel;
-
-    buf[(*pos)++] = ':'; /* add a specifier */
-    if ((mode & CHFL_DELAYED) && !(mode & CHFL_VOICED_OR_OPPED))
-      buf[(*pos)++] = 'd';
+    spec[loc++] = ':';
+    if (mode & CHFL_DELAYED)
+      spec[loc++] = 'd';
     if (mode & CHFL_VOICE)
-      buf[(*pos)++] = 'v';
+      spec[loc++] = 'v';
     if (mode & CHFL_CHANOP) {
-      if (oplevel != MAXOPLEVEL)
-	*pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%u", oplevel);
+      /* A group change always restates the *absolute* level. */
+      if (oplevel == MAXOPLEVEL)
+        spec[loc++] = 'o';
       else
-	buf[(*pos)++] = 'o';
+        loc += ircd_snprintf(0, spec + loc, speclen - loc, "%u", oplevel);
     }
-  } else if ((mode & CHFL_CHANOP) && oplevel != *last_oplevel) {
-    /* if just op level changed... */
-    buf[(*pos)++] = ':'; /* add a specifier */
-    *pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%u",
-			  oplevel - *last_oplevel);
-    *last_oplevel = oplevel;
+  } else if ((mode & CHFL_CHANOP) && oplevel != last_oplevel) {
+    if (oplevel < last_oplevel)
+      return 0; /* a decrement is not an increment */
+
+    spec[loc++] = ':';
+    loc += ircd_snprintf(0, spec + loc, speclen - loc, "%u",
+                         oplevel - last_oplevel);
   }
+
+  spec[loc] = '\0';
+  return 1;
+}
+
+/** Start a (continuation) BURST line: "\<\#channel\> \<TS\>".
+ *
+ * @param[out] buf Line buffer.
+ * @param[in] buflen Size of \a buf.
+ * @param[in] chptr Channel being burst.
+ * @return Number of bytes now in \a buf.
+ */
+static int burst_relay_head(char *buf, size_t buflen, struct Channel *chptr)
+{
+  ircd_snprintf(&me, buf, buflen, "%H %Tu", chptr, chptr->creationtime);
+  return (int)strlen(buf);
+}
+
+/** Relay one accepted BURST onward, in one link layout.
+ *
+ * The line is rebuilt from what we accepted rather than forwarded verbatim,
+ * and the rebuilt form is not bounded by the incoming one: the P11 layout
+ * of a P10 ban list gains a "\<ts\> \<who\>" per mask, and a status change
+ * re-emits an absolute op level where the input had a two-byte increment.
+ * Whatever does not fit therefore continues on a further BURST line for the
+ * same channel and timestamp (doc/P11.md 8.1):
+ *
+ *  - Only the first line carries the mode block; it cannot be split.
+ *  - A continuation line starts in the "no status" state, so its first
+ *    member restates the absolute status of its group.
+ *  - Two transitions are inexpressible mid-line and start a continuation
+ *    line on their own account, see burst_relay_spec().
+ *  - The ban list rides on whichever line has room after the last member
+ *    and spills onto further lines by itself; ":%" opens the section on
+ *    each of them, and such a bans-only line is still parc > 3.
+ *
+ * sendcmdto_prot_serv_butone() prefixes "\<numeric\> \<token\> " itself and
+ * msgq_vmake() silently truncates whatever does not fit BUFSIZE, so the
+ * budget here counts that prefix and the CRLF and no line we build can be
+ * cut on the wire.  Truncation would not merely lose a tail: a P11 receiver
+ * rejects a ban section whose token count is not a multiple of three, which
+ * would strip every ban of the channel from the subtree below us.
+ *
+ * At least one line is always sent, even when nothing at all was accepted.
+ *
+ * @param[in] sptr Server the BURST came from; also the source of the relay.
+ * @param[in] cptr Local link it arrived on, which is skipped.
+ * @param[in] chptr Channel being burst.
+ * @param[in] modestr Mode block, already leading with a space, or "".
+ * @param[in] members Members we accepted, in the order they arrived.
+ * @param[in] nmembers Number of entries in \a members.
+ * @param[in] bans Bans we accepted, in the order they arrived.
+ * @param[in] nbans Number of entries in \a bans.
+ * @param[in] min_prot Lowest link protocol to send to, or 0 for no bound.
+ * @param[in] max_prot One past the highest link protocol, or 0 for none.
+ * @param[in] p11 Non-zero to build the P11 layout (the hidden-member 'd'
+ * specifier and ban triples), zero for the P10 one.
+ */
+static void burst_relay(struct Client *sptr, struct Client *cptr,
+                        struct Channel *chptr, const char *modestr,
+                        const struct BurstRelayMember *members, int nmembers,
+                        const struct BurstRelayBan *bans, int nbans,
+                        unsigned short min_prot, unsigned short max_prot,
+                        int p11)
+{
+  char line[BUFSIZE];
+  char entry[BUFSIZE];
+  char spec[4 + MAXOPLEVELDIGITS];
+  char scratch[NUMNICKLEN + 8];
+  unsigned int last_mode = 0;
+  int last_oplevel = 0;
+  int first_entry = 1, first_ban = 1;
+  int prefix_len, budget, len, elen;
+  int i, attempt;
+
+  /* A server numeric is two characters, but read the real width off the
+   * formatter rather than assume it.  %C only renders a numeric when the
+   * destination is a server, so every formatter here addresses &me. */
+  prefix_len = ircd_snprintf(&me, scratch, sizeof(scratch),
+                             "%C " TOK_BURST " ", sptr);
+  budget = BUFSIZE - 2 - prefix_len; /* the 2 is the CRLF */
+
+  len = burst_relay_head(line, sizeof(line), chptr);
+  /* The mode block cannot be split: a continuation line never carries one.
+   * It is bounded by the channel name and the simple modes with their
+   * arguments (limit, key, Apass, Upass), which together stay well inside
+   * the budget, so the first line never overflows it. */
+  ircd_snprintf(&me, line + len, sizeof(line) - len, "%s", modestr);
+  len = (int)strlen(line);
+
+  for (i = 0; i < nmembers; i++) {
+    unsigned int mode = members[i].mode
+                        & (CHFL_VOICED_OR_OPPED | (p11 ? CHFL_DELAYED : 0));
+    int oplevel = members[i].oplevel;
+
+    /* A hidden member never has status (doc/P11.md 8.1). */
+    if (mode & CHFL_VOICED_OR_OPPED)
+      mode &= ~CHFL_DELAYED;
+
+    for (attempt = 0; attempt < 2; attempt++) {
+      if (burst_relay_spec(spec, sizeof(spec), mode, oplevel, last_mode,
+                           last_oplevel)) {
+        ircd_snprintf(&me, entry, sizeof(entry), "%c%C%s",
+                      first_entry ? ' ' : ',', members[i].user, spec);
+        elen = (int)strlen(entry);
+        if (len + elen <= budget) {
+          strcpy(line + len, entry); /* checked against the budget above */
+          len += elen;
+          first_entry = 0;
+          last_mode = mode;
+          if (mode & CHFL_CHANOP)
+            last_oplevel = oplevel;
+          break;
+        }
+      }
+
+      /* Either the transition or the room ran out; continue on a fresh
+       * line, where the status starts over at "none", and encode this
+       * member again as its first entry. */
+      if (attempt)
+        break; /* unreachable: an entry is at most twelve bytes */
+      sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, min_prot, max_prot,
+                                 "%s", line);
+      len = burst_relay_head(line, sizeof(line), chptr);
+      first_entry = 1;
+      last_mode = 0;
+      last_oplevel = 0;
+    }
+  }
+
+  for (i = 0; i < nbans; i++) {
+    const char *who;
+
+    if (bans[i].p11_only && !p11)
+      continue; /* a metadata-only update says nothing to a P10 peer */
+
+    /* mode_parse_ban() always leaves a nick or a "*" behind, but a ban that
+     * somehow lost its setter would put an empty field on the wire. */
+    who = (bans[i].who && bans[i].who[0]) ? bans[i].who : "*";
+
+    for (attempt = 0; attempt < 2; attempt++) {
+      if (p11)
+        ircd_snprintf(&me, entry, sizeof(entry), "%s%s %Tu %s",
+                      first_ban ? " :%" : " ", bans[i].mask, bans[i].when,
+                      who);
+      else
+        ircd_snprintf(&me, entry, sizeof(entry), "%s%s",
+                      first_ban ? " :%" : " ", bans[i].mask);
+      elen = (int)strlen(entry);
+      if (len + elen <= budget) {
+        strcpy(line + len, entry); /* checked against the budget above */
+        len += elen;
+        first_ban = 0;
+        break;
+      }
+
+      if (attempt)
+        break; /* unreachable: an entry is at most ~131 bytes */
+      sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, min_prot, max_prot,
+                                 "%s", line);
+      len = burst_relay_head(line, sizeof(line), chptr);
+      first_ban = 1;
+    }
+  }
+
+  sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, min_prot, max_prot,
+                             "%s", line);
 }
 
 /*
@@ -491,12 +690,16 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   struct Membership *member, *nmember;
   struct Ban *lp, **lp_p;
   unsigned int parse_flags = (MODE_PARSE_FORCE | MODE_PARSE_BURST);
-  int param, nickpos10 = 0, nickpos11 = 0, banpos10 = 0, banpos11 = 0;
+  int param;
   int new_bans = 0;
   int p11 = (Protocol(cptr) >= 11);
   char modestr[BUFSIZE];
-  char nickstr10[BUFSIZE], nickstr11[BUFSIZE];
-  char banstr10[BUFSIZE], banstr11[BUFSIZE];
+  /* What we accept is recorded here and encoded afterwards, once per link
+   * layout: the relayed line is not bounded by the incoming one and may
+   * need continuation lines, which cannot be decided while parsing. */
+  struct BurstRelayMember rmembers[BURST_RELAY_MEMBERS];
+  struct BurstRelayBan rbans[BURST_RELAY_BANS];
+  int nrmembers = 0, nrbans = 0, rmembers_full = 0;
 
   if (parc < 3)
     return protocol_violation(sptr,"Too few parameters for BURST");
@@ -657,8 +860,7 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 
     case '%': /* parameter contains bans */
       new_bans += burst_parse_bans(cptr, sptr, chptr, parv[param] + 1,
-				   parse_flags, banstr10, &banpos10,
-				   banstr11, &banpos11);
+				   parse_flags, rbans, &nrbans);
       param++; /* look at next param */
       break;
 
@@ -667,9 +869,7 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 	struct Client *acptr;
 	char *nicklist = parv[param], *p = 0, *nick, *ptr;
 	unsigned int current_mode, base_mode;
-	unsigned int last_mode10, last_mode11;
 	int oplevel = -1;	/* Mark first field with digits: means the same as 'o' (but with level). */
-	int last_oplevel10 = 0, last_oplevel11 = 0;
 	struct Membership* member;
 
         /* Whether a status-less member is hidden is inferred from +D, except
@@ -686,9 +886,6 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
             && (chptr->mode.mode & MODE_DELJOINS))
             base_mode |= CHFL_DELAYED;
         current_mode = base_mode;
-        /* Both relay variants start out in the "no status" state: a hidden
-         * member is stated explicitly toward a P11 peer, never inferred. */
-        last_mode11 = last_mode10 = base_mode & ~CHFL_DELAYED;
 
 	for (nick = ircd_strtok(&p, nicklist, ","); nick;
 	     nick = ircd_strtok(&p, 0, ",")) {
@@ -773,11 +970,19 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 	  if (!(acptr = findNUser(nick)) || cli_from(acptr) != cptr)
 	    continue; /* ignore this client */
 
-	  /* Build the nick buffer for both relay variants */
-	  burst_append_member(nickstr11, &nickpos11, nick, current_mode,
-			      oplevel, &last_mode11, &last_oplevel11, 1);
-	  burst_append_member(nickstr10, &nickpos10, nick, current_mode,
-			      oplevel, &last_mode10, &last_oplevel10, 0);
+	  /* Record what we accepted, for burst_relay() to encode later. */
+	  if (nrmembers < BURST_RELAY_MEMBERS) {
+	    rmembers[nrmembers].user = acptr;
+	    rmembers[nrmembers].mode = current_mode;
+	    rmembers[nrmembers].oplevel = oplevel;
+	    nrmembers++;
+	  } else if (!rmembers_full) {
+	    /* Unreachable for a BUFSIZE line, see BURST_RELAY_MEMBERS.  Say
+	     * so once only: protocol_violation() wallops the whole network,
+	     * so one per member would be a flood of its own. */
+	    rmembers_full = 1;
+	    protocol_violation(sptr, "Too many members in one BURST line");
+	  }
 
 	  if (!(member = find_member_link(chptr, acptr)))
 	  {
@@ -803,6 +1008,13 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 	      member->status |= CHFL_BURST_ALREADY_OPPED;
 	    if (member->status & CHFL_VOICE)
 	      member->status |= CHFL_BURST_ALREADY_VOICED;
+	    /* A hidden member never has status, so reveal it before granting
+	     * any, as mode_process_clients() does.  Otherwise the member
+	     * carries both and every encoder that groups by status has to
+	     * guess which group it belongs to. */
+	    if ((current_mode & (CHFL_CHANOP | CHFL_VOICE))
+		&& IsDelayedJoin(member))
+	      RevealDelayedJoin(member);
 	    /* Synchronize with the burst. */
 	    member->status |= CHFL_BURST_JOINED | (current_mode & (CHFL_CHANOP|CHFL_VOICE));
 	    SetOpLevel(member, oplevel);
@@ -814,25 +1026,20 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
     } /* switch (*parv[param]) */
   } /* while (param < parc) */
 
-  nickstr10[nickpos10] = '\0';
-  nickstr11[nickpos11] = '\0';
-  banstr10[banpos10] = '\0';
-  banstr11[banpos11] = '\0';
-
   if (parse_flags & MODE_PARSE_SET) {
     modebuf_extract(mbuf, modestr + 1); /* for sending BURST onward */
     modestr[0] = modestr[1] ? ' ' : '\0';
   } else
     modestr[0] = '\0';
 
-  /* Relay each variant to the downlinks that speak it; the two calls
-   * partition the downlinks at protocol 11. */
-  sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, 11, 0, "%H %Tu%s%s%s",
-			     chptr, chptr->creationtime, modestr, nickstr11,
-			     banstr11);
-  sendcmdto_prot_serv_butone(sptr, CMD_BURST, cptr, 0, 11, "%H %Tu%s%s%s",
-			     chptr, chptr->creationtime, modestr, nickstr10,
-			     banstr10);
+  /* Relay each layout to the downlinks that speak it; the two calls
+   * partition the downlinks at protocol 11.  This must stay ahead of the
+   * ban loop below: the recorded bans point into the channel's ban list and
+   * that loop frees the overlapped and wiped-out entries. */
+  burst_relay(sptr, cptr, chptr, modestr, rmembers, nrmembers,
+	      rbans, nrbans, 11, 0, 1);
+  burst_relay(sptr, cptr, chptr, modestr, rmembers, nrmembers,
+	      rbans, nrbans, 0, 11, 0);
 
   if (parse_flags & MODE_PARSE_WIPEOUT || new_bans)
     mode_ban_invalidate(chptr);
