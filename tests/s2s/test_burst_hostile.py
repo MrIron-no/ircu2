@@ -30,6 +30,7 @@ import re
 
 import pytest
 
+from cap_helpers import collect_wallops, oper_up
 from p11_server import P11Server, strip_msg_tags
 
 pytestmark = pytest.mark.single_server
@@ -134,6 +135,25 @@ def _members(lines: list[str]) -> list[tuple[str, str]]:
             numeric, _, spec = entry.partition(":")
             out.append((numeric, spec))
     return out
+
+
+def _creation_ts(stub: P11Server, chan: str) -> str | None:
+    """The creation TS the hub stamped on ``chan``, read off the stub's feed.
+
+    When a hub client joins a fresh channel the hub relays a CREATE (``C``,
+    whose channel field may be a comma list) to every linked server; a BURST
+    (``B``) carries the same TS.  Either tells the stub the exact timestamp to
+    echo so its own burst lands on the equal-TS path.
+    """
+    lc = chan.lower()
+    for line in stub.received:
+        parts = strip_msg_tags(line).split()
+        if len(parts) >= 4 and parts[1] == "C" and lc in [
+                c.lower() for c in parts[2].split(",")]:
+            return parts[3]
+        if len(parts) >= 4 and parts[1] == "B" and parts[2].lower() == lc:
+            return parts[3]
+    return None
 
 
 def _ban_section(line: str) -> str:
@@ -508,3 +528,190 @@ async def test_ban_only_continuation_line_is_accepted_downstream(ircd_hub,
         )
     finally:
         await _close(src)
+
+
+# --------------------------------------------------------------------------
+# security fix-up 2: memory safety of the relay packer
+# --------------------------------------------------------------------------
+
+
+async def _debug_oper(make_client, nick: str):
+    """A +g oper on the hub, so protocol_violation() WALLOPS reach it."""
+    op = await make_client(nick)
+    await oper_up(op)
+    await op.send(f"MODE {nick} +g")
+    await asyncio.sleep(0.3)
+    op._buffer.clear()
+    return op
+
+
+async def test_add_then_del_same_ban_does_not_corrupt_relay(ircd_hub,
+                                                            make_client):
+    """A ban added then deleted in one BURST must not corrupt the relay.
+
+    ``burst_parse_bans()`` records the first ``%``-section ban for the relay,
+    then a later ``+b-b`` mode string in the *same* BURST deletes it:
+    ``mode_parse()`` -> ``mode_process_bans()`` -> ``free_ban()`` pushes the
+    ban-list slot onto the static free-list.  A second ``%``-section mask then
+    runs ``make_ban()``, which pops that very slot back off the free-list
+    (LIFO) and overwrites it with the second mask.  A relay that had aliased
+    the slot would now read the *second* mask where it recorded the first, so
+    the first mask vanishes from the relay and the second is emitted twice --
+    freed-memory corruption an ASan build cannot see, because the slot is
+    recycled through ircu's own free-list, never to the allocator.
+
+    The source is a P10 stub on purpose: a P11 ban section is triples, and a
+    triple must be the trailing ``:``-parameter, so it cannot precede the
+    ``+b-b`` that frees it on one line.  A P10 section is bare masks, so a
+    single mask can sit ahead of the ``+b-b`` and be recorded, then freed.
+    The P11 downlink is the observer because it is the layout whose arity a
+    corrupted mask would break.
+
+    The channel is created on the hub first, and the burst carries the hub's
+    exact creation TS: only an equal TS takes the MODE_PARSE_SET path without
+    the net-ride check, and the net-ride check would reject the ``+b-b`` mode
+    string outright for containing a '-'.
+    """
+    chan = "#uaf1"
+    mask1 = "*!*@uaf-one.example"
+    mask2 = "*!*@uaf-two.example"
+    src, p11, _p10 = await _source_and_downlinks(ircd_hub, 10)
+    try:
+        # Create the channel on the hub, then learn the TS it stamped by
+        # reading the CREATE the hub relays to the linked source stub.
+        maker = await _join(make_client, "uafmaker", chan)
+        await src.drain_messages(timeout=2.0)
+        ts = _creation_ts(src, chan)
+        assert ts is not None, "never saw the hub's CREATE for the channel"
+        await p11.drain_messages(timeout=1.5)
+        p11.received.clear()
+
+        # %mask1 records the ban; +b-b mask1 mask1 frees its slot; %mask2 then
+        # reuses that freed slot.  All at the hub's TS so net-ride is skipped.
+        await src._send(
+            f"{src.server_numnick} B {chan} {ts} "
+            f"%{mask1} +b-b {mask1} {mask1} %{mask2}"
+        )
+        await p11.drain_messages(timeout=2.5)
+
+        lines = _burst_lines(p11, chan)
+        assert lines, "the P11 downlink saw no relay at all"
+        _assert_fits_wire(lines, "the P11 downlink")
+
+        # _ban_triples() asserts the multiple-of-three arity itself; here we
+        # add that no mask is empty and that the recorded mask is the one that
+        # was recorded, not the value that later landed in the reused slot.
+        triples = _ban_triples(lines)
+        relayed_masks = [m for m, _ts, _who in triples]
+        for m, tstok, who in triples:
+            assert m, f"relay carries an empty ban mask: {lines!r}"
+            assert tstok.isdigit(), f"non-numeric ban ts {tstok!r}: {lines!r}"
+            assert who, f"relay carries an empty ban setter: {lines!r}"
+        assert mask1 in relayed_masks, (
+            f"the first ban vanished from the relay -- its recorded slot was "
+            f"freed and reused: {relayed_masks!r}"
+        )
+        assert mask2 in relayed_masks, (
+            f"the second ban is missing from the relay: {relayed_masks!r}"
+        )
+        assert relayed_masks.count(mask2) == 1, (
+            f"the second ban is duplicated -- a freed slot was aliased: "
+            f"{relayed_masks!r}"
+        )
+
+        # The hub must still be alive and answer a later command.
+        await _sync(maker)
+        client = await _join(make_client, "uafwatch", chan)
+        await _sync(client)
+    finally:
+        await _close(src, p11, _p10)
+
+
+async def test_huge_oplevel_does_not_overflow_spec(ircd_hub, make_client):
+    """A vast op level must be clamped, not wrapped and written out of bounds.
+
+    The parse-time accumulator would overflow ``int`` before the
+    ``> MAXOPLEVEL`` clamp fired, leaving a negative op level; the relay then
+    printed it with ``%u`` (ten digits) and its NUL terminator landed past the
+    seven-byte spec buffer.  With the clamp the level is pinned to MAXOPLEVEL,
+    which the relay emits as ``:o`` -- no digits at all.
+    """
+    chan = "#huge1"
+    src, p11, _p10 = await _source_and_downlinks(ircd_hub, 11)
+    try:
+        u1 = await src.introduce_user("huge1")
+        await p11.drain_messages(timeout=1.5)
+
+        await src._send(
+            f"{src.server_numnick} B {chan} 1700000000 +t {u1}:3000000000"
+        )
+        await p11.drain_messages(timeout=2.5)
+
+        lines = _burst_lines(p11, chan)
+        assert lines, "the P11 downlink saw no relay at all"
+        _assert_fits_wire(lines, "the P11 downlink")
+        for line in lines:
+            assert not HUGE_OPLEVEL.search(line), (
+                f"relay carries an op level that wrapped around zero: {line!r}"
+            )
+        # No member specifier may carry a number longer than three digits;
+        # MAXOPLEVEL is 999 and is itself emitted as ':o', not ':999'.
+        for _numeric, spec in _members(lines):
+            assert not re.search(r"\d{4,}", spec), (
+                f"member specifier carries an over-long op level: {spec!r}"
+            )
+
+        # The hub must still be alive and answer a later command.
+        client = await _join(make_client, "hugewatch", chan)
+        await _sync(client)
+    finally:
+        await _close(src, p11, _p10)
+
+
+async def test_oversized_channel_name_is_rejected(ircd_hub, make_client):
+    """A server-sourced BURST with a name past CHANNELLEN must be rejected.
+
+    A server BURST escapes get_channel()'s CHANNELLEN truncation (that is
+    gated on MyUser), so a peer could otherwise create a ~490-byte channel
+    whose relay head leaves no room for members or bans.  ms_burst() now
+    rejects the name up front with a protocol violation and never creates the
+    channel.
+    """
+    chan = "#" + "a" * 419
+    op = await _debug_oper(make_client, "bignameop")
+    src = await _link(ircd_hub, "services.test.net", 4, 11)
+    try:
+        u1 = await src.introduce_user("bign1")
+        await src._send(f"{src.server_numnick} B {chan} 1700000000 +t {u1}")
+
+        wallops = await collect_wallops(op, seconds=3.0)
+        assert any("Invalid channel name" in w for w in wallops), (
+            f"expected an 'Invalid channel name' protocol violation; "
+            f"saw {wallops!r}"
+        )
+
+        # The channel must not exist: NAMES for it lists no members.  (A hub
+        # client's own query is truncated to CHANNELLEN, but that shorter name
+        # does not exist either, so the reply is empty regardless.)
+        assert await _names(op, chan) == {}, (
+            "the over-long channel was created despite the rejection"
+        )
+
+        # The hub must still be alive and answer a later command.
+        await _sync(op)
+    finally:
+        await _close(src)
+
+
+@pytest.mark.skip(
+    reason="A zombie delayed member (a member kicked on a link beyond the "
+    "re-bursting peer, still listed by that peer) needs at least three "
+    "servers to construct: in the single_server harness a KICK of a stub "
+    "user is propagated to the stub and the membership is removed outright, "
+    "so the hub never holds a zombie.  The !IsZombie guard is covered by the "
+    "burst_state/ multi_server suite; the fix ships regardless."
+)
+async def test_zombie_delayed_member_not_revealed_on_relink(ircd_hub,
+                                                           make_client):
+    """A re-bursted zombie delayed member must not be revealed to locals."""
+    raise NotImplementedError
