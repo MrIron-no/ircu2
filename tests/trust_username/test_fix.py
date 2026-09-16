@@ -10,7 +10,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 from trust_username.helpers import (
     apply_hide,
@@ -33,7 +33,7 @@ _HIDE_PATHS = [
 @pytest.fixture
 async def services(ircd_network):
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",

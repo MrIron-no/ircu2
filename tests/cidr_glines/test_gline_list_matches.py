@@ -25,7 +25,7 @@ import time
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.single_server
@@ -175,7 +175,7 @@ async def test_family_ambiguous_mask_surfaces_for_concrete_ip(ircd_hub, oper):
     ("services.test.net"); these tests run sequentially, not
     concurrently, so there's no connection clash with other tests using it.
     """
-    srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+    srv = P11Server(name="services.test.net", numeric=4, password="testpass")
     await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
     await srv.handshake()
     now = int(time.time())
@@ -184,7 +184,7 @@ async def test_family_ambiguous_mask_surfaces_for_concrete_ip(ircd_hub, oper):
             f"{srv._num} GL * +ambivictim@::/0 3600 {now} {now + 3600} :zero prefix test"
         )
         # Keep the services link open until the query is answered:
-        # P10Server.disconnect() aborts the socket (RST), and an RST
+        # P11Server.disconnect() aborts the socket (RST), and an RST
         # arriving before the ircd reads the GL line discards it from
         # the receive buffer, so disconnecting right after _send()
         # loses the G-line on a timing race. The GL also lands

@@ -89,7 +89,7 @@ Each PR has its own directory:
 
 ```
 irc_client.py          # Async IRC client for client-level testing
-p10_server.py          # Fake P10 server for server-to-server testing
+p11_server.py          # Fake P11 (or P10) server for server-to-server testing
 conftest.py            # pytest fixtures (ircd_hub, ircd_network, make_client)
   pr59_part_messages/
     test_fix.py          # TDD: reproduces the exact bug the PR fixes
@@ -98,7 +98,7 @@ conftest.py            # pytest fixtures (ircd_hub, ircd_network, make_client)
     test_fix.py
     test_edge_cases.py
   pr62_remote_x/
-    test_fix.py              # S2S tests using P10Server for OPMODE +x and ACCOUNT
+    test_fix.py              # S2S tests using P11Server for OPMODE +x and ACCOUNT
     test_edge_cases.py
     test_privilege_check.py  # U:line privilege tiers (CONF_UWORLD vs CONF_UWORLD_OPER)
     test_umode_ordering.py   # send_umode_out() / hide_hostmask() ordering
@@ -188,10 +188,10 @@ The protocol number is negotiated per link from the SERVER line (`J10` /
 `J11`); the tree announces J11 and clamps a J10 peer down to P10.  The P11
 extensions — message-tag prefixes and TAGMSG, the `+z` TLS fingerprint
 parameter, remote `OPMODE +x`, and already-authed `ACCOUNT` updates — are
-sent only on P11 links.  `P10Server` announces J11 by default; pass
+sent only on P11 links.  `P11Server` announces J11 by default; pass
 `protocol=10` to act as a legacy peer.
 
-Services (`P10Server`, numeric 4) attach to **C** (C sets `HUB` so it can
+Services (`P11Server`, numeric 4) attach to **C** (C sets `HUB` so it can
 accept that server link).  Assertions check that remote `OPMODE +x`,
 already-authed `ACCOUNT` flag updates, and `+z` TLS fingerprint tokens on
 NICK/umode bursts never reach **A**.  On **u2.10.12.19 and earlier**, a
@@ -240,12 +240,12 @@ msg = await client.send_and_expect("NAMES #channel", "366")
 
 ## P10 Server API
 
-`p10_server.py` provides `P10Server` — a fake IRC server that connects to ircd on its server port and speaks the P10 protocol. This enables testing server-to-server behavior (OPMODE, ACCOUNT, etc.) that can't be triggered from client connections.
+`p11_server.py` provides `P11Server` — a fake IRC server that connects to ircd on its server port and speaks the P11 protocol (P10 on request). This enables testing server-to-server behavior (OPMODE, ACCOUNT, etc.) that can't be triggered from client connections.
 
 ```python
-from p10_server import P10Server
+from p11_server import P11Server
 
-srv = P10Server("services.test.net", numeric=4, password="testpass")
+srv = P11Server("services.test.net", numeric=4, password="testpass")
 await srv.connect("127.0.0.1", 4400)
 await srv.handshake()
 
@@ -285,7 +285,7 @@ The P10 server handles the full handshake (PASS, SERVER, burst, EB/EA), auto-res
 3. Write `test_fix.py` — reproduce the bug/feature
 4. Write `test_edge_cases.py` — try to break it
 5. Use `@pytest.mark.single_server` or `@pytest.mark.multi_server`
-6. For S2S protocol tests, use `P10Server` to connect as a fake server
+6. For S2S protocol tests, use `P11Server` to connect as a fake server
 7. Use the `/ircu2-test` Claude skill for automated test generation
 
 ## Troubleshooting

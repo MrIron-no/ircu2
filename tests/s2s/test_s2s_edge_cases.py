@@ -9,13 +9,13 @@ import time
 import pytest
 
 from common import whois
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.single_server
 
 
-async def _link(hub, name="notulined.test.net", numeric=5) -> P10Server:
-    srv = P10Server(name=name, numeric=numeric, password="testpass", server_flags="")
+async def _link(hub, name="notulined.test.net", numeric=5) -> P11Server:
+    srv = P11Server(name=name, numeric=numeric, password="testpass", server_flags="")
     await srv.connect(hub["host"], hub["server_port"])
     await srv.handshake()
     return srv

@@ -26,7 +26,7 @@ from s2s.cap_sidecar import SidecarCapStub, SIDECAR_PORT, SIDECAR_SERVER_NAME
 from conftest import docker_exec
 from debug_support import docker_logs
 from irc_client import IRCClient
-from p10_server import server_numeric
+from p11_server import server_numeric
 
 NETWORK_LOG = "/tmp/ircd-network.log"
 STUB_NUM = server_numeric(6)          # cap_stub_main.py default --numeric 6

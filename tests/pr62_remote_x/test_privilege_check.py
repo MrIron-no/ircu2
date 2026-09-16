@@ -18,7 +18,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.multi_server
@@ -33,7 +33,7 @@ async def uworld_nooper(ircd_network):
     but NOT CONF_UWORLD_OPER.
     """
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="uworldonly.test.net",
         numeric=6,
         password="testpass",
@@ -49,7 +49,7 @@ async def uworld_nooper(ircd_network):
 async def services(ircd_network):
     """Connect the fully-privileged U:lined services server (has oper flag)."""
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -259,7 +259,7 @@ async def test_notulined_server_cannot_send_plus_x(ircd_network):
     """
     hub = ircd_network["hub"]
 
-    rogue = P10Server(
+    rogue = P11Server(
         name="notulined.test.net",
         numeric=5,
         password="testpass",

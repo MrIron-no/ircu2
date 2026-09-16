@@ -3,7 +3,7 @@
 import asyncio
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 HIDDEN_HOST_SUFFIX = "users.undernet.org"
 
@@ -28,7 +28,7 @@ async def oper_up(client: IRCClient, name: str = "testoper", password: str = "op
 
 
 async def hide_via_services(
-    services: P10Server,
+    services: P11Server,
     nick: str,
     account: str = "HideAcct",
     *,
@@ -52,7 +52,7 @@ async def hide_via_services(
 
 
 async def apply_hide(
-    services: P10Server,
+    services: P11Server,
     nick: str,
     account: str,
     *,

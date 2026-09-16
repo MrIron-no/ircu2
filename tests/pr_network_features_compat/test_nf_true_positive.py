@@ -20,7 +20,7 @@ import time
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server, strip_msg_tags
+from p11_server import P11Server, strip_msg_tags
 
 pytestmark = pytest.mark.multi_server
 
@@ -28,7 +28,7 @@ pytestmark = pytest.mark.multi_server
 @pytest.fixture
 async def services(ircd_network):
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -43,7 +43,7 @@ async def services(ircd_network):
 async def spy(ircd_network):
     """Non-U:lined peer used only as a wire spy on the hub."""
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="notulined.test.net",
         numeric=5,
         password="testpass",
@@ -74,7 +74,7 @@ def _ac_for_numnick(lines: list[str], numnick: str) -> list[str]:
 
 
 async def _collect_matching(
-    spy: P10Server,
+    spy: P11Server,
     predicate,
     *,
     seconds: float = 2.5,

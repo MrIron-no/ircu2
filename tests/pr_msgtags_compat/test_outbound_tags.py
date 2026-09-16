@@ -7,7 +7,7 @@ import pytest
 from irc_client import IRCClient
 
 from .helpers import join_synced
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.multi_server
@@ -16,7 +16,7 @@ pytestmark = pytest.mark.multi_server
 @pytest.fixture
 async def services(ircd_network):
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -126,7 +126,7 @@ async def test_hub_forwards_time_tag_on_s2s_channel(ircd_network, services):
 async def p10_peer(ircd_network):
     """Legacy peer that announces J10; it must never receive P11 extensions."""
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="notulined.test.net",
         numeric=5,
         password="testpass",
@@ -139,7 +139,7 @@ async def p10_peer(ircd_network):
     await srv.disconnect()
 
 
-async def _wait_line(srv: P10Server, token: str, contain: str,
+async def _wait_line(srv: P11Server, token: str, contain: str,
                      timeout: float = 5.0) -> str:
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
@@ -150,7 +150,7 @@ async def _wait_line(srv: P10Server, token: str, contain: str,
     raise TimeoutError(f"no {token!r} line containing {contain!r} from {srv.name}")
 
 
-async def _lines_with_token(srv: P10Server, token: str, seconds: float) -> list[str]:
+async def _lines_with_token(srv: P11Server, token: str, seconds: float) -> list[str]:
     seen: list[str] = []
     deadline = asyncio.get_event_loop().time() + seconds
     while asyncio.get_event_loop().time() < deadline:
@@ -164,7 +164,7 @@ async def _lines_with_token(srv: P10Server, token: str, seconds: float) -> list[
     return seen
 
 
-async def _seat_bots(services: P10Server, p10_peer: P10Server, channel: str,
+async def _seat_bots(services: P11Server, p10_peer: P11Server, channel: str,
                      tag: str) -> None:
     """Home one bot on the P11 link and one on the P10 link, both in channel.
 

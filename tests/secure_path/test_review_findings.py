@@ -23,7 +23,7 @@ import contextlib
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 from secure_path.helpers import (
     channel_mode_flags as _channel_mode_flags,
     collect_whois as _collect_whois,
@@ -57,7 +57,7 @@ async def _squit_tls_leaf(op: IRCClient) -> None:
     await _drain(op, 1.5)
 
 
-async def _ping_loop(gateway: P10Server) -> None:
+async def _ping_loop(gateway: P11Server) -> None:
     try:
         while gateway.connected:
             await gateway.drain_messages(timeout=1.0)
@@ -69,7 +69,7 @@ async def _ping_loop(gateway: P10Server) -> None:
 async def _tls_gateway(hub: dict, name: str, numeric: int, flags: str = "s"):
     """Fake P10 server linked to the hub over TLS, with a keepalive task."""
     ctx = client_ssl_context(cert="tlspeer")
-    srv = P10Server(name=name, numeric=numeric, password="testpass",
+    srv = P11Server(name=name, numeric=numeric, password="testpass",
                     server_flags=flags)
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     await srv.handshake()

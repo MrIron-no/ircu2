@@ -49,7 +49,7 @@ import pytest
 
 from cap_helpers import make_cap_client
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.nf_compat
 
@@ -77,7 +77,7 @@ def _tag_has(tags: str, key: str) -> bool:
 async def spy_on_b(ircd_nf_compat):
     """P10 peer on B to observe what B relays toward other servers (incl. A)."""
     b = ircd_nf_compat["b"]
-    spy = P10Server(
+    spy = P11Server(
         name="spy.test.net",
         numeric=7,
         password="testpass",

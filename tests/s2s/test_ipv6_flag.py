@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.single_server
 
@@ -41,14 +41,14 @@ def _server_flags(lines: list[str]) -> dict[str, str]:
     return flags
 
 
-async def _link(hub, **kwargs) -> P10Server:
-    srv = P10Server(password="testpass", **kwargs)
+async def _link(hub, **kwargs) -> P11Server:
+    srv = P11Server(password="testpass", **kwargs)
     await srv.connect(hub["host"], hub["server_port"])
     await srv.handshake()
     return srv
 
 
-async def _read_until_closed(srv: P10Server, timeout: float) -> list[str]:
+async def _read_until_closed(srv: P11Server, timeout: float) -> list[str]:
     lines: list[str] = []
     deadline = time.monotonic() + timeout
     while True:
@@ -62,7 +62,7 @@ async def _read_until_closed(srv: P10Server, timeout: float) -> list[str]:
 
 
 async def test_p10_peer_without_ipv6_flag_is_refused(ircd_hub):
-    srv = P10Server(name="services.test.net", numeric=4, password="testpass",
+    srv = P11Server(name="services.test.net", numeric=4, password="testpass",
                     protocol=10, announce_ipv6=False)
     assert "6" not in srv.server_flags
     try:

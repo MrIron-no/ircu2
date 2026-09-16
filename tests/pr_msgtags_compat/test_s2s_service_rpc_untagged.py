@@ -17,7 +17,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.single_server
 
@@ -25,7 +25,7 @@ pytestmark = pytest.mark.single_server
 @pytest.fixture
 async def services(ircd_hub):
     """Fake P10 services server linked to the hub, with SASL enabled."""
-    srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+    srv = P11Server(name="services.test.net", numeric=4, password="testpass")
     await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
     await srv.handshake()
     await srv.send_config("sasl.server", "services.test.net")

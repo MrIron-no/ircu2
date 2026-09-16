@@ -21,7 +21,7 @@ import contextlib
 import pytest
 
 from irc_client import IRCClient, Message
-from p10_server import P10Server
+from p11_server import P11Server
 from secure_path.helpers import (
     channel_mode_flags as _channel_mode_flags,
     collect_whois as _collect_whois,
@@ -49,7 +49,7 @@ async def _ensure_tls_leaf_link(hub: dict) -> None:
         await op.disconnect()
 
 
-async def _gateway_ping_loop(gateway: P10Server) -> None:
+async def _gateway_ping_loop(gateway: P11Server) -> None:
     """Keep the S2S link alive by answering PINGs while tests run clients."""
     try:
         while gateway.connected:
@@ -65,7 +65,7 @@ async def tls_gateway(ircd_tls_network, request):
     downstream_name = f"plain-{request.node.name[:20]}.test.net"
     downstream_num = 50 + (hash(request.node.nodeid) % 200)
     ctx = client_ssl_context(cert="tlspeer")
-    srv = P10Server(
+    srv = P11Server(
         name=TLS_GATEWAY,
         numeric=TLS_GATEWAY_NUM,
         password="testpass",
@@ -90,7 +90,7 @@ async def tls_gateway(ircd_tls_network, request):
         await srv.disconnect()
 
 
-async def _gateway_ready(gateway: P10Server) -> None:
+async def _gateway_ready(gateway: P11Server) -> None:
     """No-op placeholder; the fixture keeps the gateway link alive."""
     if not gateway.connected:
         raise ConnectionError("TLS gateway server link is down")

@@ -23,7 +23,7 @@ import ssl
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 from tls_certs import client_ssl_context, fingerprint
 
 pytestmark = [pytest.mark.tls, pytest.mark.asyncio]
@@ -266,7 +266,7 @@ async def test_server_soft_port_fingerprint_accepts_matching_selfsigned(
     ircd_tls_network,
 ):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-selfsigned.test.net", numeric=46, password="testpass")
+    srv = P11Server(name="tlspeer-selfsigned.test.net", numeric=46, password="testpass")
     ctx = client_ssl_context(cert="selfsigned")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -278,7 +278,7 @@ async def test_server_soft_port_fingerprint_accepts_matching_selfsigned(
 
 async def test_server_soft_port_fingerprint_accepts_matching_expired(ircd_tls_network):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-expired.test.net", numeric=47, password="testpass")
+    srv = P11Server(name="tlspeer-expired.test.net", numeric=47, password="testpass")
     ctx = client_ssl_context(cert="expired")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -292,7 +292,7 @@ async def test_server_soft_port_fingerprint_accepts_matching_ca_signed(
     ircd_tls_network,
 ):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer.test.net", numeric=40, password="testpass")
+    srv = P11Server(name="tlspeer.test.net", numeric=40, password="testpass")
     ctx = client_ssl_context(cert="tlspeer")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -304,7 +304,7 @@ async def test_server_soft_port_fingerprint_accepts_matching_ca_signed(
 
 async def test_server_soft_port_fingerprint_rejects_mismatch(ircd_tls_network):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-bad.test.net", numeric=41, password="testpass")
+    srv = P11Server(name="tlspeer-bad.test.net", numeric=41, password="testpass")
     ctx = client_ssl_context(cert="tlspeer")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -319,7 +319,7 @@ async def test_server_soft_port_fingerprint_rejects_wrong_cert_for_pin(
 ):
     """Pinned Connect for tlspeer rejects a different presented cert."""
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer.test.net", numeric=42, password="testpass")
+    srv = P11Server(name="tlspeer.test.net", numeric=42, password="testpass")
     ctx = client_ssl_context(cert="selfsigned")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -343,7 +343,7 @@ async def test_server_ca_port_rejects_missing_peer_cert(ircd_tls_network):
 
 async def test_server_ca_port_accepts_ca_signed_peer_cert(ircd_tls_network):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-ca.test.net", numeric=43, password="testpass")
+    srv = P11Server(name="tlspeer-ca.test.net", numeric=43, password="testpass")
     ctx = client_ssl_context(cert=_CA_VALID_CERT)
     await srv.connect_tls(hub["host"], hub["server_tls_ca_port"], ctx)
     try:
@@ -366,7 +366,7 @@ async def test_server_ca_port_rejects_hostname_mismatch_after_server(
 ):
     """CA-valid cert whose CN/SAN does not match Connect name fails after SERVER."""
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-ca.test.net", numeric=48, password="testpass")
+    srv = P11Server(name="tlspeer-ca.test.net", numeric=48, password="testpass")
     # tlspeer is CA-signed but CN is tlspeer.test.net, not tlspeer-ca.test.net
     ctx = client_ssl_context(cert="tlspeer")
     await srv.connect_tls(hub["host"], hub["server_tls_ca_port"], ctx)

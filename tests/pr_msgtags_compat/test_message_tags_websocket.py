@@ -10,7 +10,7 @@ import re
 import pytest
 
 from irc_ws_client import IRCWebSocketClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 from .helpers import tag_has, tag_value
 
@@ -28,7 +28,7 @@ def _ws_url(host: str) -> str:
 @pytest.fixture
 async def services(ircd_network):
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
