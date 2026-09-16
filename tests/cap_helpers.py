@@ -8,7 +8,7 @@ import re
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server, strip_msg_tags
+from p11_server import P11Server, strip_msg_tags
 
 
 async def make_cap_client(
@@ -42,9 +42,9 @@ async def oper_up(client: IRCClient, name: str = "testoper", password: str = "op
             raise AssertionError(f"OPER failed: {msg}")
 
 
-async def connect_services(hub: dict) -> P10Server:
+async def connect_services(hub: dict) -> P11Server:
     """Connect U:lined services to the hub and complete the handshake."""
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -54,7 +54,7 @@ async def connect_services(hub: dict) -> P10Server:
     return srv
 
 
-def burst_lines(srv: P10Server, token: str) -> list[str]:
+def burst_lines(srv: P11Server, token: str) -> list[str]:
     """Return handshake-received lines whose P10 token matches ``token``."""
     out = []
     for line in srv.received:

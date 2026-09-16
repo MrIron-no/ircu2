@@ -6,7 +6,7 @@ import re
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 from .helpers import parse_tag_list, tag_has, tag_value
 
@@ -19,7 +19,7 @@ STAMP = "2020-06-15T08:30:00.123Z"
 @pytest.fixture
 async def services(ircd_network):
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",

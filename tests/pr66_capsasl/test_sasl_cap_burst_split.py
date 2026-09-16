@@ -21,7 +21,7 @@ on the *split*. Two defects combined to produce that:
 Topology in these tests (fake ``services.test.net`` plays ``shub``)::
 
     hub.test.net --- services.test.net --+-- channels.test.net  (sasl.server)
-                     (fake, P10Server)   +-- other.test.net
+                     (fake, P11Server)   +-- other.test.net
 
 ``other`` is introduced *after* ``channels`` so it sits at the head of the
 uplink's downlink list and is torn down first on a split -- the ordering
@@ -33,7 +33,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.single_server
@@ -91,14 +91,14 @@ async def _half_link_with_sasl_server(
     *,
     sasl_server: str = SASL_SERVER,
     downstreams=DEFAULT_DOWNSTREAMS,
-) -> tuple[P10Server, dict[str, str]]:
+) -> tuple[P11Server, dict[str, str]]:
     """Link a fake hub that has not finished its burst, pointing SASL at ``sasl_server``.
 
     Sets sasl.server/sasl.mechanisms via CF while still bursting, then
     introduces ``downstreams`` behind us. Returns the server and a map of
     downstream name -> P10 numeric.
     """
-    srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+    srv = P11Server(name="services.test.net", numeric=4, password="testpass")
     await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
     await srv.begin_handshake()
     # Mid-burst from the hub's point of view: it has sent us EB, we have
@@ -113,7 +113,7 @@ async def _half_link_with_sasl_server(
     return srv, numerics
 
 
-async def _authenticate_target(ircd_hub, srv: P10Server, nick: str) -> str:
+async def _authenticate_target(ircd_hub, srv: P11Server, nick: str) -> str:
     """Start SASL from a fresh client; return the numeric AUTHENTICATE was routed to."""
     client = IRCClient()
     await client.connect(ircd_hub["host"], ircd_hub["port"])

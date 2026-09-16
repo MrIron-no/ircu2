@@ -31,7 +31,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.multi_server
@@ -110,7 +110,7 @@ async def fakesrv(ircd_network):
     message whose origin server does not enforce +c.
     """
     hub = ircd_network["hub"]
-    srv = P10Server(name="notulined.test.net", numeric=5, password="testpass")
+    srv = P11Server(name="notulined.test.net", numeric=5, password="testpass")
     await srv.connect(hub["host"], hub["server_port"])
     await srv.handshake()
     yield srv

@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -211,7 +211,7 @@ async def sasl_ircd(tmp_path, ensure_spath):
         await _warmup_iauth(client_port)
         log.write_text("")
 
-        services = P10Server(
+        services = P11Server(
             name="services.test.net",
             numeric=4,
             password="testpass",

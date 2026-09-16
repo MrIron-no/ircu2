@@ -43,7 +43,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server, strip_msg_tags
+from p11_server import P11Server, strip_msg_tags
 
 pytestmark = pytest.mark.nf_compat
 
@@ -57,7 +57,7 @@ FAKE_TLS_FINGERPRINT = (
 async def services(ircd_nf_compat):
     """U:lined services (J11) attached to C."""
     c = ircd_nf_compat["c"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -72,7 +72,7 @@ async def services(ircd_nf_compat):
 async def spy_on_b(ircd_nf_compat):
     """Legacy P10 peer (J10) on B: sees exactly what B relays toward prod A."""
     b = ircd_nf_compat["b"]
-    spy = P10Server(
+    spy = P11Server(
         name="spy.test.net",
         numeric=5,
         password="testpass",
@@ -89,7 +89,7 @@ async def spy_on_b(ircd_nf_compat):
 async def spy_on_c(ircd_nf_compat):
     """P11 peer (J11) on C to observe what C relays over a P11 link."""
     c = ircd_nf_compat["c"]
-    spy = P10Server(
+    spy = P11Server(
         name="spyc.test.net",
         numeric=6,
         password="testpass",
@@ -153,7 +153,7 @@ def _ac_lines_for_numnick(lines: list[str], numnick: str) -> list[str]:
 
 
 async def _collect_ac_from_spy(
-    spy: P10Server, numnick: str, seconds: float = 2.0
+    spy: P11Server, numnick: str, seconds: float = 2.0
 ) -> list[str]:
     """Drain spy traffic for a window and return AC lines for ``numnick``."""
     before = len(spy.received)
@@ -179,7 +179,7 @@ def _topic_lines_for_chan(lines: list[str], chan: str) -> list[str]:
     return out
 
 
-async def _wait_for_nick_lines(spy: P10Server, nick: str, timeout: float = 8.0) -> list[str]:
+async def _wait_for_nick_lines(spy: P11Server, nick: str, timeout: float = 8.0) -> list[str]:
     """Collect P10 lines from spy until we see a NICK introducing ``nick``."""
     collected: list[str] = []
     deadline = asyncio.get_running_loop().time() + timeout

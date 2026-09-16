@@ -18,7 +18,7 @@ import pytest
 
 from ipcheck.helpers import disconnect_all, register_with_notice, userip
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 from tls.helpers import oper_up
 
 pytestmark = pytest.mark.multi_server
@@ -37,7 +37,7 @@ async def test_remote_user_with_same_ip_counts_and_releases(ircd_network):
 
         local_a, na = await register_with_notice(hub["host"], hub["port"], "ipcra")
 
-        srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+        srv = P11Server(name="services.test.net", numeric=4, password="testpass")
         await srv.connect(hub["host"], hub["server_port"])
         await srv.handshake()
         await srv.introduce_user("ipcremote", ip=my_ip)
@@ -73,7 +73,7 @@ async def test_remote_user_with_other_ip_does_not_count(ircd_network):
     try:
         local_a, na = await register_with_notice(hub["host"], hub["port"], "ipcoa")
 
-        srv = P10Server(name="notulined.test.net", numeric=5, password="testpass")
+        srv = P11Server(name="notulined.test.net", numeric=5, password="testpass")
         await srv.connect(hub["host"], hub["server_port"])
         await srv.handshake()
         await srv.introduce_user("ipcother", ip="192.0.2.77")

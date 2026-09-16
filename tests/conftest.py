@@ -16,7 +16,7 @@ from debug_support import (
     snapshot_failure_artifacts,
 )
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 # docker-compose.yml and Dockerfile live in the repo root (parent of tests/)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -553,9 +553,9 @@ async def limits_oper(ircd_limits):
 @pytest_asyncio.fixture
 async def limits_services(ircd_limits):
     """UWorld-capable P10 services server for remote oper tests."""
-    from p10_server import P10Server
+    from p11_server import P11Server
 
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -687,7 +687,7 @@ async def ulined_server(ircd_hub):
     U:lined as "services.test.net", matching the UWorld block in ircd-hub.conf,
     so it can send traffic that only a U:lined server may, e.g. ACCOUNT.
     """
-    srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+    srv = P11Server(name="services.test.net", numeric=4, password="testpass")
     await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
     await srv.handshake()
     yield srv

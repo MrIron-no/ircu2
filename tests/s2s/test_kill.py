@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.single_server
 
@@ -22,12 +22,12 @@ LONGPATH = "!".join(f"hop{i}.a.rather.long.server.name.example.test.net"
                     for i in range(6))
 
 
-async def _link(hub, numeric=5, protocol=None) -> P10Server:
+async def _link(hub, numeric=5, protocol=None) -> P11Server:
     kwargs = dict(name="notulined.test.net", numeric=numeric,
                   password="testpass", server_flags="")
     if protocol is not None:
         kwargs["protocol"] = protocol
-    srv = P10Server(**kwargs)
+    srv = P11Server(**kwargs)
     await srv.connect(hub["host"], hub["server_port"])
     return srv
 
@@ -83,7 +83,7 @@ async def test_kill_relayed_to_p10_downlink_uses_combined_form(ircd_hub):
     combined form: the path and reason share one trailing parameter (no ':'
     between them), whereas a P11 downlink would receive them split."""
     src = await _link(ircd_hub, numeric=5)                       # P11 source
-    spy = P10Server(name="uworldonly.test.net", numeric=6,
+    spy = P11Server(name="uworldonly.test.net", numeric=6,
                     password="testpass", server_flags="",
                     protocol=10)                                 # P10 observer
     await spy.connect(ircd_hub["host"], ircd_hub["server_port"])

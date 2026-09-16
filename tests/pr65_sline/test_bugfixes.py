@@ -23,7 +23,7 @@ import time
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.multi_server
 
@@ -34,7 +34,7 @@ SLINE_SERVER = "services.test.net"
 async def services(ircd_network):
     """Connect a fake P10 services server to the hub."""
     hub = ircd_network["hub"]
-    srv = P10Server(name=SLINE_SERVER, numeric=4, password="testpass")
+    srv = P11Server(name=SLINE_SERVER, numeric=4, password="testpass")
     await srv.connect(hub["host"], hub["server_port"])
     await srv.handshake()
     yield srv

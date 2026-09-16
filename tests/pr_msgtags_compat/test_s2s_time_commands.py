@@ -8,7 +8,7 @@ import re
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.multi_server
@@ -19,7 +19,7 @@ _TIME_PREFIX = re.compile(r"^@time=\d{4}-\d{2}-\d{2}T[\d:.]+Z ")
 @pytest.fixture
 async def services(ircd_network):
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -31,7 +31,7 @@ async def services(ircd_network):
 
 
 async def _wait_s2s(
-    services: P10Server,
+    services: P11Server,
     token: str,
     *,
     contain: str | None = None,

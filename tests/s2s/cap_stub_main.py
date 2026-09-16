@@ -19,7 +19,7 @@ import json
 import subprocess
 import sys
 
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 def emit(**kw) -> None:
@@ -27,8 +27,8 @@ def emit(**kw) -> None:
     sys.stdout.flush()
 
 
-class ReportingStub(P10Server):
-    """P10Server that reports every line it sends or receives."""
+class ReportingStub(P11Server):
+    """P11Server that reports every line it sends or receives."""
 
     async def _send(self, line: str):
         emit(event="line", dir="out", text=line)

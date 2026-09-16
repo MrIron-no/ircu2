@@ -12,7 +12,7 @@ import ssl
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 from tls_certs import client_ssl_context
 from tls.helpers import (
     collect_until_error_or_close,
@@ -98,7 +98,7 @@ async def test_leaf_client_tls_registration(ircd_tls_network):
 
 async def test_s2s_inbound_fingerprint_accepts_matching_cert(ircd_tls_network):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer.test.net", numeric=40, password="testpass")
+    srv = P11Server(name="tlspeer.test.net", numeric=40, password="testpass")
     ctx = client_ssl_context(cert="tlspeer")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -110,7 +110,7 @@ async def test_s2s_inbound_fingerprint_accepts_matching_cert(ircd_tls_network):
 
 async def test_s2s_inbound_fingerprint_rejects_mismatch(ircd_tls_network):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-bad.test.net", numeric=41, password="testpass")
+    srv = P11Server(name="tlspeer-bad.test.net", numeric=41, password="testpass")
     ctx = client_ssl_context(cert="tlspeer")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -131,7 +131,7 @@ async def test_s2s_inbound_fingerprint_rejects_mismatch(ircd_tls_network):
 async def test_s2s_inbound_fingerprint_rejects_selfsigned(ircd_tls_network):
     """Self-signed peer cert does not match pinned fingerprint."""
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer.test.net", numeric=42, password="testpass")
+    srv = P11Server(name="tlspeer.test.net", numeric=42, password="testpass")
     ctx = client_ssl_context(cert="selfsigned")
     await srv.connect_tls(hub["host"], hub["server_port"], ctx)
     try:
@@ -156,7 +156,7 @@ async def test_s2s_inbound_fingerprint_rejects_selfsigned(ircd_tls_network):
 
 async def test_s2s_inbound_ca_accepts_signed_cert(ircd_tls_network):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-ca.test.net", numeric=43, password="testpass")
+    srv = P11Server(name="tlspeer-ca.test.net", numeric=43, password="testpass")
     ctx = client_ssl_context(cert="tlspeer-ca")
     await srv.connect_tls(hub["host"], hub["server_tls_ca_port"], ctx)
     try:
@@ -168,7 +168,7 @@ async def test_s2s_inbound_ca_accepts_signed_cert(ircd_tls_network):
 
 async def test_s2s_inbound_ca_rejects_selfsigned(ircd_tls_network):
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-ca.test.net", numeric=44, password="testpass")
+    srv = P11Server(name="tlspeer-ca.test.net", numeric=44, password="testpass")
     ctx = client_ssl_context(cert="selfsigned")
     await srv.connect_tls(hub["host"], hub["server_tls_ca_port"], ctx)
     try:
@@ -189,7 +189,7 @@ async def test_s2s_inbound_ca_rejects_selfsigned(ircd_tls_network):
 async def test_s2s_inbound_ca_rejects_wrong_ca(ircd_tls_network):
     """Certificate signed by an untrusted CA is rejected."""
     hub = ircd_tls_network["hub"]
-    srv = P10Server(name="tlspeer-ca.test.net", numeric=45, password="testpass")
+    srv = P11Server(name="tlspeer-ca.test.net", numeric=45, password="testpass")
     ctx = client_ssl_context(cert="rogue")
     await srv.connect_tls(hub["host"], hub["server_tls_ca_port"], ctx)
     try:

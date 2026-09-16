@@ -11,7 +11,7 @@ import asyncio
 import pytest
 
 from cap_helpers import burst_lines, connect_services, make_cap_client
-from p10_server import strip_msg_tags
+from p11_server import strip_msg_tags
 
 pytestmark = pytest.mark.multi_server
 

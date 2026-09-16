@@ -19,7 +19,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.multi_server
@@ -29,7 +29,7 @@ pytestmark = pytest.mark.multi_server
 async def services(ircd_network):
     """Connect a fake P10 services server to the hub."""
     hub = ircd_network["hub"]
-    srv = P10Server(
+    srv = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",
@@ -215,7 +215,7 @@ async def test_account_rejected_from_non_ulined_server(ircd_network):
     hub = ircd_network["hub"]
 
     # Connect a non-U:lined fake server (has Connect block but no UWorld)
-    rogue = P10Server(
+    rogue = P11Server(
         name="notulined.test.net",
         numeric=5,
         password="testpass",

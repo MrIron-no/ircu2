@@ -16,7 +16,7 @@ import asyncio
 import pytest
 
 from cap_helpers import burst_lines, connect_services, make_cap_client, nick_burst_modes
-from p10_server import P10Server, strip_msg_tags
+from p11_server import P11Server, strip_msg_tags
 
 pytestmark = pytest.mark.multi_server
 
@@ -38,7 +38,7 @@ async def test_account_flags_in_nick_burst(ircd_network, services):
     await asyncio.sleep(0.4)
 
     await services.disconnect()
-    observer = P10Server(
+    observer = P11Server(
         name="services.test.net",
         numeric=4,
         password="testpass",

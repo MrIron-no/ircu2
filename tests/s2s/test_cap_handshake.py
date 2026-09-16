@@ -16,7 +16,7 @@ import pytest
 
 from common import set_feature
 from conftest import docker_exec
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.single_server
 
@@ -40,13 +40,13 @@ async def _wait_for_log(hub, needle: str, timeout: float = 5.0) -> str:
     return text
 
 
-def _stub(**kwargs) -> P10Server:
+def _stub(**kwargs) -> P11Server:
     defaults = dict(name="services.test.net", numeric=4, password="testpass")
     defaults.update(kwargs)
-    return P10Server(**defaults)
+    return P11Server(**defaults)
 
 
-async def _read_until_closed(srv: P10Server, timeout: float) -> list[str]:
+async def _read_until_closed(srv: P11Server, timeout: float) -> list[str]:
     """Read raw lines until the hub closes the connection; return them."""
     lines: list[str] = []
     deadline = time.monotonic() + timeout
@@ -60,7 +60,7 @@ async def _read_until_closed(srv: P10Server, timeout: float) -> list[str]:
             return lines
 
 
-async def _begin(srv: P10Server, hub) -> None:
+async def _begin(srv: P11Server, hub) -> None:
     """Connect and send PASS + SERVER without reading anything back."""
     await srv.connect(hub["host"], hub["server_port"])
     now = int(time.time())

@@ -15,7 +15,7 @@ import asyncio
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 from .helpers import join_synced, tag_has, tag_value
 
@@ -88,7 +88,7 @@ async def test_client_tags_on_s2s_wire(ircd_network):
     hub = ircd_network["hub"]
     channel = "#ctagwire"
 
-    peer = P10Server(name="services.test.net", numeric=4, password="testpass")
+    peer = P11Server(name="services.test.net", numeric=4, password="testpass")
     await peer.connect(hub["host"], hub["server_port"])
     await peer.handshake()
 

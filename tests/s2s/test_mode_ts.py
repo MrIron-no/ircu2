@@ -15,17 +15,17 @@ import asyncio
 
 import pytest
 
-from p10_server import P10Server
+from p11_server import P11Server
 
 pytestmark = pytest.mark.single_server
 
 
-async def _link(hub, numeric=5, protocol=None) -> P10Server:
+async def _link(hub, numeric=5, protocol=None) -> P11Server:
     kwargs = dict(name="notulined.test.net", numeric=numeric,
                   password="testpass", server_flags="")
     if protocol is not None:
         kwargs["protocol"] = protocol
-    srv = P10Server(**kwargs)
+    srv = P11Server(**kwargs)
     await srv.connect(hub["host"], hub["server_port"])
     return srv
 

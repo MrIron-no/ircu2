@@ -26,7 +26,7 @@ import time
 import pytest
 
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = pytest.mark.single_server
@@ -170,7 +170,7 @@ async def test_star_host_mask_kills_ipv4_client(ircd_hub):
     await victim.connect(ircd_hub["host"], ircd_hub["port"])
     await victim.register("vict5b", "victim", "Test Victim")
 
-    srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+    srv = P11Server(name="services.test.net", numeric=4, password="testpass")
     await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
     await srv.handshake()
     now = int(time.time())

@@ -57,7 +57,7 @@ import pytest
 
 from cap_helpers import make_cap_client
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 from .helpers import LABELED_CAPS, tag_has, tag_value
 
@@ -73,7 +73,7 @@ async def _cleanup(*clients: IRCClient):
         await c.disconnect()
 
 
-async def _make_channels_via_burst(server: P10Server, prefix: str, count: int) -> None:
+async def _make_channels_via_burst(server: P11Server, prefix: str, count: int) -> None:
     """Create `count` channels almost instantly via a fake P10 server link.
 
     A real client repeatedly JOINing distinct channels trips ircu's

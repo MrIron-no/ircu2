@@ -1,6 +1,6 @@
-"""Lightweight P10 fake server for testing ircu2 S2S behavior.
+"""Lightweight P11 fake server for testing ircu2 S2S behavior.
 
-Connects to an ircd as a server, completes the P10 handshake (PASS,
+Connects to an ircd as a server, completes the P11 (or P10) handshake (PASS,
 SERVER, burst, EB/EA), and exposes methods to send S2S protocol
 messages like OPMODE and ACCOUNT.
 """
@@ -11,7 +11,7 @@ import logging
 import ssl
 import time
 
-logger = logging.getLogger("p10_server")
+logger = logging.getLogger("p11_server")
 
 # Network config / S-line updates are resolved last-writer-wins by a
 # whole-second time_t timestamp, and the ircd rejects any write that is not
@@ -79,8 +79,8 @@ def strip_msg_tags(line: str) -> str:
     return line[sp + 1 :] if sp != -1 else line
 
 
-class P10Server:
-    """A fake IRC server speaking the P10 wire protocol.
+class P11Server:
+    """A fake IRC server speaking the P11 (or, on request, P10) wire protocol.
 
     Connects to an ircd on its server port, performs the full P10
     handshake, then allows sending arbitrary S2S messages.  By default it
