@@ -61,7 +61,7 @@ particular jupe was placed.
 
 ## Server syntax
 
-For a server, the syntax is (see also section 10.2 of `doc/p10.md`):
+For a server, the syntax is (see also section 10.2 of `doc/P11.md`):
 
 ```
 <prefix> JU <target> [+|-]<server> <expiration> <lastmod> :<reason>

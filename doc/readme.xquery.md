@@ -49,14 +49,14 @@ servers.
 Both messages are forwarded hop by hop toward their target. XQUERY
 and XREPLY lines never carry an IRCv3 `@time` tag on server links,
 because services parse them positionally (see section 13 of
-`doc/p10.md`).
+`doc/P11.md`).
 
 ## Routing prefixes in use
 
 The routing token was designed so that ircu itself can prepend routing
 data to it and dispatch replies to the right subsystem. This server
 currently uses three such prefixes (see also section 11 of
-`doc/p10.md`):
+`doc/P11.md`):
 
 | Routing prefix | Used by |
 |----------------|---------|

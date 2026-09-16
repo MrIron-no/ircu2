@@ -104,7 +104,7 @@ For a server, the syntax is:
 <prefix> GL <target> [!][+|-|>|<]<mask> [<expiration>] [<lastmod>] [<lifetime>] [:<reason>]
 ```
 
-(See also section 10.1 of `doc/p10.md` for the wire-level view of this
+(See also section 10.1 of `doc/P11.md` for the wire-level view of this
 message, including the burst forms.)
 
 There are a total of 8 basic forms of the GL command. The primary
