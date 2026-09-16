@@ -440,6 +440,9 @@ static int completed_connection(struct Client* cptr)
   cli_lasttime(cptr) = CurrentTime;
   ClearPingSent(cptr);
 
+  /* The peer's protocol is unknown until its SERVER line arrives, so the
+   * IPv6 flag is always announced here; a P10 peer needs it, a P11 peer
+   * ignores it (server_flags_str()). */
   sendrawto_one(cptr, MSG_SERVER " %s 1 %Tu %Tu J%s %s%s +%s6 :%s",
                 cli_name(&me), cli_serv(&me)->timestamp, newts,
 		MAJOR_PROTOCOL, NumServCap(&me),

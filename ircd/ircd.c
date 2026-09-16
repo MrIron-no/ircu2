@@ -792,7 +792,6 @@ int main(int argc, char **argv) {
   cli_lasttime(&me) = cli_since(&me) = cli_firsttime(&me) = CurrentTime;
 
   hAddClient(&me);
-  SetIPv6(&me);
 
   /* Seed &me's secure group before any server links.  Without this,
    * a standalone server keeps sid == 0 and same-server TLS clients

@@ -485,22 +485,20 @@ struct Client* find_match_server_next(const char *mask, unsigned int *iter)
  * For IPv6 addresses, each 16-bit address segment is encoded as three
  * characters, but the longest run of zero segments is encoded using an
  * underscore.
+ *
+ * Every peer is assumed to understand the IPv6 form: a P11 server implies
+ * it, and a P10 peer that does not announce the '6' server flag is refused
+ * at link time (mr_server()), so the old six-character downgrade
+ * (6to4 host part, else 0.0.0.0) is gone.
  * @param[out] buf Output buffer to write to.
  * @param[in] addr IP address to encode.
  * @param[in] count Number of bytes writable to \a buf.
- * @param[in] v6_ok If non-zero, peer understands base-64 encoded IPv6 addresses.
  */
-const char* iptobase64(char* buf, const struct irc_in_addr* addr, unsigned int count, int v6_ok)
+const char* iptobase64(char* buf, const struct irc_in_addr* addr, unsigned int count)
 {
   if (irc_in_addr_is_ipv4(addr)) {
     assert(count >= 6);
     inttobase64(buf, (ntohs(addr->in6_16[6]) << 16) | ntohs(addr->in6_16[7]), 6);
-  } else if (!v6_ok) {
-    assert(count >= 6);
-    if (addr->in6_16[0] == htons(0x2002))
-        inttobase64(buf, (ntohs(addr->in6_16[1]) << 16) | ntohs(addr->in6_16[2]), 6);
-    else
-        strcpy(buf, "AAAAAA");
   } else {
     unsigned int max_start, max_zeros, curr_zeros, zero, ii;
     char *output = buf;
