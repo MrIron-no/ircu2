@@ -36,7 +36,8 @@
  *    spaces are ignored.  A NULL or empty list yields no capabilities.
  *  - A token is split at its first '=' into a name and a value.
  *  - A name is valid iff it is 1..SERVCAP_NAME_MAX characters, each one of
- *    a-z, 0-9, '-' or '/'.  Invalid or unknown names are ignored.
+ *    a-z, 0-9, '-' or '/' (IsCapChar()).  Invalid or unknown names are
+ *    ignored.
  *  - An entry whose parse_value is NULL accepts only the bare name; a
  *    token carrying '=' does not set it.  An entry with parse_value set
  *    requires '=' and sets the bit only if parse_value(value) returns

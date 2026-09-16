@@ -59,6 +59,7 @@
 #define NTL_COMMAND 0x20000 /**< (NTL_ALPHA | '_')                   */
 #define NTL_CHPFX  0x40000  /**< channel prefix char # & +           */
 #define NTL_IRCIP6 0x80000  /**< Numeric IPv6 character (hex or colon) */
+#define NTL_CAPCH  0x100000 /**< P11 link capability name: a-z 0-9 - /  */
 
 /*
  * Tables used for translation and classification macros
@@ -121,6 +122,8 @@ extern const unsigned int  IRCD_CharAttrTab[256];
 #define IsIPChar(c)        (IRCD_CharAttrTab[(c) - CHAR_MIN] & NTL_IRCIP)
 /** Test whether a character is valid in an IPv6 address. */
 #define IsIP6Char(c)       (IRCD_CharAttrTab[(c) - CHAR_MIN] & NTL_IRCIP6)
+/** Test whether a character is valid in a P11 link capability name. */
+#define IsCapChar(c)       (IRCD_CharAttrTab[(c) - CHAR_MIN] & NTL_CAPCH)
 /** Test whether a character is an end-of-line character. */
 #define IsEol(c)           (IRCD_CharAttrTab[(c) - CHAR_MIN] & NTL_EOL)
 /** Test whether a character may be part of a command. */

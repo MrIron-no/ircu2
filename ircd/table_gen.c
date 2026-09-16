@@ -129,6 +129,12 @@ static void makeTables(void)
   markString(NTL_COMMAND, "_");
   unMarkString(NTL_COMMAND, "[\\]^{|}~");
 
+  /* P11 link capability names (doc/P11.md): lowercase letters, digits,
+   * "-" and "/" (namespace separator).  No IRC case folding here. */
+  markRange(NTL_CAPCH, 'a', 'z');
+  moveMacro(NTL_DIGIT, NTL_CAPCH);
+  markString(NTL_CAPCH, "-/");
+
   /* And finally let's take care of the toLower/toUpper stuff */
 
   setLowHi('a', 'z', 'A');

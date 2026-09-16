@@ -87,6 +87,11 @@ int eval_command(char c)
   return (0 != IsCommand(c));
 }
 
+int eval_cap_char(char c)
+{
+  return (0 != IsCapChar(c));
+}
+
 struct CharTest {
   const char* name;
   EvalFn      evaluator;
@@ -107,6 +112,7 @@ struct CharTest {
   { "IsIPChar:        ", eval_ip_char },
   { "IsEol:           ", eval_eol },
   { "IsCommand:       ", eval_command },
+  { "IsCapChar:       ", eval_cap_char },
 };
 
 #define TESTLIST_SIZE sizeof(testList) / sizeof(struct CharTest)
