@@ -1200,20 +1200,45 @@ void send_channel_modes(struct Client *cptr, struct Channel *chptr)
 
     if (!full)
     {
-      /* Attach all bans, space separated " :%ban ban ..." */
+      /* Attach all bans: " :%ban ban ..." on a P10 link, and the
+       * " :%ban ts who ban ts who ..." triples of doc/P11.md 8.1 on a P11
+       * one. */
       for (first = 2; lp2; lp2 = lp2->next)
       {
-        len = strlen(lp2->banstr);
-	if (msgq_bufleft(mb) < len + 1 + first)
-          /* The +1 stands for the added ' '.
-           * The +first stands for the added ":%".
-           */
+        if (p11)
         {
-          full = 1;
-          break;
+          /* mode_parse_ban() always leaves a nick or a "*" behind, but a
+           * ban that somehow lost its setter would put an empty field on
+           * the wire, so fall back here as well.  The 20 is a safe upper
+           * bound for a decimal time_t. */
+          const char *who = lp2->who[0] ? lp2->who : "*";
+
+          len = strlen(lp2->banstr) + 1 + 20 + 1 + strlen(who);
+          if (msgq_bufleft(mb) < len + 1 + first)
+            /* The +1 stands for the added ' '.
+             * The +first stands for the added ":%".
+             */
+          {
+            full = 1;
+            break;
+          }
+          msgq_append(&me, mb, " %s%s %Tu %s", first ? ":%" : "",
+                      lp2->banstr, lp2->when, who);
         }
-	msgq_append(&me, mb, " %s%s", first ? ":%" : "",
-		    lp2->banstr);
+        else
+        {
+          len = strlen(lp2->banstr);
+          if (msgq_bufleft(mb) < len + 1 + first)
+            /* The +1 stands for the added ' '.
+             * The +first stands for the added ":%".
+             */
+          {
+            full = 1;
+            break;
+          }
+          msgq_append(&me, mb, " %s%s", first ? ":%" : "",
+                      lp2->banstr);
+        }
 	first = 0;
       }
     }
