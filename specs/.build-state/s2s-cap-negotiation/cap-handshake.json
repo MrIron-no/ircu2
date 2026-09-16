@@ -1,0 +1,1 @@
+{"name":"CAP handshake: staging, handler, strict gate, log","status":"pending","agentType":"sequential","startedAt":null,"completedAt":null,"lastUpdated":"2026-09-16T10:30:57+02:00","description":null,"commitSha":null,"filesChanged":[],"dependsOn":["estab-split"]}

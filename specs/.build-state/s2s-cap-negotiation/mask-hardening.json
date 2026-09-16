@@ -1,0 +1,1 @@
+{"name":"Numeric mask hardening","status":"pending","agentType":"sequential","startedAt":null,"completedAt":null,"lastUpdated":"2026-09-16T10:30:57+02:00","description":null,"commitSha":null,"filesChanged":[],"dependsOn":["cap-handshake"]}

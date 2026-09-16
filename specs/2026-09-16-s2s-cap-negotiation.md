@@ -5,6 +5,7 @@ type: feature
 playwright: false
 frontend-design: false
 spec-version: 1
+branch: feat/s2s-cap-negotiation
 created: 2026-09-16T10:22:30+02:00
 ---
 
