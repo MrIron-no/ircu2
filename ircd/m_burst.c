@@ -711,7 +711,11 @@ static void burst_relay(struct Client *sptr, struct Client *cptr,
  *
  * The relayed BURST is built in two variants: the P10 variant must stay
  * byte-identical to the 2.10.12 form; the P11 variant may add per-link
- * extensions (see doc/P11.md 8.1).
+ * extensions (see doc/P11.md 8.1).  Either variant can come out longer than
+ * what we received (an absolute op level printed for a peer's increment, a
+ * P10 ban list gaining "<ts> <who>" on a P11 downlink), so the relay is not
+ * bounded by the incoming line: it emits further BURST lines under the wire
+ * budget instead of truncating or dropping anything (see burst_relay()).
  */
 int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 {
