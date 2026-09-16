@@ -237,6 +237,66 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
   return new_bans;
 }
 
+/** Append one member to a relayed BURST nick list.
+ *
+ * Writes the leading ' ' or ',', the numeric and, when the status changed
+ * since the previous member, a specifier for it.  \a last_mode and
+ * \a last_oplevel track that state per relay variant, because the two
+ * variants do not change status at the same members: the P10 variant never
+ * sees the hidden-member bit at all.
+ *
+ * @param[out] buf Nick list being built; it is a BUFSIZE buffer.
+ * @param[in,out] pos Write position in \a buf.
+ * @param[in] nick Numeric of the member to append.
+ * @param[in] mode Membership flags parsed for this member.
+ * @param[in] oplevel Op level parsed for this member.
+ * @param[in,out] last_mode Status the list is currently in.
+ * @param[in,out] last_oplevel Op level the list is currently at.
+ * @param[in] with_delayed Non-zero on a P11 link, where the hidden
+ * (delayed join) member group is expressed with a 'd' specifier; zero on a
+ * P10 link, where CHFL_DELAYED is masked out so that it neither shows up as
+ * a specifier nor counts as a status change (doc/P11.md 8.1).
+ */
+static void burst_append_member(char *buf, int *pos, const char *nick,
+                                unsigned int mode, int oplevel,
+                                unsigned int *last_mode, int *last_oplevel,
+                                int with_delayed)
+{
+  const char *ptr;
+
+  if (!with_delayed)
+    mode &= ~CHFL_DELAYED;
+
+  buf[*pos] = *pos ? ',' : ' '; /* first char */
+  (*pos)++;
+
+  for (ptr = nick; *ptr; ptr++) /* store nick */
+    buf[(*pos)++] = *ptr;
+
+  if (mode != *last_mode) { /* if mode changed... */
+    *last_mode = mode;
+    *last_oplevel = oplevel;
+
+    buf[(*pos)++] = ':'; /* add a specifier */
+    if ((mode & CHFL_DELAYED) && !(mode & CHFL_VOICED_OR_OPPED))
+      buf[(*pos)++] = 'd';
+    if (mode & CHFL_VOICE)
+      buf[(*pos)++] = 'v';
+    if (mode & CHFL_CHANOP) {
+      if (oplevel != MAXOPLEVEL)
+	*pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%u", oplevel);
+      else
+	buf[(*pos)++] = 'o';
+    }
+  } else if ((mode & CHFL_CHANOP) && oplevel != *last_oplevel) {
+    /* if just op level changed... */
+    buf[(*pos)++] = ':'; /* add a specifier */
+    *pos += ircd_snprintf(0, buf + *pos, BUFSIZE - *pos, "%u",
+			  oplevel - *last_oplevel);
+    *last_oplevel = oplevel;
+  }
+}
+
 /*
  * ms_burst - server message handler
  *
@@ -322,10 +382,6 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   char modestr[BUFSIZE];
   char nickstr10[BUFSIZE], nickstr11[BUFSIZE];
   char banstr10[BUFSIZE], banstr11[BUFSIZE];
-
-  /* The link-protocol gate the P11 BURST extensions hang off; the two relay
-   * variants below are still identical, so nothing reads it yet. */
-  (void)p11;
 
   if (parc < 3)
     return protocol_violation(sptr,"Too few parameters for BURST");
@@ -495,15 +551,29 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
       {
 	struct Client *acptr;
 	char *nicklist = parv[param], *p = 0, *nick, *ptr;
-	int current_mode, last_mode, base_mode;
+	unsigned int current_mode, base_mode;
+	unsigned int last_mode10, last_mode11;
 	int oplevel = -1;	/* Mark first field with digits: means the same as 'o' (but with level). */
-	int last_oplevel = 0;
+	int last_oplevel10 = 0, last_oplevel11 = 0;
 	struct Membership* member;
 
+        /* Whether a status-less member is hidden is inferred from +D, except
+         * on a P11 link that we are actually taking modes from: there the
+         * sender says so with 'd' and nothing is inferred (doc/P11.md 8.1).
+         *   - P11, our TS equal or older (MODE_PARSE_SET): hidden iff 'd'.
+         *   - P11, our TS newer: the incoming channel lost and its members
+         *     are fresh joins to ours, so 'd' is ignored just like o/v and
+         *     our own +D decides.
+         *   - P10: no 'd' exists, so +D always decides.
+         */
         base_mode = CHFL_DEOPPED | CHFL_BURST_JOINED;
-        if (chptr->mode.mode & MODE_DELJOINS)
+        if (!(p11 && (parse_flags & MODE_PARSE_SET))
+            && (chptr->mode.mode & MODE_DELJOINS))
             base_mode |= CHFL_DELAYED;
-        current_mode = last_mode = base_mode;
+        current_mode = base_mode;
+        /* Both relay variants start out in the "no status" state: a hidden
+         * member is stated explicitly toward a P11 peer, never inferred. */
+        last_mode11 = last_mode10 = base_mode & ~CHFL_DELAYED;
 
 	for (nick = ircd_strtok(&p, nicklist, ","); nick;
 	     nick = ircd_strtok(&p, 0, ",")) {
@@ -544,6 +614,13 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 		  current_mode = (current_mode & ~(CHFL_DELAYED | CHFL_DELAYED_TARGET)) | CHFL_VOICE;
 		  oplevel = -1;	/* subsequent digits are an absolute op-level value. */
                 }
+		else if (*ptr == 'd' && p11) { /* hidden (delayed join) */
+		  if (current_mode_needs_reset) {
+		    current_mode = base_mode;
+		    current_mode_needs_reset = 0;
+		  }
+		  current_mode |= CHFL_DELAYED;
+		}
 		else if (IsDigit(*ptr)) {
 		  int level_increment = 0;
 		  if (oplevel == -1) { /* op-level is absolute value? */
@@ -570,6 +647,11 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 		  break; /* so stop processing */
 		}
 	      }
+
+	      /* A hidden member never has status, so ':od', ':dv' and ':3d'
+	       * all mean the status without the 'd'. */
+	      if (current_mode & CHFL_VOICED_OR_OPPED)
+		current_mode &= ~(CHFL_DELAYED | CHFL_DELAYED_TARGET);
 	    }
 	  }
 
@@ -577,47 +659,20 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 	    continue; /* ignore this client */
 
 	  /* Build the nick buffer for both relay variants */
-	  nickstr10[nickpos10] = nickpos10 ? ',' : ' '; /* first char */
-	  nickpos10++;
-	  nickstr11[nickpos11] = nickpos11 ? ',' : ' '; /* first char */
-	  nickpos11++;
-
-	  for (ptr = nick; *ptr; ptr++) { /* store nick */
-	    nickstr10[nickpos10++] = *ptr;
-	    nickstr11[nickpos11++] = *ptr;
-	  }
-
-	  if (current_mode != last_mode) { /* if mode changed... */
-	    last_mode = current_mode;
-	    last_oplevel = oplevel;
-
-	    nickstr10[nickpos10++] = ':'; /* add a specifier */
-	    nickstr11[nickpos11++] = ':'; /* add a specifier */
-	    if (current_mode & CHFL_VOICE) {
-	      nickstr10[nickpos10++] = 'v';
-	      nickstr11[nickpos11++] = 'v';
-	    }
-	    if (current_mode & CHFL_CHANOP)
-            {
-              if (oplevel != MAXOPLEVEL) {
-	        nickpos10 += ircd_snprintf(0, nickstr10 + nickpos10, sizeof(nickstr10) - nickpos10, "%u", oplevel);
-	        nickpos11 += ircd_snprintf(0, nickstr11 + nickpos11, sizeof(nickstr11) - nickpos11, "%u", oplevel);
-              } else {
-                nickstr10[nickpos10++] = 'o';
-                nickstr11[nickpos11++] = 'o';
-              }
-            }
-	  } else if (current_mode & CHFL_CHANOP && oplevel != last_oplevel) { /* if just op level changed... */
-	    nickstr10[nickpos10++] = ':'; /* add a specifier */
-	    nickpos10 += ircd_snprintf(0, nickstr10 + nickpos10, sizeof(nickstr10) - nickpos10, "%u", oplevel - last_oplevel);
-	    nickstr11[nickpos11++] = ':'; /* add a specifier */
-	    nickpos11 += ircd_snprintf(0, nickstr11 + nickpos11, sizeof(nickstr11) - nickpos11, "%u", oplevel - last_oplevel);
-            last_oplevel = oplevel;
-	  }
+	  burst_append_member(nickstr11, &nickpos11, nick, current_mode,
+			      oplevel, &last_mode11, &last_oplevel11, 1);
+	  burst_append_member(nickstr10, &nickpos10, nick, current_mode,
+			      oplevel, &last_mode10, &last_oplevel10, 0);
 
 	  if (!(member = find_member_link(chptr, acptr)))
 	  {
 	    add_user_to_channel(chptr, acptr, current_mode, oplevel);
+	    /* A hidden member on a channel that is not +D still needs the
+	     * local "has hidden members" flag, so that it is cleared as
+	     * usual when the last of them speaks or leaves.  The flag is
+	     * local and silent: no modebuf entry. */
+	    if ((current_mode & CHFL_DELAYED) && !(chptr->mode.mode & MODE_DELJOINS))
+	      chptr->mode.mode |= MODE_WASDELJOINS;
 	    if (!(current_mode & CHFL_DELAYED)) {
 	      sendjointo_channel_butserv(acptr, chptr, 0, 0);
               if (cli_user(acptr)->away)
