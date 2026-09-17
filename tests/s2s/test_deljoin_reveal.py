@@ -292,3 +292,164 @@ async def test_reveal_token_stale_ts_ignored(ircd_hub, make_client):
         assert "sa6" not in names, f"stale RV wrongly revealed member: {names!r}"
     finally:
         await stub.disconnect()
+
+
+# --------------------------------------------------------------------------
+# review fix-up: REVEAL is #-only, and the relay forwards the received TS
+# --------------------------------------------------------------------------
+
+
+async def _two_p11_stubs(hub) -> tuple[P11Server, P11Server]:
+    """Link two P11 stubs (A=notulined #5, B=uworldonly #6) to the hub.
+
+    Both names have Connect blocks in ircd-hub.conf.  A relayed token from A
+    must reach B, so both links are up before we act.
+    """
+    stub_a = P11Server(name="notulined.test.net", numeric=5,
+                       password="testpass", server_flags="", protocol=11,
+                       max_clients=STUB_CAPACITY)
+    await stub_a.connect(hub["host"], hub["server_port"])
+    await stub_a.handshake()
+
+    stub_b = P11Server(name="uworldonly.test.net", numeric=6,
+                       password="testpass", server_flags="", protocol=11,
+                       max_clients=STUB_CAPACITY)
+    await stub_b.connect(hub["host"], hub["server_port"])
+    await stub_b.handshake()
+
+    return stub_a, stub_b
+
+
+async def _watch_violations(oper):
+    """Ensure protocol_violation() wallops reach this oper (umode +g)."""
+    await oper.send(f"MODE {oper.nick} +g")
+    await asyncio.sleep(0.3)
+    await oper.send(f"MODE {oper.nick}")
+    msg = await oper.wait_for("221", timeout=5.0)
+    assert "g" in msg.params[-1], f"oper is not on +g: {msg.params!r}"
+
+
+async def _wait_for_wallops(client, needle: str, timeout: float = 6.0) -> str:
+    """Wait for a WALLOPS whose text contains ``needle``; else assert."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    seen: list[str] = []
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise AssertionError(
+                f"no WALLOPS containing {needle!r} arrived; saw {seen!r}"
+            )
+        try:
+            msg = await client.wait_for("WALLOPS", timeout=remaining)
+        except asyncio.TimeoutError:
+            raise AssertionError(
+                f"no WALLOPS containing {needle!r} arrived; saw {seen!r}"
+            )
+        text = msg.params[-1] if msg.params else ""
+        seen.append(text)
+        if needle in text:
+            return text
+
+
+async def _recv_token_for_chan(stub, token, chan, timeout=2.0):
+    """First line whose P10 token is ``token`` and names ``chan``; else None."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return None
+        try:
+            line = await stub._recv(timeout=remaining)
+        except (asyncio.TimeoutError, TimeoutError):
+            return None
+        parts = strip_msg_tags(line).split()
+        if len(parts) >= 3 and parts[1] == token \
+                and parts[2].lower() == chan.lower():
+            return strip_msg_tags(line)
+
+
+async def test_local_channel_speak_emits_no_reveal_token(ircd_hub, make_client):
+    """A speak on a LOCAL (&) +D channel reveals locally but emits no RV.
+
+    A ``&`` channel is local to the hub, so no token may cross S2S; the local
+    reveal (JOIN to the channel members) still happens on the hub itself.
+    """
+    chan = "&rvlocal"
+    op, hid = await _hidden_join(make_client, chan, "rvlocop", "rvlocu")
+
+    stub = await _link(ircd_hub, 11)
+    try:
+        await hid.send(f"PRIVMSG {chan} :hi")
+        # No RV naming the local channel may reach the P11 peer.
+        line = await _recv_token_for_chan(stub, "RV", chan, timeout=2.5)
+        assert line is None, f"local channel wrongly emitted an RV token: {line!r}"
+    finally:
+        await stub.disconnect()
+
+
+async def test_incoming_reveal_for_local_channel_is_rejected(ircd_hub,
+                                                             make_client, oper):
+    """An incoming ``RV`` for a ``&`` channel is a protocol violation."""
+    await _watch_violations(oper)
+
+    stub = await _link(ircd_hub, 11)
+    try:
+        sa = await stub.introduce_user("sarvloc")
+        await stub._send(f"{sa} RV &whatever 1700000000")
+
+        text = await _wait_for_wallops(oper, "Bad REVEAL")
+        assert "Protocol Violation" in text, text
+
+        # The hub survives the violation and still answers a later command.
+        client = await make_client("rvlocwatch")
+        await client.send("PING :rvloc-alive")
+        pong = await client.wait_for("PONG", timeout=5.0)
+        assert pong.params and pong.params[-1] == "rvloc-alive", pong.params
+    finally:
+        await stub.disconnect()
+
+
+async def test_relay_forwards_received_timestamp(ircd_hub, make_client):
+    """The onward relay forwards the received TS, not the hub's local one.
+
+    The hub's ``#rvts`` is created "now" (a large ``T_local``).  Stub A bursts
+    a hidden member onto that existing channel, then reveals it with an
+    earlier ``T_earlier`` (still <= ``T_local``, so the race guard accepts it).
+    Stub B must see exactly ``T_earlier`` relayed, not the hub's ``T_local``.
+    """
+    chan = "#rvts"
+    owner = await make_client("rvtsown")
+    await owner.send(f"JOIN {chan}")
+    await owner.wait_for("JOIN", timeout=5.0)
+    await owner.send(f"MODE {chan} +D")
+    await owner.wait_for("MODE", timeout=5.0)
+
+    stub_a, stub_b = await _two_p11_stubs(ircd_hub)
+    try:
+        t_local = _burst_ts(stub_a, chan)
+        t_earlier = t_local - 50
+
+        sa = await stub_a.introduce_user("sarvts")
+        # Merge a hidden member onto the existing channel at its own TS.
+        await stub_a._send(
+            f"{stub_a.server_numnick} B {chan} {t_local} +D {sa}:d")
+        await asyncio.sleep(0.5)
+
+        # Ignore everything B has seen so far; wait for the relayed RV.
+        await stub_b.drain_messages(timeout=1.0)
+
+        await stub_a._send(f"{sa} RV {chan} {t_earlier}")
+
+        line = await _recv_token_for_chan(stub_b, "RV", chan, timeout=6.0)
+        assert line is not None, "the relayed RV token never reached stub B"
+        parts = line.split()
+        assert parts[0] == sa, f"relayed RV source wrong: {line!r}"
+        assert int(parts[3]) == t_earlier, (
+            f"relay forwarded ts {parts[3]}, want received {t_earlier} "
+            f"(not local {t_local}): {line!r}"
+        )
+    finally:
+        await stub_a.disconnect()
+        await stub_b.disconnect()

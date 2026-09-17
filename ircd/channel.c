@@ -4001,7 +4001,10 @@ static void reveal_delayed_join_notify(struct Client *sptr, struct Channel *chpt
   if (!member || !IsDelayedJoin(member))
     return;
   RevealDelayedJoin(member);
-  if (MyUser(sptr))
+  /* The REVEAL token only makes sense on the network for a global channel;
+   * a local (&) channel never leaves this server, so reveal it locally but
+   * do not emit a token. */
+  if (MyUser(sptr) && IsGlobalChannel(chptr->chname))
     sendcmdto_prot_serv_butone(sptr, CMD_REVEAL, NULL, 11, 0, "%H %Tu",
                                chptr, chptr->creationtime);
 }

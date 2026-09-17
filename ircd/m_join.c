@@ -483,8 +483,9 @@ int ms_reveal(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 {
   struct Channel *chptr;
   struct Membership *member;
+  time_t rev_ts;
 
-  if (parc < 3 || !IsChannelName(parv[1]))
+  if (parc < 3 || !IsGlobalChannel(parv[1]))
     return protocol_violation(sptr, "Bad REVEAL");
   if (!IsUser(sptr))
     return protocol_violation(sptr, "REVEAL from a non-user source");
@@ -496,7 +497,8 @@ int ms_reveal(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 
   /* A reveal for a newer incarnation than ours lost the timestamp race and
    * is ignored, exactly as INVITE does. */
-  if (atotime(parv[2]) > chptr->creationtime)
+  rev_ts = atotime(parv[2]);
+  if (rev_ts > chptr->creationtime)
     return 0;
 
   /* Reveal the member locally if we still have it hidden.  If it is absent
@@ -510,7 +512,7 @@ int ms_reveal(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
    * on.  A P11 server that already revealed off the earlier channel message
    * still forwards this so off-path P11 servers behind it converge too. */
   sendcmdto_prot_serv_butone(sptr, CMD_REVEAL, cptr, 11, 0, "%H %Tu",
-                             chptr, chptr->creationtime);
+                             chptr, rev_ts);
 
   return 0;
 }
