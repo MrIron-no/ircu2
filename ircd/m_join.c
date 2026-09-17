@@ -455,3 +455,62 @@ int ms_join(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 
   return 0;
 }
+
+/** Handle a REVEAL message from a server.
+ *
+ * A P11 server whose local delayed-join (\c +D) member has revealed itself
+ * by speaking to a channel broadcasts this token so that servers which are
+ * not on the channel's message delivery path converge (a channel message is
+ * relayed only to servers that have a member on the channel; an off-path
+ * server would otherwise keep the member hidden).  Mode and topic reveals
+ * need no token because \c MODE and \c TOPIC already reach every server.
+ *
+ * \a parv has the following elements:
+ * \li \a parv[1] is the channel name
+ * \li \a parv[2] is the channel's creation timestamp
+ *
+ * The source prefix (\a sptr) is the revealed user.  The token is flooded
+ * hop-by-hop to P11 links only (a numnick source keeps it off P10 links,
+ * which fall back to per-server inference).
+ *
+ * See @ref m_functions for discussion of the arguments.
+ * @param[in] cptr Client that sent us the message.
+ * @param[in] sptr Original source of message (the revealed user).
+ * @param[in] parc Number of arguments.
+ * @param[in] parv Argument vector.
+ */
+int ms_reveal(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
+{
+  struct Channel *chptr;
+  struct Membership *member;
+
+  if (parc < 3 || !IsChannelName(parv[1]))
+    return protocol_violation(sptr, "Bad REVEAL");
+  if (!IsUser(sptr))
+    return protocol_violation(sptr, "REVEAL from a non-user source");
+
+  /* Unknown channel: drop, do not relay.  Every server should have the
+   * channel, and there is nothing to reveal here. */
+  if (!(chptr = FindChannel(parv[1])))
+    return 0;
+
+  /* A reveal for a newer incarnation than ours lost the timestamp race and
+   * is ignored, exactly as INVITE does. */
+  if (atotime(parv[2]) > chptr->creationtime)
+    return 0;
+
+  /* Reveal the member locally if we still have it hidden.  If it is absent
+   * or already revealed here we do nothing locally, but we still relay
+   * onward so the flood reaches off-path servers behind us. */
+  member = find_member_link(chptr, sptr);
+  if (member && IsDelayedJoin(member) && !IsZombie(member))
+    RevealDelayedJoin(member);
+
+  /* Flood onward to our P11 downlinks, never back down the link it arrived
+   * on.  A P11 server that already revealed off the earlier channel message
+   * still forwards this so off-path P11 servers behind it converge too. */
+  sendcmdto_prot_serv_butone(sptr, CMD_REVEAL, cptr, 11, 0, "%H %Tu",
+                             chptr, chptr->creationtime);
+
+  return 0;
+}
