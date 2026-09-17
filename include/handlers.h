@@ -200,6 +200,7 @@ extern int ms_gline(struct Client*, struct Client*, int, char*[]);
 extern int ms_info(struct Client*, struct Client*, int, char*[]);
 extern int ms_invite(struct Client*, struct Client*, int, char*[]);
 extern int ms_join(struct Client*, struct Client*, int, char*[]);
+extern int ms_reveal(struct Client*, struct Client*, int, char*[]);
 extern int ms_jupe(struct Client*, struct Client*, int, char*[]);
 extern int ms_kick(struct Client*, struct Client*, int, char*[]);
 extern int ms_kill(struct Client*, struct Client*, int, char*[]);
