@@ -233,6 +233,10 @@ struct Client;
 #define TOK_JOIN                "J"
 #define CMD_JOIN		MSG_JOIN, TOK_JOIN
 
+#define MSG_REVEAL              "REVEAL"        /* REVE */
+#define TOK_REVEAL              "RV"
+#define CMD_REVEAL		MSG_REVEAL, TOK_REVEAL
+
 #define MSG_PART                "PART"          /* PART */
 #define TOK_PART                "L"
 #define CMD_PART		MSG_PART, TOK_PART
