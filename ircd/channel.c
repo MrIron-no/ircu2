@@ -3976,11 +3976,42 @@ void CheckDelayedJoins(struct Channel *chan)
   }
 }
 
+/** Reveal a hidden member and, on the member's home server, announce it.
+ *
+ * Reveals \a sptr on \a chptr if (s)he is a hidden (delayed-join) member,
+ * exactly as RevealDelayedJoin() does locally.  In addition, when \a sptr is
+ * one of our own users the reveal is announced to P11 servers with the
+ * REVEAL token so that servers which are not on the channel's message
+ * delivery path converge (a channel message is relayed only to servers that
+ * have a member on the channel, so an off-path server would otherwise keep
+ * the member hidden).
+ *
+ * This is used by the messaging reveal paths only (PRIVMSG/NOTICE/TAGMSG,
+ * WALLCHOPS/WALLVOICES, delayed S:line delivery).  Mode and topic reveals do
+ * NOT use this: MODE and TOPIC already propagate to every server on their
+ * own, so they carry the reveal without a token.  The token is emitted once,
+ * by the home server (MyUser), and only for a messaging-caused reveal.
+ *
+ * @param[in] sptr The revealing client.
+ * @param[in] chptr The channel on which to reveal.
+ */
+static void reveal_delayed_join_notify(struct Client *sptr, struct Channel *chptr)
+{
+  struct Membership *member = find_member_link(chptr, sptr);
+  if (!member || !IsDelayedJoin(member))
+    return;
+  RevealDelayedJoin(member);
+  /* The REVEAL token only makes sense on the network for a global channel;
+   * a local (&) channel never leaves this server, so reveal it locally but
+   * do not emit a token. */
+  if (MyUser(sptr) && IsGlobalChannel(chptr->chname))
+    sendcmdto_prot_serv_butone(sptr, CMD_REVEAL, NULL, 11, 0, "%H %Tu",
+                               chptr, chptr->creationtime);
+}
+
 /** Send a join for the user if (s)he is a hidden member of the channel.
  */
 void RevealDelayedJoinIfNeeded(struct Client *sptr, struct Channel *chptr)
 {
-  struct Membership *member = find_member_link(chptr, sptr);
-  if (member && IsDelayedJoin(member))
-    RevealDelayedJoin(member);
+  reveal_delayed_join_notify(sptr, chptr);
 }
