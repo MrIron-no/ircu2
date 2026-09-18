@@ -320,3 +320,40 @@ async def test_wildcard_mask_prefers_fully_linked_match_and_routes_to_it(ircd_hu
     finally:
         await client.send("QUIT :done")
         await client.disconnect()
+
+
+async def test_cap_new_reaches_client_still_registering(ircd_hub):
+    """A CAP LS 302 client that has not finished registering still gets NEW.
+
+    A restarted leaf takes its clients back while it is still bursting with
+    the network: they see no sasl in CAP LS, and the path to the SASL server
+    completes before they are registered.  cap-notify is implicit from the
+    moment of CAP LS 302, not from registration, so the NEW must reach them
+    -- otherwise they register and never learn sasl exists.
+    """
+    client = IRCClient()
+    await client.connect(ircd_hub["host"], ircd_hub["port"])
+    try:
+        await client.send("CAP LS 302")
+        msg = await client.wait_for("CAP", timeout=5.0)
+        assert "sasl" not in msg.params[-1], msg.params
+        # Registration stays suspended: no CAP END yet.
+        await client.send("NICK capsplit7")
+        await client.send("USER testuser 0 * :Test User")
+
+        srv, _ = await _half_link_with_sasl_server(ircd_hub)
+        assert await _collect_cap(client, 1.0) == []
+        await srv.send_end_of_burst()
+        await _expect_cap_new(client)
+
+        # The announced capability is usable before registration completes.
+        await client.send("CAP REQ :sasl")
+        msg = await client.wait_for("CAP", timeout=5.0)
+        assert msg.params[1] == "ACK", msg.params
+
+        await srv.complete_handshake()
+        await srv.disconnect()
+        caps = await _collect_cap(client, 2.0)
+        assert caps == [("DEL", "sasl")], caps
+    finally:
+        await client.disconnect()
