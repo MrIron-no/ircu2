@@ -310,6 +310,26 @@ int m_join(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   return 0;
 }
 
+/** Check whether a server JOIN's channel list needs a timestamp.
+ * "JOIN 0" (part all channels) carries none; anything else does.
+ * @param[in] chanlist Comma-separated channel list.
+ * @return Non-zero if \a chanlist names anything other than "0".
+ */
+static int join_needs_ts(const char *chanlist)
+{
+  const char *p;
+
+  for (p = chanlist; *p; ) {
+    if (!(p[0] == '0' && (p[1] == ',' || p[1] == '\0')) && p[0] != ',')
+      return 1;
+    while (*p && *p != ',')
+      p++;
+    if (*p)
+      p++;
+  }
+  return 0;
+}
+
 /** Handle a JOIN message from a server connection.
  * See @ref m_functions for discussion of the arguments.
  * @param[in] cptr Client that sent us the message.
@@ -340,6 +360,19 @@ int ms_join(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 
   if (parc < 2 || *parv[1] == '\0')
     return need_more_params(sptr, "JOIN");
+
+  /* On a P11 link the channel timestamp is a mandatory, all-digit
+   * parameter; only "JOIN 0" goes without one.  No server since u2.10.11
+   * omits it, so a P11 peer that does is in violation: drop the line
+   * (apply and propagate nothing) rather than join the user with no
+   * timestamp to synchronise on.  A P10 peer keeps the legacy optional
+   * form.  The value 0 stays legal on both: it means "creation time
+   * unknown" and is what a server relays for a channel a P10 peer
+   * created without a timestamp. */
+  if (Protocol(cptr) >= 11 && join_needs_ts(parv[1])
+      && (parc < 3 || !*parv[2] || !strIsDigit(parv[2])))
+    return protocol_violation(cptr, "JOIN %s for %s without a channel "
+                              "timestamp", parv[1], cli_name(sptr));
 
   if (parc > 2 && parv[2])
     creation = atotime(parv[2]);
