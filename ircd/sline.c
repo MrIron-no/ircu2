@@ -633,9 +633,8 @@ sline_notify_spamfilter(struct HoldQueueEntry *entry)
   assert(entry->target.recipient || entry->target.channel);
   assert(entry->msgtype == SLINE_PRIVATE || entry->msgtype == SLINE_CHANNEL);
 
-  struct Client *acptr;
   const char *target_name;
-  
+
   if (!entry || !entry->sender)
     return 0;
 
