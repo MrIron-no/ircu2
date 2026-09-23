@@ -429,7 +429,13 @@ void send_buffer(struct Client* to, struct Client* from, struct MsgBuf* buf, int
       owned = wire;
   }
 
-  Debug((DEBUG_SEND, "Sending [%p] to %s", wire, cli_name(to)));
+  /* A websocket client's queued buffer is a binary frame, so this is the
+   * last point where the line is readable; log it here for them. */
+  if (IsWebsocket(to))
+    Debug((DEBUG_SEND, "Sending [%p] to %s (websocket): %.*s", wire,
+           cli_name(to), wire->length - 2, wire->msg));
+  else
+    Debug((DEBUG_SEND, "Sending [%p] to %s", wire, cli_name(to)));
 
 
   /* For websocket clients, replace the IRC MsgBuf with a framed one before
