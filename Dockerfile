@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   $(if [ "$TLS_BACKEND" = "openssl" ]; then echo libssl-dev; \
   elif [ "$TLS_BACKEND" = "gnutls" ]; then echo libgnutls28-dev; \
   elif [ "$TLS_BACKEND" = "libtls" ]; then echo libtls-dev; fi) \
-  $(if [ -n "$SANITIZE" ]; then echo libasan8; fi) \
+  $(if [ -n "$SANITIZE" ]; then echo libasan8 libubsan1; fi) \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build/ircu2
@@ -41,7 +41,7 @@ RUN find . -name '*.o' -delete && rm -f ircd/ircd
 
 RUN ./autogen.sh \
   && if [ -n "$SANITIZE" ]; then \
-  export CFLAGS="-fsanitize=$SANITIZE -fno-omit-frame-pointer -g -O1"; \
+  export CFLAGS="-fsanitize=$SANITIZE -fno-omit-frame-pointer -g -O1 -DIRCD_NO_FREELISTS"; \
   export LDFLAGS="-fsanitize=$SANITIZE"; \
   fi; \
   ./configure --prefix=/opt/ircu --with-maxcon=256 --enable-debug --with-tls=${TLS_BACKEND} \
@@ -91,7 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   $(if [ "$TLS_BACKEND" = "openssl" ]; then echo libssl3t64; \
   elif [ "$TLS_BACKEND" = "gnutls" ]; then echo libgnutls30t64; \
   elif [ "$TLS_BACKEND" = "libtls" ]; then echo libtls28t64; fi) \
-  $(if [ -n "$SANITIZE" ]; then echo libasan8; fi) \
+  $(if [ -n "$SANITIZE" ]; then echo libasan8 libubsan1; fi) \
   && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -r -m -d /opt/ircu ircu \

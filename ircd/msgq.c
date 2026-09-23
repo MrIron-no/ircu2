@@ -125,8 +125,13 @@ msgq_delmsg(struct MsgQ *mq, struct MsgQList *qlist, unsigned int *length_p)
 
     MQData.msgs.used--; /* struct Msg is not in use anymore */
 
+#ifdef IRCD_NO_FREELISTS
+    MQData.msgs.alloc--;
+    MyFree(m);
+#else
     m->next = MQData.msgs.free; /* throw it onto the free list */
     MQData.msgs.free = m;
+#endif
   } else {
     mq->length -= *length_p; /* decrement queue length */
     m->sent += *length_p; /* this much of the message has been sent */
@@ -517,11 +522,18 @@ msgq_clean(struct MsgBuf *mb)
     if (mb->real && mb->real != mb) /* clean up the real buffer */
       msgq_clean(mb->real);
 
-    mb->next = MQData.msgBufs[mb->power - MB_BASE_SHIFT].free;
-    MQData.msgBufs[mb->power - MB_BASE_SHIFT].free = mb;
     MQData.msgBufs[mb->power - MB_BASE_SHIFT].used--;
 
+#ifdef IRCD_NO_FREELISTS
+    MQData.msgBufs[mb->power - MB_BASE_SHIFT].alloc--;
+    MQData.tot_bufsize -= 1 << mb->power;
+    MyFree(mb);
+#else
+    mb->next = MQData.msgBufs[mb->power - MB_BASE_SHIFT].free;
+    MQData.msgBufs[mb->power - MB_BASE_SHIFT].free = mb;
+
     mb->prev_p = 0;
+#endif
   }
 }
 

@@ -626,8 +626,13 @@ static int remove_member_from_channel(struct Membership* member)
   /* Check if the channel needs to be updated for TLS */
   CheckChannelTLS(chptr);
 
+#ifdef IRCD_NO_FREELISTS
+  --membershipAllocCount;
+  MyFree(member);
+#else
   member->next_member = membershipFreeList;
   membershipFreeList = member;
+#endif
 
   return sub1_from_channel(chptr);
 }
