@@ -731,8 +731,10 @@ int ms_burst(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
   char modestr[BUFSIZE];
   /* What we accept is recorded here and encoded afterwards, once per link
    * layout: the relayed line is not bounded by the incoming one and may
-   * need continuation lines, which cannot be decided while parsing. */
-  struct BurstRelayMember rmembers[BURST_RELAY_MEMBERS];
+   * need continuation lines, which cannot be decided while parsing.
+   * Only the first nrmembers entries are ever read; the initialiser is
+   * for gcc's -Wmaybe-uninitialized, which cannot see that bound. */
+  struct BurstRelayMember rmembers[BURST_RELAY_MEMBERS] = {{0}};
   struct BurstRelayBan rbans[BURST_RELAY_BANS];
   int nrmembers = 0, nrbans = 0, rmembers_full = 0;
 
