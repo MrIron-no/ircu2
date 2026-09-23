@@ -1472,10 +1472,14 @@ static void client_timer_callback(struct Event* ev)
       s_tls(&cli_socket(cptr)) = NULL;
     }
     exit_client_msg(cptr, cptr, &me, "TLS handshake timed out");
+    return; /* cptr is freed */
   } else {
     Debug((DEBUG_LIST, "Client process timer for %C expired; processing",
 	   cptr));
-    read_packet(cptr, 0); /* read_packet will re-add timer if needed */
+    /* read_packet() may exit and free cptr (CPTR_KILLED); do not touch
+     * it afterwards. */
+    if (read_packet(cptr, 0) == CPTR_KILLED)
+      return;
   }
 
   assert(0 == cptr || 0 == cli_connect(cptr) || con == cli_connect(cptr));

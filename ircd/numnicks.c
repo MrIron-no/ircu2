@@ -498,7 +498,8 @@ const char* iptobase64(char* buf, const struct irc_in_addr* addr, unsigned int c
 {
   if (irc_in_addr_is_ipv4(addr)) {
     assert(count >= 6);
-    inttobase64(buf, (ntohs(addr->in6_16[6]) << 16) | ntohs(addr->in6_16[7]), 6);
+    inttobase64(buf, ((unsigned int)ntohs(addr->in6_16[6]) << 16)
+                     | ntohs(addr->in6_16[7]), 6);
   } else {
     unsigned int max_start, max_zeros, curr_zeros, zero, ii;
     char *output = buf;
