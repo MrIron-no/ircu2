@@ -541,8 +541,14 @@ msgq_add(struct MsgQ *mq, struct MsgBuf *mb, int prio)
   assert(0 < mb->ref);
   assert(0 < mb->length);
 
-  Debug((DEBUG_SEND, "Adding buffer %p [%.*s] length %u to %s queue", mb,
-	 mb->length - 2, mb->msg, mb->length, prio ? "priority" : "normal"));
+  /* IRC text is 7-bit at the start of a line; a high first byte is a
+   * websocket frame header (FIN bit), whose body is not printable. */
+  if ((unsigned char)mb->msg[0] & 0x80)
+    Debug((DEBUG_SEND, "Adding buffer %p [websocket frame] length %u to %s queue",
+	   mb, mb->length, prio ? "priority" : "normal"));
+  else
+    Debug((DEBUG_SEND, "Adding buffer %p [%.*s] length %u to %s queue", mb,
+	   mb->length - 2, mb->msg, mb->length, prio ? "priority" : "normal"));
 
   qlist = prio ? &mq->prio : &mq->queue;
 
