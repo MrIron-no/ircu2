@@ -105,8 +105,13 @@ static void dbuf_free(struct DBufBuffer *db)
 {
   assert(0 != db);
   --DBufUsedCount;
+#ifdef IRCD_NO_FREELISTS
+  --DBufAllocCount;
+  MyFree(db);
+#else
   db->next = dbufFreeList;
   dbufFreeList = db;
+#endif
 }
 
 /** Handle a memory allocation error on a DBuf.

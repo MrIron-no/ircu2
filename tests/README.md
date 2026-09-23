@@ -288,6 +288,47 @@ The P10 server handles the full handshake (PASS, SERVER, burst, EB/EA), auto-res
 6. For S2S protocol tests, use `P11Server` to connect as a fake server
 7. Use the `/ircu2-test` Claude skill for automated test generation
 
+## Memory checking: sanitizers and valgrind
+
+The docker images can be built with AddressSanitizer / UndefinedBehaviorSanitizer,
+and the ircds can be run under valgrind or gdb. Both are driven by environment
+variables read by `docker-compose.yml` and `tests/docker/ircd-entrypoint.sh`;
+nothing in the test code changes.
+
+```bash
+# ASan + UBSan: rebuild the images, then run any subset of the suite
+IRCD_SANITIZE=address,undefined docker compose build
+IRCD_SANITIZE=address,undefined .venv/bin/pytest -v --tb=short
+
+# valgrind memcheck (20-50x slower; skip the timing-sensitive TLS stress tests)
+IRCD_DEBUG=valgrind .venv/bin/pytest -v --tb=short -m "not tls_stress"
+```
+
+- `IRCD_SANITIZE` becomes the Dockerfile's `SANITIZE` build arg: every ircd is
+  compiled with `-fsanitize=<list> -fno-omit-frame-pointer -g -O1
+  -DIRCD_NO_FREELISTS`. `ASAN_OPTIONS` defaults to
+  `abort_on_error=1:halt_on_error=1:detect_leaks=0:log_path=/opt/ircu/debug/asan`,
+  so a sanitizer hit aborts that ircd, the test fails, and the report is in
+  `tests/debug-output/asan.<pid>` (the `pytest_runtest_makereport` hook in
+  `conftest.py` also appends it to the failure output). LeakSanitizer is off
+  on purpose: ircu never frees its global tables at exit.
+- `IRCD_NO_FREELISTS` matters. ircu recycles `struct Client`, `Connection`,
+  `SLink`, `Membership`, `DBufBuffer`, `MsgBuf` and `Msg` through private free
+  lists, so a use-after-free on any of them never reaches `free()` and is
+  invisible to ASan and valgrind alike. With the define each release goes
+  through `MyFree()` instead, so the sanitizer's quarantine sees stale
+  pointers. It is set automatically for sanitizer builds; it is not meant for
+  production.
+- `IRCD_DEBUG=valgrind` runs each ircd under
+  `valgrind --leak-check=full --track-origins=yes` (`tests/docker/ircd-entrypoint.sh`);
+  output lands in `tests/debug-output/valgrind.log`. Leak and fd reports are
+  only written when the ircd exits, so bring the stack down with
+  `docker compose down` rather than killing it. `IRCD_DEBUG=gdb` is the same
+  idea with a gdb wrapper that captures a backtrace on a crash.
+- Sanitized and valgrind builds are slower; a few tests with tight deadlines
+  (the 5 s TLS handshake timeout, `relay/test_join_target`) can flake under
+  them. Re-run those individually before treating a failure as real.
+
 ## Troubleshooting
 
 Docker commands must be run from the repo root (where `docker-compose.yml` lives):

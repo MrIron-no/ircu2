@@ -66,11 +66,18 @@ static struct Connection* connectionFreeList;
 /** Linked list of currently unused SLink structures. */
 static struct SLink* slinkFreeList;
 
+/* IRCD_NO_FREELISTS (sanitizer builds, see Dockerfile): release every
+ * pooled structure through MyFree() instead of recycling it, so that a
+ * use-after-free on a Client, Connection or SLink reaches the allocator
+ * and AddressSanitizer can see it.  The pools make such a bug invisible:
+ * the memory stays a live allocation and the stale pointer "works". */
+
 /** Initialize the list manipulation support system.
  * Pre-allocate MAXCONNECTIONS Client and Connection structures.
  */
 void init_list(void)
 {
+#ifndef IRCD_NO_FREELISTS
   struct Client* cptr;
   struct Connection* con;
   int i;
@@ -88,6 +95,7 @@ void init_list(void)
     connectionFreeList = con;
     connections.alloc++;
   }
+#endif
 }
 
 /** Allocate a new Client structure.
@@ -122,10 +130,14 @@ static void dealloc_client(struct Client* cptr)
 
   --clients.inuse;
 
+  cli_magic(cptr) = 0;
+#ifdef IRCD_NO_FREELISTS
+  --clients.alloc;
+  MyFree(cptr);
+#else
   cli_next(cptr) = clientFreeList;
   clientFreeList = cptr;
-
-  cli_magic(cptr) = 0;
+#endif
 }
 
 /** Allocate a new Connection structure.
@@ -178,10 +190,14 @@ static void dealloc_connection(struct Connection* con)
 
   --connections.inuse;
 
+  con_magic(con) = 0;
+#ifdef IRCD_NO_FREELISTS
+  --connections.alloc;
+  MyFree(con);
+#else
   con_next(con) = connectionFreeList;
   connectionFreeList = con;
-
-  con_magic(con) = 0;
+#endif
 }
 
 /** Allocate a new client and initialize it.
@@ -451,9 +467,14 @@ struct SLink* make_link(void)
 void free_link(struct SLink* lp)
 {
   if (lp) {
+    links.inuse--;
+#ifdef IRCD_NO_FREELISTS
+    links.alloc--;
+    MyFree(lp);
+#else
     lp->next = slinkFreeList;
     slinkFreeList = lp;
-    links.inuse--;
+#endif
   }
 }
 
