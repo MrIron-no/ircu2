@@ -1269,8 +1269,11 @@ static void start_iauth_query(struct AuthRequest *auth)
    * Pass on the TLS fingerprint to iauth.  This lives here rather than in
    * start_auth() so that every path that starts iauth (including the
    * deferred start on proxy = yes ports) delivers it after the C line.
+   * WEBIRC ports are excluded as before: the TLS peer there is the gateway,
+   * so its certificate says nothing about the user.
    */
-  else if (IsTLS(auth->client) && *cli_tls_fingerprint(auth->client))
+  else if (IsTLS(auth->client) && !IsWebircPort(auth->client)
+           && *cli_tls_fingerprint(auth->client))
     sendto_iauth(auth->client, "Z %s", cli_tls_fingerprint(auth->client));
 }
 
