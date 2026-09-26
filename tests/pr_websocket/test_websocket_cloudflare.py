@@ -2,7 +2,7 @@
 WebSocket Cloudflare proxy integration tests.
 
 Verifies CF-Connecting-IP handling, IPcheck placement, and ident policy on
-``cloudflare = yes`` websocket listeners vs plain websocket/TCP ports.
+``proxy = cloudflare`` websocket listeners vs plain websocket/TCP ports.
 
   pytest test_websocket_cloudflare.py -v --timeout=120
 """
@@ -228,7 +228,7 @@ async def test_cloudflare_port_uses_cf_connecting_ip(ircd_hub, make_client):
 
 @pytest.mark.asyncio
 async def test_plain_websocket_ignores_cf_connecting_ip(ircd_hub, make_client):
-    """CF-Connecting-IP is ignored on websocket ports without cloudflare = yes."""
+    """CF-Connecting-IP is ignored on websocket ports without proxy = cloudflare."""
     observer = await make_client("wswho")
     nick = f"wsno{random.randint(0, 999_999)}"
     headers = (b"CF-Connecting-IP: " + SPOOF_IP.encode() + b"\r\n",)
@@ -250,7 +250,7 @@ async def test_plain_websocket_ignores_cf_connecting_ip(ircd_hub, make_client):
 
 @pytest.mark.asyncio
 async def test_cloudflare_port_rejects_missing_cf_connecting_ip(ircd_hub):
-    """cloudflare = yes requires a valid CF-Connecting-IP header at handshake."""
+    """proxy = cloudflare requires a valid CF-Connecting-IP header at handshake."""
     upgraded, response = await _attempt_ws_handshake(CF_WS_PORT)
     assert not upgraded, f"handshake should fail without CF-Connecting-IP, got {response[:200]!r}"
 

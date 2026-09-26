@@ -530,10 +530,11 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
       /*
        * Untrusted username: prepend ~.
        * Ident success / iauth U|o / WEBIRC trust are handled above.
-       * Cloudflare ports skip the ident query (peer is a CF edge) but
-       * still take this path when DoIdentLookups is enabled, so they
-       * get ~ like any other unverified user.  When DoIdentLookups is
-       * off, no port — including Cloudflare — forces a tilde.
+       * Proxy ports (proxy = cloudflare / proxy = yes) skip the ident
+       * query (peer is the proxy) but still take this path when
+       * DoIdentLookups is enabled, so they get ~ like any other
+       * unverified user.  When DoIdentLookups is off, no port —
+       * including proxy ports — forces a tilde.
        */
       char *s = user->username;
       int ii;
@@ -1333,7 +1334,7 @@ void start_auth(struct Client* client)
     FlagSet(&auth->flags, AR_NEEDS_NICK);
 
     if ((IsUserPort(client) || IsWebsocketPort(client))
-        && !IsCloudflarePort(client)) {
+        && !IsProxyPort(client)) {
       start_iauth_query(auth);
 
       /* Pass on fingerprint to iauth. */
@@ -1375,12 +1376,12 @@ static void start_dns_ident_queries(struct Client *client)
     /* Try to start DNS lookup. */
     start_dns_query(auth);
 
-    /* Ident queries the connecting host; skip behind Cloudflare. */
-    if (DoIdentLookups && !IsCloudflarePort(client))
+    /* Ident queries the connecting host; skip behind a proxy. */
+    if (DoIdentLookups && !IsProxyPort(client))
       start_auth_query(auth);
   }
 
-  if (IsCloudflarePort(client) && !FlagHas(&auth->flags, AR_IAUTH_PENDING))
+  if (IsProxyPort(client) && !FlagHas(&auth->flags, AR_IAUTH_PENDING))
     start_iauth_query(auth);
 }
 

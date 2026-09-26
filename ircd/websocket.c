@@ -204,7 +204,7 @@ int websocket_handshake_handler(struct Client *cptr) {
     int trust_cloudflare = 0;
     char *line, *saveptr;
 
-    if (IsCloudflarePort(cptr))
+    if (IsProxyCloudflarePort(cptr))
       trust_cloudflare = 1;
 
     /* Only process if we have a full HTTP header (ends with \r\n\r\n) */

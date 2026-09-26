@@ -150,6 +150,7 @@ static const struct lexer_token tokens[] = {
   { "prepend", PREPEND },
   { "program", PROGRAM },
   { "propagate", TPRIV_PROPAGATE },
+  { "proxy", PROXY },
   { "pseudo", PSEUDO },
   { "quarantine", QUARANTINE },
   { "real", REAL },
