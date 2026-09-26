@@ -44,9 +44,13 @@
 #include "config.h"
 
 #include "proxy_protocol.h"
+#include "client.h"
+#include "ircd_log.h"
+#include "ircd_osdep.h"
 #include "ircd_string.h"
 #include "res.h"
 
+/* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <string.h>
 
 /** Binary v2 signature. */
@@ -225,4 +229,92 @@ proxy_protocol_parse(const unsigned char *buf, unsigned int len,
   if (len < sizeof proxy_v1_prefix)
     return PROXY_PARSE_NEED_MORE;
   return proxy_parse_v1(buf, len, out);
+}
+
+/** Read exactly \a len bytes that are already known to be queued in the
+ * kernel (they were just peeked).
+ * @param[in] fd Socket to read from.
+ * @param[out] buf Receives the bytes.
+ * @param[in] len Number of bytes to read.
+ * @return Non-zero on success; zero if the socket blocked or failed first.
+ */
+static int proxy_consume(int fd, char *buf, unsigned int len)
+{
+  unsigned int got = 0;
+  unsigned int chunk;
+
+  while (got < len) {
+    if (os_recv_nonb(fd, buf + got, len - got, &chunk) != IO_SUCCESS)
+      return 0;
+    got += chunk;
+  }
+  return 1;
+}
+
+/** Drive the PROXY preamble for a pending client.
+ *
+ * Contract: the socket is only ever peeked, and then exactly the bytes that
+ * belong to the header are read for real.  Anything after the header (for
+ * example a TLS ClientHello, or the client's first IRC line) must stay in
+ * the kernel buffer so the next stage (ircd_tls_accept() / read_packet())
+ * sees the stream exactly as the client sent it.  While the header is still
+ * incomplete the peeked bytes are consumed into con_ws_handshake: every byte
+ * seen so far is part of a valid header prefix, and leaving peeked-but-unread
+ * bytes in the kernel would make a level-triggered engine report the socket
+ * readable on every loop pass (a busy spin until the deadline).
+ *
+ * @param[in] cptr Local client with FLAG_PROXY_PENDING set.
+ * @param[out] out Receives the parsed header when 1 is returned.
+ * @return 1 header complete (\a out filled), 0 need more data, -1 fatal
+ *   (caller exits the client).
+ */
+int proxy_protocol_read(struct Client *cptr, struct ProxyHeader *out)
+{
+  struct Connection *con = cli_connect(cptr);
+  unsigned char scratch[PROXY_HDR_MAX];
+  char tmp[PROXY_HDR_MAX];
+  char discard[PROXY_HDR_MAX];
+  unsigned int have = (unsigned int)con->con_ws_handshake_len;
+  unsigned int n = 0;
+  unsigned int remaining;
+  int fd = cli_fd(cptr);
+
+  assert(have < PROXY_HDR_MAX);
+
+  switch (os_recv_peek_nonb(fd, tmp, PROXY_HDR_MAX - have, &n)) {
+  case IO_BLOCKED:
+    return 0;
+  case IO_FAILURE:
+    return -1;
+  case IO_SUCCESS:
+    break;
+  }
+
+  memcpy(scratch, con->con_ws_handshake, have);
+  memcpy(scratch + have, tmp, n);
+
+  switch (proxy_protocol_parse(scratch, have + n, out)) {
+  case PROXY_PARSE_INVALID:
+    return -1;
+
+  case PROXY_PARSE_NEED_MORE:
+    if (have + n >= PROXY_HDR_MAX)
+      return -1;
+    if (!proxy_consume(fd, con->con_ws_handshake + have, n))
+      return -1;
+    con->con_ws_handshake_len = have + n;
+    return 0;
+
+  case PROXY_PARSE_OK:
+    break;
+  }
+
+  /* The stored prefix parsed as NEED_MORE, so the header ends beyond it. */
+  assert(out->consumed > have && out->consumed <= have + n);
+  remaining = out->consumed - have;
+  if (!proxy_consume(fd, discard, remaining))
+    return -1;
+  con->con_ws_handshake_len = 0;
+  con->con_ws_handshake[0] = '\0';
+  return 1;
 }

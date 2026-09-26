@@ -4,6 +4,7 @@
  * Copyright (C) 2026 MrIron <mriron@undernet.org>
  */
 
+#include "ircd_osdep.h"
 #include "ircd_string.h"
 #include "proxy_protocol.h"
 #include "res.h"
@@ -12,6 +13,21 @@
 #include <string.h>
 
 static int failures;
+
+/* Link stubs: proxy_protocol_read() is not exercised here. */
+IOResult os_recv_nonb(int fd, char *buf, unsigned int length,
+                      unsigned int *count_out)
+{
+  *count_out = 0;
+  return IO_FAILURE;
+}
+
+IOResult os_recv_peek_nonb(int fd, char *buf, unsigned int length,
+                           unsigned int *count_out)
+{
+  *count_out = 0;
+  return IO_FAILURE;
+}
 
 static const char *res_name(enum ProxyParseResult r)
 {
