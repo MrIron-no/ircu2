@@ -20,7 +20,14 @@ from p10_server import P10Server
 # docker-compose.yml and Dockerfile live in the repo root (parent of tests/)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-HUB = {"host": "127.0.0.1", "port": 6667, "server_port": 4400, "name": "hub.test.net"}
+HUB = {
+    "host": "127.0.0.1",
+    "port": 6667,
+    "server_port": 4400,
+    "name": "hub.test.net",
+    "proxy_port": 7003,
+    "proxy_ws_port": 7004,
+}
 LEAF1 = {"host": "127.0.0.1", "port": 6668, "server_port": 4401, "name": "leaf1.test.net", "exempt_port": 6690}
 LEAF2 = {"host": "127.0.0.1", "port": 6669, "server_port": 4402, "name": "leaf2.test.net"}
 
@@ -33,6 +40,7 @@ TLS_HUB = {
     "wss_port": 16700,
     "wss_cf_port": 16701,
     "webirc_tls_port": 16703,
+    "tls_proxy_port": 16702,
     "server_port": 14440,
     "server_tls_ca_port": 14441,
     "name": "tls-hub.test.net",
@@ -52,6 +60,15 @@ DNS_HUB = {
     "spoof_port": 6672,
     "name": "dns-hub.test.net",
     "dns_control_port": 8053,
+}
+
+HAPROXY = {
+    "host": "127.0.0.1",
+    "container_ip": "10.55.0.32",
+    "v1_plain": 7100,
+    "v2_plain": 7101,
+    "v2_ws": 7102,
+    "v2_tls": 7103,
 }
 
 
@@ -75,6 +92,8 @@ def wait_for_hub_ports(host: str | None = None):
     wait_for_port(host, HUB["port"])
     wait_for_port(host, 7000)
     wait_for_port(host, 7001)
+    wait_for_port(host, HUB["proxy_port"])
+    wait_for_port(HAPROXY["host"], HAPROXY["v1_plain"])
     # Ident lookups during registration can take several seconds on a cold start.
     time.sleep(2)
 
@@ -215,15 +234,17 @@ def _wait_tls_hub_ports():
     wait_for_port(TLS_HUB["host"], TLS_HUB["tls_port_ca"])
     wait_for_port(TLS_HUB["host"], TLS_HUB["wss_port"])
     wait_for_port(TLS_HUB["host"], TLS_HUB["server_port"])
+    wait_for_port(TLS_HUB["host"], TLS_HUB["tls_proxy_port"])
+    wait_for_port(HAPROXY["host"], HAPROXY["v2_tls"])
 
 
 def _start_topology_hub():
-    _start_services("ircd-hub")
+    _start_services("ircd-hub", "haproxy")
     wait_for_hub_ports(HUB["host"])
 
 
 def _start_topology_network():
-    _start_services("ircd-hub", "ircd-leaf1", "ircd-leaf2")
+    _start_services("ircd-hub", "ircd-leaf1", "ircd-leaf2", "haproxy")
     for server in (HUB, LEAF1, LEAF2):
         wait_for_port(server["host"], server["port"])
     # Wait for servers to link
@@ -231,7 +252,7 @@ def _start_topology_network():
 
 
 def _start_topology_tls_network():
-    _start_services("ircd-tls-hub", "ircd-tls-leaf")
+    _start_services("ircd-tls-hub", "ircd-tls-leaf", "haproxy")
     _wait_tls_hub_ports()
     wait_for_port(TLS_LEAF["host"], TLS_LEAF["server_port"])
     # Allow autoconnect TLS links hub <-> tls-leaf
@@ -239,7 +260,7 @@ def _start_topology_tls_network():
 
 
 def _start_topology_tls_hub():
-    _start_services("ircd-tls-hub")
+    _start_services("ircd-tls-hub", "haproxy")
     _wait_tls_hub_ports()
     # Ident lookups during registration can take a moment on cold start.
     time.sleep(2)
@@ -458,6 +479,15 @@ def ircd_tls_hub():
 def ircd_tls_network():
     """Connection info for the TLS-enabled hub and leaf containers."""
     return {"hub": TLS_HUB, "leaf": TLS_LEAF}
+
+
+@pytest.fixture(scope="session")
+def haproxy():
+    """Connection info for the haproxy sidecar (PROXY protocol front end).
+
+    Started with the hub, network, tls_hub and tls_network topologies.
+    """
+    return HAPROXY
 
 
 @pytest.fixture(scope="session")
