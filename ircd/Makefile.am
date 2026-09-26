@@ -127,6 +127,7 @@ ircd_SOURCES = \
 	os_generic.c \
 	packet.c \
 	parse.c \
+	proxy_protocol.c \
 	querycmds.c \
 	random.c \
 	s_auth.c \
