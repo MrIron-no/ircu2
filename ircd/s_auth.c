@@ -1265,6 +1265,13 @@ static void start_iauth_query(struct AuthRequest *auth)
                     cli_sock_ip(auth->client), auth->port,
                     ircd_ntoa(&auth->local.addr), auth->local.port))
     FlagClr(&auth->flags, AR_IAUTH_PENDING);
+  /*
+   * Pass on the TLS fingerprint to iauth.  This lives here rather than in
+   * start_auth() so that every path that starts iauth (including the
+   * deferred start on proxy = yes ports) delivers it after the C line.
+   */
+  else if (IsTLS(auth->client) && *cli_tls_fingerprint(auth->client))
+    sendto_iauth(auth->client, "Z %s", cli_tls_fingerprint(auth->client));
 }
 
 static void start_dns_ident_queries(struct Client *client);
@@ -1336,10 +1343,6 @@ void start_auth(struct Client* client)
     if ((IsUserPort(client) || IsWebsocketPort(client))
         && !IsProxyPort(client)) {
       start_iauth_query(auth);
-
-      /* Pass on fingerprint to iauth. */
-      if (IsTLS(client) && *cli_tls_fingerprint(client))
-        sendto_iauth(auth->client, "Z %s", cli_tls_fingerprint(client));
     }
   }
 

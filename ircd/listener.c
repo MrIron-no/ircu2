@@ -580,7 +580,8 @@ static void accept_connection(struct Event* ev)
     reject:
       len = snprintf(msgbuf, sizeof(msgbuf), ":%s ERROR :%s\r\n",
         cli_name(&me), msg);
-      if (len < sizeof(msgbuf))
+      /* Nothing may be written to a proxy-protocol peer before its header. */
+      if (len < sizeof(msgbuf) && !listener_proxy_protocol(listener))
         send(fd, msgbuf, len, 0);
       close(fd);
       continue;

@@ -83,6 +83,15 @@ static int proxy_parse_port(const char *str, unsigned short *port)
   return 1;
 }
 
+/** Non-zero if \a src is usable as a client address.  irc_in_addr_valid()
+ * rejects :: but not the IPv4-mapped ::ffff:0.0.0.0 that ipmask_parse() and
+ * the v2 INET path produce for 0.0.0.0, so irc_in_addr_unspec() covers that.
+ */
+static int proxy_src_ok(const struct irc_in_addr *src)
+{
+  return irc_in_addr_valid(src) && !irc_in_addr_unspec(src);
+}
+
 /** Parse a v1 (text) header.  \a buf starts with "PROXY ". */
 static enum ProxyParseResult
 proxy_parse_v1(const unsigned char *buf, unsigned int len,
@@ -133,6 +142,8 @@ proxy_parse_v1(const unsigned char *buf, unsigned int len,
     return PROXY_PARSE_INVALID;
   if (is_tcp4 ? !irc_in_addr_is_ipv4(&out->src)
               : irc_in_addr_is_ipv4(&out->src))
+    return PROXY_PARSE_INVALID;
+  if (!proxy_src_ok(&out->src))
     return PROXY_PARSE_INVALID;
 
   if (!proxy_parse_port(fields[4], &sport)
@@ -191,6 +202,8 @@ proxy_parse_v2(const unsigned char *buf, unsigned int len,
     memcpy(&out->src, buf + 16, 16);
     out->src_port = (unsigned short)((buf[48] << 8) | buf[49]);
   } else                                /* UNSPEC, UNIX, unknown */
+    return PROXY_PARSE_INVALID;
+  if (!proxy_src_ok(&out->src))
     return PROXY_PARSE_INVALID;
 
   out->cmd = PROXY_CMD_PROXY;
@@ -279,6 +292,8 @@ int proxy_protocol_read(struct Client *cptr, struct ProxyHeader *out)
   int fd = cli_fd(cptr);
 
   assert(have < PROXY_HDR_MAX);
+  if (have >= PROXY_HDR_MAX)
+    return -1;
 
   switch (os_recv_peek_nonb(fd, tmp, PROXY_HDR_MAX - have, &n)) {
   case IO_BLOCKED:
