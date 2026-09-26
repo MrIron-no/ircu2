@@ -58,8 +58,10 @@ enum ListenerFlag {
   LISTEN_TLS,
   /** Port accepts websocket connections. */
   LISTEN_WEBSOCKET,
-  /** Port is behind Cloudflare; trust CF-Connecting-IP on websocket handshakes. */
-  LISTEN_CLOUDFLARE,
+  /** Port trusts the CF-Connecting-IP header at the websocket handshake (proxy = cloudflare). */
+  LISTEN_PROXY_CLOUDFLARE,
+  /** Port expects a PROXY protocol v1/v2 header before any other byte (proxy = yes). */
+  LISTEN_PROXY_PROTOCOL,
   /** Sentinel for counting listener flags. */
   LISTEN_LAST_FLAG
 };
@@ -96,10 +98,15 @@ struct Listener {
 #define listener_webirc(LISTENER) FlagHas(&(LISTENER)->flags, LISTEN_WEBIRC)
 #define listener_tls(LISTENER)    FlagHas(&(LISTENER)->flags, LISTEN_TLS)
 #define listener_websocket(LISTENER) FlagHas(&(LISTENER)->flags, LISTEN_WEBSOCKET)
-#define listener_cloudflare(LISTENER) FlagHas(&(LISTENER)->flags, LISTEN_CLOUDFLARE)
-/** Return non-zero if \a CLI accepted a Cloudflare websocket listener. */
-#define IsCloudflarePort(CLI) \
-  (cli_listener(CLI) && listener_cloudflare(cli_listener(CLI)))
+#define listener_proxy_cloudflare(L) FlagHas(&(L)->flags, LISTEN_PROXY_CLOUDFLARE)
+#define listener_proxy_protocol(L)   FlagHas(&(L)->flags, LISTEN_PROXY_PROTOCOL)
+#define listener_proxy(L) (listener_proxy_cloudflare(L) || listener_proxy_protocol(L))
+/** Non-zero if \a CLI was accepted on a proxy = cloudflare listener. */
+#define IsProxyCloudflarePort(CLI) (cli_listener(CLI) && listener_proxy_cloudflare(cli_listener(CLI)))
+/** Non-zero if \a CLI was accepted on a proxy = yes (PROXY protocol) listener. */
+#define IsProxyProtocolPort(CLI)   (cli_listener(CLI) && listener_proxy_protocol(cli_listener(CLI)))
+/** Non-zero if \a CLI was accepted on either kind of proxy listener. */
+#define IsProxyPort(CLI)           (IsProxyCloudflarePort(CLI) || IsProxyProtocolPort(CLI))
 
 extern void        add_listener(int port, const char* vaddr_ip, 
                                 const char* mask,

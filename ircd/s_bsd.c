@@ -614,13 +614,14 @@ void add_connection(struct Listener* listener, int fd) {
 
   /*
    * Throttle check before allocating the Client, so a rejected connection
-   * has nothing to leak but the TLS session freed here.  Cloudflare websocket
-   * ports defer IPcheck until CF-Connecting-IP is known at handshake; the
-   * socket peer is a Cloudflare edge node.
+   * has nothing to leak but the TLS session freed here.  Proxy ports defer
+   * IPcheck until the real client address is known (websocket handshake for
+   * proxy = cloudflare, PROXY header for proxy = yes); the socket peer is
+   * the proxy.
    */
   ipcheck = IPCHECK_EXEMPT;
   if (!listener_server(listener) && !listener_webirc(listener)
-      && !(listener_websocket(listener) && listener_cloudflare(listener)))
+      && !listener_proxy(listener))
   {
     ipcheck = IPcheck_local_connect(&addr.addr, &next_target);
     if (ipcheck == IPCHECK_REFUSED)

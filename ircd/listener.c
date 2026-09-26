@@ -197,8 +197,10 @@ void show_ports(struct Client* sptr, const struct StatDesc* sd,
       if (listener->fd_v6 < 0)
         flags[len++] = '-';
     }
-    if (listener_cloudflare(listener))
+    if (listener_proxy_cloudflare(listener))
       flags[len++] = 'F';
+    if (listener_proxy_protocol(listener))
+      flags[len++] = 'P';
     flags[len] = '\0';
 
     send_reply(sptr, RPL_STATSPLINE, listener->addr.port, listener->ref_count,

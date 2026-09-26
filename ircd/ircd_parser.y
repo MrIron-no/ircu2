@@ -224,6 +224,7 @@ static void free_slist(struct SLink **link) {
 %token WEBIRC
 %token WEBSOCKET
 %token CLOUDFLARE
+%token PROXY
 %token IPCHECK
 %token EXCEPT
 %token INCLUDE
@@ -896,9 +897,21 @@ portblock: PORT {
   }
   for (link = hosts; link != NULL; link = link->next) {
     memcpy(&flags_here, &listen_flags, sizeof(flags_here));
-    if (FlagHas(&flags_here, LISTEN_CLOUDFLARE)
+    if (FlagHas(&flags_here, LISTEN_PROXY_CLOUDFLARE)
         && !FlagHas(&flags_here, LISTEN_WEBSOCKET)) {
-      parse_error("Port %d has cloudflare = yes but is not a websocket port", port);
+      parse_error("Port %d has proxy = cloudflare but is not a websocket port", port);
+      break;
+    }
+    if ((FlagHas(&flags_here, LISTEN_PROXY_CLOUDFLARE)
+         || FlagHas(&flags_here, LISTEN_PROXY_PROTOCOL))
+        && FlagHas(&flags_here, LISTEN_SERVER)) {
+      parse_error("Port %d cannot combine proxy with server = yes", port);
+      break;
+    }
+    if ((FlagHas(&flags_here, LISTEN_PROXY_CLOUDFLARE)
+         || FlagHas(&flags_here, LISTEN_PROXY_PROTOCOL))
+        && FlagHas(&flags_here, LISTEN_WEBIRC)) {
+      parse_error("Port %d cannot combine proxy with webirc = yes", port);
       break;
     }
     switch (link->flags & (USE_IPV4 | USE_IPV6)) {
@@ -934,7 +947,7 @@ portblock: PORT {
 };
 portitems: portitem portitems | portitem;
 portitem: portnumber | portvhost | portvhostnumber | portmask | portserver
-  | portwebirc | portwebsocket | portcloudflare | porthidden | porttls | tlsciphers
+  | portwebirc | portwebsocket | portproxy | porthidden | porttls | tlsciphers
   | tlsverifypeer | tlssystemca | tlscertfile | tlscertdir;
 portnumber: PORT '=' address_family NUMBER ';'
 {
@@ -1020,12 +1033,18 @@ porttls: TLS '=' YES ';'
   FlagClr(&listen_flags, LISTEN_TLS);
 };
 
-portcloudflare: CLOUDFLARE '=' YES ';'
+portproxy: PROXY '=' YES ';'
 {
-  FlagSet(&listen_flags, LISTEN_CLOUDFLARE);
-} | CLOUDFLARE '=' NO ';'
+  FlagSet(&listen_flags, LISTEN_PROXY_PROTOCOL);
+  FlagClr(&listen_flags, LISTEN_PROXY_CLOUDFLARE);
+} | PROXY '=' CLOUDFLARE ';'
 {
-  FlagClr(&listen_flags, LISTEN_CLOUDFLARE);
+  FlagSet(&listen_flags, LISTEN_PROXY_CLOUDFLARE);
+  FlagClr(&listen_flags, LISTEN_PROXY_PROTOCOL);
+} | PROXY '=' NO ';'
+{
+  FlagClr(&listen_flags, LISTEN_PROXY_PROTOCOL);
+  FlagClr(&listen_flags, LISTEN_PROXY_CLOUDFLARE);
 };
 
 clientblock: CLIENT
