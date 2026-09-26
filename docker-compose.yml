@@ -27,6 +27,8 @@ services:
       - "7000:7000"
       - "7001:7001"
       - "7002:7002"
+      - "7003:7003"
+      - "7004:7004"
     networks:
       ircu-test-net:
         ipv4_address: 10.55.0.10
@@ -92,6 +94,7 @@ services:
       - "16700:6700"
       - "16701:6701"
       - "16703:6703"
+      - "16702:6702"
       - "14440:4440"
       - "14441:4441"
     networks:
@@ -163,6 +166,20 @@ services:
     networks:
       ircu-test-net:
         ipv4_address: 10.55.0.31
+
+  haproxy:
+    image: haproxy:2.9-alpine
+    container_name: ircu-haproxy
+    volumes:
+      - ./tests/docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "7100:7100"
+      - "7101:7101"
+      - "7102:7102"
+      - "7103:7103"
+    networks:
+      ircu-test-net:
+        ipv4_address: 10.55.0.32
 
   ircd-dns-hub:
     build:
