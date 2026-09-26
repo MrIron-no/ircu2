@@ -554,6 +554,35 @@ int net_close_unregistered_connections(struct Client* source)
   return count;
 }
 
+/** Replace \a cptr's socket address with the address a trusted proxy reported.
+ * Runs IPcheck against the new address (undoing any earlier registration),
+ * then rewrites cli_ip(), cli_sock_ip() and cli_sockhost().
+ * @param[in] cptr Local client whose address is being replaced.
+ * @param[in] addr Address reported by the proxy.
+ * @return Non-zero on success; zero if IPcheck throttled the address (the
+ *   caller must close the connection; ServerStats->is_throttled is bumped here).
+ */
+int client_apply_proxied_ip(struct Client *cptr, const struct irc_in_addr *addr)
+{
+  time_t next_target = 0;
+
+  if (IsIPChecked(cptr))
+    IPcheck_connect_fail(cptr, 0);
+
+  if (!IPcheck_local_connect(addr, &next_target)) {
+    ++ServerStats->is_throttled;
+    return 0;
+  }
+  SetIPChecked(cptr);
+
+  memcpy(&cli_ip(cptr), addr, sizeof(cli_ip(cptr)));
+  ircd_ntoa_r(cli_sock_ip(cptr), &cli_ip(cptr));
+  ircd_strncpy(cli_sockhost(cptr), cli_sock_ip(cptr), HOSTLEN);
+  if (next_target)
+    cli_nexttarget(cptr) = next_target;
+  return 1;
+}
+
 /** Creates a client which has just connected to us on the given fd.
  * The sockhost field is initialized with the ip# of the host.
  * The client is not added to the linked list of clients, it is

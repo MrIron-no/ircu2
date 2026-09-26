@@ -64,6 +64,14 @@ extern int connect_server(struct ConfItem* aconf, struct Client* by);
 extern int  net_close_unregistered_connections(struct Client* source);
 extern void close_connection(struct Client *cptr);
 extern void add_connection(struct Listener* listener, int fd);
+/** Replace \a cptr's socket address with the address a trusted proxy reported.
+ * Runs IPcheck against the new address (undoing any earlier registration),
+ * then rewrites cli_ip(), cli_sock_ip() and cli_sockhost().
+ * @return Non-zero on success; zero if IPcheck throttled the address (the
+ *   caller must close the connection; ServerStats->is_throttled is bumped here).
+ */
+extern int  client_apply_proxied_ip(struct Client *cptr,
+                                    const struct irc_in_addr *addr);
 extern int  read_message(time_t delay);
 extern void init_server_identity(void);
 extern void close_connections(int close_stderr);
