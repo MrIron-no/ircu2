@@ -34,6 +34,7 @@
 #include "packet.h"  /* for client_dopacket */
 #include "parse.h"  /* for parse_client() */
 #include "numeric.h"
+#include "s_bsd.h"   /* for client_apply_proxied_ip() */
 #include "s_misc.h"
 #include "s_user.h"  /* for SetClient, SetUser */
 #include "ircd_tls.h"
@@ -166,32 +167,11 @@ static int websocket_origin_allowed(const char *origin)
 static int websocket_apply_client_ip(struct Client *cptr, const char *ip)
 {
   struct irc_in_addr addr;
-  time_t next_target = 0;
 
   if (!ip || !*ip || !ipmask_parse(ip, &addr, NULL))
     return 0;
 
-  if (IsIPChecked(cptr))
-    IPcheck_connect_fail(cptr, 0);
-
-  switch (IPcheck_local_connect(&addr, &next_target)) {
-  case IPCHECK_REFUSED:
-    ++ServerStats->is_throttled;
-    return 0;
-  case IPCHECK_COUNTED:
-    SetIPChecked(cptr);
-    break;
-  default: /* IPCHECK_EXEMPT: accepted, not recorded */
-    ClearIPChecked(cptr);
-    break;
-  }
-
-  memcpy(&cli_ip(cptr), &addr, sizeof(cli_ip(cptr)));
-  ircd_ntoa_r(cli_sock_ip(cptr), &cli_ip(cptr));
-  ircd_strncpy(cli_sockhost(cptr), cli_sock_ip(cptr), HOSTLEN);
-  if (next_target)
-    cli_nexttarget(cptr) = next_target;
-  return 1;
+  return client_apply_proxied_ip(cptr, &addr);
 }
 
 /* Parse HTTP headers, perform handshake, and transition client to IRC over WebSocket. */

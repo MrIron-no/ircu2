@@ -468,6 +468,34 @@ IOResult os_recv_nonb(int fd, char* buf, unsigned int length,
   }
 }
 
+/** Attempt to peek at data on a non-blocking socket without consuming it
+ * (MSG_PEEK); the data stays in the socket buffer.
+ * @param[in] fd File descriptor to read from.
+ * @param[out] buf Output buffer to read into.
+ * @param[in] length Number of bytes to read.
+ * @param[out] count_out Receives number of bytes actually read.
+ * @return An IOResult value indicating status.
+ */
+IOResult os_recv_peek_nonb(int fd, char* buf, unsigned int length,
+                           unsigned int* count_out)
+{
+  int res;
+  assert(0 != buf);
+  assert(0 != count_out);
+
+  if (0 < (res = recv(fd, buf, length, MSG_PEEK))) {
+    *count_out = (unsigned) res;
+    return IO_SUCCESS;
+  } else if (res == 0) {
+    *count_out = 0;
+    errno = 0; /* or ECONNRESET? */
+    return IO_FAILURE;
+  } else {
+    *count_out = 0;
+    return is_blocked(errno) ? IO_BLOCKED : IO_FAILURE;
+  }
+}
+
 /** Attempt to read from a non-blocking UDP socket.
  * @param[in] fd File descriptor to read from.
  * @param[out] buf Output buffer to read into.

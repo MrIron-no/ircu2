@@ -39,6 +39,8 @@ extern IOResult os_sendto_nonb(int fd, const char* buf, unsigned int length,
                                const struct irc_sockaddr* peer);
 extern IOResult os_recv_nonb(int fd, char* buf, unsigned int length,
                         unsigned int* length_out);
+/** Like os_recv_nonb() but leaves the data in the socket buffer (MSG_PEEK). */
+extern IOResult os_recv_peek_nonb(int fd, char* buf, unsigned int length, unsigned int* count_out);
 extern IOResult os_send_nonb(int fd, const char* buf, unsigned int length,
                         unsigned int* length_out);
 extern IOResult os_sendv_nonb(int fd, struct MsgQ* buf,
