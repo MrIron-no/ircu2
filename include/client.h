@@ -162,6 +162,7 @@ enum Flag
     FLAG_IPCHECK,                   /**< Added or updated IPregistry data */
     FLAG_IAUTH_STATS,               /**< Wanted IAuth statistics */
     FLAG_NEGOTIATING_TLS,           /**< TLS negotation ongoing */
+    FLAG_PROXY_PENDING,             /**< waiting for the PROXY protocol header */
     FLAG_EXEMPT_THROTTLE,           /**< exempt from input throttling (raised-maxflood class) */
 
     FLAG_LOCOP,                     /**< Local operator -- SRB */
@@ -669,6 +670,8 @@ struct Client {
 #define IsTLS(x)                HasFlag(x, FLAG_TLS)
 /** Return non-zero if the client is (re-)negotiating TLS. */
 #define IsNegotiatingTLS(x)     HasFlag(x, FLAG_NEGOTIATING_TLS)
+/** Return non-zero if the client is waiting for its PROXY protocol header. */
+#define IsProxyPending(x)       HasFlag(x, FLAG_PROXY_PENDING)
 /** Return non-zero if the client is the sender or recipient of a message on hold (spamfilter) */
 #define IsSpamHold(x)           HasFlag(x, FLAG_SPAMHOLD)
 /** Return non-zero if the client has mode +c (only messages from common channels). */
@@ -731,6 +734,8 @@ struct Client {
 #define SetTLS(x)               SetFlag(x, FLAG_TLS)
 /** Mark a client as (re-)negotiating TLS. */
 #define SetNegotiatingTLS(x)    SetFlag(x, FLAG_NEGOTIATING_TLS)
+/** Mark a client as waiting for its PROXY protocol header. */
+#define SetProxyPending(x)      SetFlag(x, FLAG_PROXY_PENDING)
 /** Mark a client as being the sender or recipient of a message on hold (spamfilter). */
 #define SetSpamHold(x)          SetFlag(x, FLAG_SPAMHOLD)
 /** Mark a client as having mode +c (only messages from those in common channels). */
@@ -778,6 +783,8 @@ struct Client {
 #define ClearHub(x)              ClrFlag(x, FLAG_HUB)
 /** Mark a client's TLS negotation as complete. */
 #define ClearNegotiatingTLS(x)   ClrFlag(x, FLAG_NEGOTIATING_TLS)
+/** Mark a client's PROXY protocol header as received. */
+#define ClearProxyPending(x)     ClrFlag(x, FLAG_PROXY_PENDING)
 /** Clear the client's spam hold flag. */
 #define ClearSpamHold(x)         ClrFlag(x, FLAG_SPAMHOLD)
 /** Remove mode +c (only accepts messages from common channels) from the client. */

@@ -48,6 +48,7 @@
 #include "numnicks.h"
 #include "packet.h"
 #include "parse.h"
+#include "proxy_protocol.h"
 #include "querycmds.h"
 #include "res.h"
 #include "sasl.h"
@@ -108,7 +109,7 @@ const char* const TOS_ERROR_MSG	      = "error setting TOS for %s: %s";
 
 static void client_sock_callback(struct Event* ev);
 static void client_timer_callback(struct Event* ev);
-static void tls_handshake_timer_arm(struct Client *cptr);
+static void preamble_timer_arm(struct Client *cptr, int seconds);
 static void tls_negotiation_events(struct Client *cptr, enum ircd_tls_want want);
 
 
@@ -383,7 +384,7 @@ static int completed_connection(struct Client* cptr)
       s_tls(&cli_socket(cptr)) = tls;
       SetNegotiatingTLS(cptr);
       SetTLS(cptr);
-      tls_handshake_timer_arm(cptr);
+      preamble_timer_arm(cptr, TLS_HANDSHAKE_TIMEOUT);
     }
 
     /* Are we making progress?  Handle the result like tls_negotiate_client():
@@ -628,8 +629,10 @@ void add_connection(struct Listener* listener, int fd) {
    */
   os_disable_options(fd);
 
+  /* A PROXY protocol port attaches TLS only after the header has been read
+   * (proxy_preamble_done()); the header precedes the ClientHello. */
   tls = NULL;
-  if (listener_tls(listener))
+  if (listener_tls(listener) && !listener_proxy_protocol(listener))
   {
     tls = ircd_tls_accept(listener, fd);
     if (!tls)
@@ -718,12 +721,20 @@ void add_connection(struct Listener* listener, int fd) {
      * would busy-loop on a level-triggered writable socket until the peer's
      * first flight arrived.  A silent peer is reaped by the deadline timer. */
     socket_events(&cli_socket(new_client), SOCK_EVENT_READABLE);
-    tls_handshake_timer_arm(new_client);
+    preamble_timer_arm(new_client, TLS_HANDSHAKE_TIMEOUT);
+  }
+  else if (listener_proxy_protocol(listener))
+  {
+    /* Wait for the PROXY header; proxy_preamble_done() continues from there.
+     * Nothing is written to the peer while the header is pending. */
+    SetProxyPending(new_client);
+    socket_events(&cli_socket(new_client), SOCK_EVENT_READABLE);
+    preamble_timer_arm(new_client, PROXY_HEADER_TIMEOUT);
   }
 
   Count_newunknown(UserStats);
   /* if we've made it this far we can put the client on the auth query pile */
-  if (!IsTLS(new_client))
+  if (!IsTLS(new_client) && !IsProxyPending(new_client))
     start_auth(new_client);
 }
 
@@ -776,9 +787,14 @@ static int read_packet(struct Client *cptr, int socket_ready)
 {
   unsigned int dolen = 0;
   unsigned int length = 0;
+  int is_ws_handshake;
+  unsigned int flood_limit;
 
-  int is_ws_handshake = (IsWebsocketPort(cptr) && !IsWebsocket(cptr));
-  unsigned int flood_limit = is_ws_handshake ? WEBSOCKET_HANDSHAKE_MAX : GetMaxFlood(cptr);
+  /* A pending client's bytes belong to proxy_protocol_read(). */
+  assert(!IsProxyPending(cptr));
+
+  is_ws_handshake = (IsWebsocketPort(cptr) && !IsWebsocket(cptr));
+  flood_limit = is_ws_handshake ? WEBSOCKET_HANDSHAKE_MAX : GetMaxFlood(cptr);
 
   /* A connection class whose maxflood exceeds the CLIENT_FLOOD default marks
    * its clients exempt from input throttling. Evaluated here in the shared
@@ -1202,18 +1218,22 @@ static void tls_negotiation_failed(struct Client *cptr, const char *reason)
                          reason ? reason : "");
 }
 
-/** Arm the TLS handshake deadline for \a cptr.
- * The handshake is driven purely by socket events, so a peer that never
- * speaks (or stops mid-handshake) would otherwise sit forever.  The
- * per-connection process timer (cli_proc) is unused until read_packet() runs,
- * which cannot precede the handshake, so it doubles as the deadline;
- * tls_handshake_succeeded() cancels it and free_client() deletes it on any
- * other exit. */
-static void tls_handshake_timer_arm(struct Client *cptr)
+/** Arm the preamble deadline (PROXY header and/or TLS handshake) for \a cptr.
+ * Both preambles are driven purely by socket events, so a peer that never
+ * speaks (or stops midway) would otherwise sit forever.  The per-connection
+ * process timer (cli_proc) is unused until read_packet() runs, which cannot
+ * precede either preamble, so it doubles as the deadline.  A PROXY header
+ * followed by a TLS handshake shares one deadline.  tls_handshake_succeeded()
+ * or proxy_preamble_done() (plaintext) cancels it and free_client() deletes
+ * it on any other exit.
+ * @param[in] cptr Client whose preamble is starting.
+ * @param[in] seconds Deadline in seconds from now.
+ */
+static void preamble_timer_arm(struct Client *cptr, int seconds)
 {
   cli_freeflag(cptr) |= FREEFLAG_TIMER;
   timer_add(&cli_proc(cptr), client_timer_callback, cli_connect(cptr),
-            TT_RELATIVE, TLS_HANDSHAKE_TIMEOUT);
+            TT_RELATIVE, seconds);
 }
 
 /** Wait on exactly the socket direction the handshake reported blocked on.
@@ -1261,7 +1281,7 @@ static int tls_negotiate_client(struct Client *cptr, char **fmt, char **fallback
 /** Continue client setup after an inbound or outbound TLS handshake completes. */
 static void tls_handshake_succeeded(struct Client *cptr)
 {
-  /* Drop the handshake deadline armed by tls_handshake_timer_arm(). */
+  /* Drop the handshake deadline armed by preamble_timer_arm(). */
   if (t_onqueue(&cli_proc(cptr)))
     timer_del(&cli_proc(cptr));
 
@@ -1275,6 +1295,57 @@ static void tls_handshake_succeeded(struct Client *cptr)
   }
   else if (!cli_auth(cptr))
     start_auth(cptr);
+}
+
+/** Continue setting up \a cptr once its PROXY protocol header is complete.
+ * Ordering: header -> IPcheck on the reported (or, for LOCAL, the socket)
+ * address -> TLS attach (TLS listener) or start_auth() (plaintext, including
+ * websocket ports).  No byte is ever written to the peer while the header is
+ * pending, and a throttled or failed client is closed without a write.
+ * May exit (and free) \a cptr; callers must not touch it afterwards.
+ * @param[in] cptr Client that was waiting for its PROXY header.
+ * @param[in] hdr Parsed header.
+ */
+static void proxy_preamble_done(struct Client *cptr, const struct ProxyHeader *hdr)
+{
+  struct irc_in_addr sockaddr;
+  const struct irc_in_addr *addr;
+
+  ClearProxyPending(cptr);
+
+  if (hdr->cmd == PROXY_CMD_PROXY)
+    addr = &hdr->src;
+  else {
+    /* LOCAL: the proxy's own connection (e.g. a health check); keep the
+     * socket address. */
+    memcpy(&sockaddr, &cli_ip(cptr), sizeof(sockaddr));
+    addr = &sockaddr;
+  }
+  if (!client_apply_proxied_ip(cptr, addr)) {
+    exit_client(cptr, cptr, &me, "Throttled");
+    return;
+  }
+
+  if (listener_tls(cli_listener(cptr))) {
+    void *tls = ircd_tls_accept(cli_listener(cptr), cli_fd(cptr));
+    if (!tls) {
+      exit_client(cptr, cptr, &me, "TLS setup failed");
+      return;
+    }
+    s_tls(&cli_socket(cptr)) = tls;
+    SetTLS(cptr);
+    SetNegotiatingTLS(cptr);
+    /* Same as add_connection(): wait for the ClientHello on READABLE only.
+     * The preamble deadline keeps running and now bounds the handshake too;
+     * tls_handshake_succeeded() cancels it. */
+    socket_events(&cli_socket(cptr), SOCK_EVENT_READABLE);
+  } else {
+    /* Plaintext (websocket ports included): the preamble is over, drop the
+     * deadline exactly like tls_handshake_succeeded(). */
+    if (t_onqueue(&cli_proc(cptr)))
+      timer_del(&cli_proc(cptr));
+    start_auth(cptr);
+  }
 }
 
 /** Process events on a client socket.
@@ -1355,6 +1426,10 @@ static void client_sock_callback(struct Event* ev)
       ClrFlag(cptr, FLAG_NEGOTIATING_TLS);
       fmt = "%s";
       fallback = "TLS negotiation failed";
+    } else if (IsProxyPending(cptr)) {
+      ClearProxyPending(cptr);
+      fmt = "%s";
+      fallback = "EOF before PROXY header";
     } else {
       fmt = "Read error: %s";
       fallback = "EOF from client";
@@ -1362,6 +1437,8 @@ static void client_sock_callback(struct Event* ev)
     break;
 
   case ET_WRITE: /* socket is writable */
+    if (IsProxyPending(cptr))
+      break;  /* never registers writable interest; defensive */
     if (IsNegotiatingTLS(cptr)) {
       int res = tls_negotiate_client(cptr, &fmt, &fallback);
       if (res < 0)
@@ -1408,6 +1485,22 @@ static void client_sock_callback(struct Event* ev)
       return;
     }
     Debug((DEBUG_DEBUG, "Reading data from %C", cptr));
+    if (IsProxyPending(cptr)) {
+      struct ProxyHeader hdr;
+      int r = proxy_protocol_read(cptr, &hdr);
+      if (r < 0) {
+        /* No peer write: the socket is torn down with a plain close. */
+        SetFlag(cptr, FLAG_DEADSOCKET);
+        ClearProxyPending(cptr);
+        exit_client(cptr, cptr, &me, "Invalid PROXY header");
+        return;
+      }
+      if (r == 0)
+        break;  /* need more; fallback stays NULL */
+      /* May exit (and free) cptr; do not touch it again. */
+      proxy_preamble_done(cptr, &hdr);
+      return;
+    }
     if (IsNegotiatingTLS(cptr)) {
       int res = tls_negotiate_client(cptr, &fmt, &fallback);
       if (res < 0)
@@ -1486,8 +1579,15 @@ static void client_timer_callback(struct Event* ev)
 
     if (!con_freeflag(con) && !cptr)
       free_connection(con); /* client is being destroyed */
+  } else if (IsProxyPending(cptr)) {
+    /* PROXY header deadline from preamble_timer_arm().  No peer write: the
+     * connection closes with a plain EOF.  Exiting from inside the timer's
+     * own callback is fine for the same reason as the TLS arm below. */
+    SetFlag(cptr, FLAG_DEADSOCKET);
+    ClearProxyPending(cptr);
+    exit_client_msg(cptr, cptr, &me, "PROXY header timed out");
   } else if (IsNegotiatingTLS(cptr)) {
-    /* Handshake deadline from tls_handshake_timer_arm().  No peer write: a
+    /* Handshake deadline from preamble_timer_arm().  No peer write: a
      * stalled handshake must close with a plain EOF, not a plaintext line
      * that would corrupt a mid-handshake peer's TLS stream.  Exiting from
      * inside the timer's own callback is fine: timer_del() is a no-op while it
