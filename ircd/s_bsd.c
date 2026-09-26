@@ -1308,7 +1308,7 @@ static void tls_handshake_succeeded(struct Client *cptr)
  */
 static void proxy_preamble_done(struct Client *cptr, const struct ProxyHeader *hdr)
 {
-  struct irc_in_addr sockaddr;
+  struct irc_in_addr local_addr;
   const struct irc_in_addr *addr;
 
   ClearProxyPending(cptr);
@@ -1318,10 +1318,12 @@ static void proxy_preamble_done(struct Client *cptr, const struct ProxyHeader *h
   else {
     /* LOCAL: the proxy's own connection (e.g. a health check); keep the
      * socket address. */
-    memcpy(&sockaddr, &cli_ip(cptr), sizeof(sockaddr));
-    addr = &sockaddr;
+    memcpy(&local_addr, &cli_ip(cptr), sizeof(local_addr));
+    addr = &local_addr;
   }
   if (!client_apply_proxied_ip(cptr, addr)) {
+    /* DEADSOCKET suppresses exit_client()'s "Closing Link" write. */
+    SetFlag(cptr, FLAG_DEADSOCKET);
     exit_client(cptr, cptr, &me, "Throttled");
     return;
   }
@@ -1329,6 +1331,8 @@ static void proxy_preamble_done(struct Client *cptr, const struct ProxyHeader *h
   if (listener_tls(cli_listener(cptr))) {
     void *tls = ircd_tls_accept(cli_listener(cptr), cli_fd(cptr));
     if (!tls) {
+      /* DEADSOCKET suppresses exit_client()'s "Closing Link" write. */
+      SetFlag(cptr, FLAG_DEADSOCKET);
       exit_client(cptr, cptr, &me, "TLS setup failed");
       return;
     }

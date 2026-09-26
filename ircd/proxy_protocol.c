@@ -50,7 +50,6 @@
 #include "ircd_string.h"
 #include "res.h"
 
-/* #include <assert.h> -- Now using assert in ircd_log.h */
 #include <string.h>
 
 /** Binary v2 signature. */
@@ -309,9 +308,16 @@ int proxy_protocol_read(struct Client *cptr, struct ProxyHeader *out)
     break;
   }
 
-  /* The stored prefix parsed as NEED_MORE, so the header ends beyond it. */
+  /* The stored prefix parsed as NEED_MORE, so the header ends beyond it and
+   * within what was just peeked.  Enforced at runtime too: a violation would
+   * underflow remaining and overrun discard. */
   assert(out->consumed > have && out->consumed <= have + n);
+  if (out->consumed <= have || out->consumed > have + n)
+    return -1;
+  /* 0 < remaining <= n <= PROXY_HDR_MAX - have, by the check above. */
   remaining = out->consumed - have;
+  if (remaining > sizeof discard)
+    return -1;
   if (!proxy_consume(fd, discard, remaining))
     return -1;
   con->con_ws_handshake_len = 0;
