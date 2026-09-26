@@ -204,6 +204,10 @@ static void test_v1(void)
              PROXY_PARSE_INVALID);
   expect_res("v1_bad_proto", S("PROXY UDP4 203.0.113.50 10.0.0.1 1 2\r\n"),
              PROXY_PARSE_INVALID);
+  expect_res("v1_tcp4_unspec_src", S("PROXY TCP4 0.0.0.0 10.0.0.1 1 2\r\n"),
+             PROXY_PARSE_INVALID);
+  expect_res("v1_tcp6_unspec_src", S("PROXY TCP6 :: 2001:db8::2 1 2\r\n"),
+             PROXY_PARSE_INVALID);
   expect_res("v1_partial", S("PROXY TCP4 203.0."), PROXY_PARSE_NEED_MORE);
   expect_proxy("v1_partial_then_full", S(full), "203.0.113.50", 51234, 45);
 
@@ -236,6 +240,16 @@ static void test_v2(void)
   buf[48] = 51234 >> 8; buf[49] = 51234 & 0xff;
   buf[50] = 6667 >> 8;  buf[51] = 6667 & 0xff;
   expect_proxy("v2_inet6", buf, n, "2001:db8::1", 51234, 52);
+
+  n = mk_v2_inet(buf, 12);
+  memset(buf + 16, 0, 4);
+  expect_res("v2_inet_unspec_src", buf, n, PROXY_PARSE_INVALID);
+
+  n = mk_v2(buf, 0x21, 0x21, 36);
+  memset(buf + 16, 0, 36);
+  buf[48] = 51234 >> 8; buf[49] = 51234 & 0xff;
+  buf[50] = 6667 >> 8;  buf[51] = 6667 & 0xff;
+  expect_res("v2_inet6_unspec_src", buf, n, PROXY_PARSE_INVALID);
 
   n = mk_v2_inet(buf, 12);
   buf[12] = 0x11;
