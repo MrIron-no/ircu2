@@ -523,14 +523,14 @@ static void test_fingerprint_storage(void)
   tls_io_store_fingerprint(c, digest, 20);
   assert(!memcmp(cli_tls_fingerprint(c), zeros, 65));
 
-  /* Cloudflare ports suppress fingerprints entirely */
+  /* proxy = cloudflare ports suppress fingerprints entirely */
   tls_io_store_fingerprint(c, digest, 32);
-  FlagSet(&lst.flags, LISTEN_CLOUDFLARE);
+  FlagSet(&lst.flags, LISTEN_PROXY_CLOUDFLARE);
   con_listener(&conn) = &lst;
   tls_io_store_fingerprint(c, digest, 32);
   assert(!memcmp(cli_tls_fingerprint(c), zeros, 65));
   con_listener(&conn) = NULL;
-  FlagClr(&lst.flags, LISTEN_CLOUDFLARE);
+  FlagClr(&lst.flags, LISTEN_PROXY_CLOUDFLARE);
 
   /* WEBIRC ports likewise: the TLS peer is the gateway, not the user */
   {
