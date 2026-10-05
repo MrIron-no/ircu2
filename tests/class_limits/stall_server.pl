@@ -31,7 +31,7 @@ my $ts = time();
 # conf is attached yet, so get_sendq() caches the feature default.
 print $sock "VERSION\r\n";
 print $sock "PASS :testpass\r\n";
-print $sock "SERVER services.test.net 1 $ts $ts J10 AE]]] +s :Stall Test\r\n";
+print $sock "SERVER services.test.net 1 $ts $ts J10 AE]]] +s6 :Stall Test\r\n";
 
 # Read the hub's burst; answer end-of-burst and its ack ("AE" = numeric 4).
 my $seen = 0;
