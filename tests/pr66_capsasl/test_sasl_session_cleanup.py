@@ -13,7 +13,7 @@ import pytest
 
 from cap_helpers import cap_ls_302
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 pytestmark = [
@@ -25,7 +25,7 @@ pytestmark = [
 @pytest.fixture
 async def services(ircd_hub):
     """Fake services server on the hub with SASL enabled."""
-    srv = P10Server(name="services.test.net", numeric=4, password="testpass")
+    srv = P11Server(name="services.test.net", numeric=4, password="testpass")
     await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
     await srv.handshake()
     await srv.send_config("sasl.server", "services.test.net")
@@ -35,7 +35,7 @@ async def services(ircd_hub):
     await srv.disconnect()
 
 
-async def _start_sasl(client: IRCClient, services: P10Server) -> tuple[str, str]:
+async def _start_sasl(client: IRCClient, services: P11Server) -> tuple[str, str]:
     """Negotiate sasl and send AUTHENTICATE PLAIN; return (hub numeric, routing)."""
     assert "sasl" in await cap_ls_302(client), "hub does not advertise sasl"
     await client.send("CAP REQ :sasl")

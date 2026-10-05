@@ -6,7 +6,7 @@ from the network, picks up a cap-notify client while alone, and then links
 to the hub behind which the SASL server lives::
 
     leaf1.test.net --- hub.test.net --- services.test.net  (sasl.server)
-    (client here)                       (fake, P10Server)
+    (client here)                       (fake, P11Server)
 
 sasl.server/sasl.mechanisms reach the leaf only through the hub's CONFIG
 burst, the SASL server only as a P-introduced downlink of the bursting hub,
@@ -19,7 +19,7 @@ import pytest
 
 from cap_helpers import cap_ls_302
 from irc_client import IRCClient
-from p10_server import P10Server
+from p11_server import P11Server
 from tls.helpers import links_contains, oper_up
 
 pytestmark = [
@@ -123,7 +123,7 @@ async def _run(ircd_network, *, leaf_initiates: bool, nick: str) -> None:
     client = None
     try:
         # 1. SASL server fully linked on the network side.
-        srv = P10Server(name=SASL_SERVER, numeric=4, password="testpass")
+        srv = P11Server(name=SASL_SERVER, numeric=4, password="testpass")
         await srv.connect(hub["host"], hub["server_port"])
         await srv.begin_handshake()
         await srv.send_config("sasl.server", SASL_SERVER)

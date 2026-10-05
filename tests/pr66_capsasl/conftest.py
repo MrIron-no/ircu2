@@ -2,7 +2,7 @@
 
 import pytest
 
-from p10_server import P10Server
+from p11_server import P11Server
 
 
 SASL_NETCONF_KEYS = ("sasl.server", "sasl.mechanisms", "sasl.timeout")
@@ -18,7 +18,7 @@ async def reset_sasl_netconf(ircd_hub):
     still hold) and sends an empty CF value, which deletes the key.
     """
     yield
-    srv = P10Server(name="uworldonly.test.net", numeric=61, password="testpass")
+    srv = P11Server(name="uworldonly.test.net", numeric=61, password="testpass")
     await srv.connect(ircd_hub["host"], ircd_hub["server_port"])
     try:
         await srv.handshake()
