@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from p11_server import P11Server, strip_msg_tags
+from p10_server import P10Server, strip_msg_tags
 
 pytestmark = pytest.mark.single_server
 
@@ -45,9 +45,9 @@ _sync_seq = itertools.count(1)
 
 
 async def _link(hub, protocol: int, numeric: int = 5,
-                name: str = "notulined.test.net") -> P11Server:
+                name: str = "notulined.test.net") -> P10Server:
     """Link a stub server of the given protocol and finish the handshake."""
-    stub = P11Server(name=name, numeric=numeric, password="testpass",
+    stub = P10Server(name=name, numeric=numeric, password="testpass",
                      server_flags="", protocol=protocol,
                      max_clients=STUB_CAPACITY)
     await stub.connect(hub["host"], hub["server_port"])
@@ -80,7 +80,7 @@ async def _ban_list(client, chan: str) -> list[tuple[str, str, str]]:
     return bans
 
 
-def _burst_lines(stub: P11Server, chan: str) -> list[str]:
+def _burst_lines(stub: P10Server, chan: str) -> list[str]:
     """Every BURST line for ``chan`` the stub has read, tags stripped."""
     lines = []
     for line in stub.received:
@@ -91,7 +91,7 @@ def _burst_lines(stub: P11Server, chan: str) -> list[str]:
     return lines
 
 
-def _burst_line(stub: P11Server, chan: str) -> str:
+def _burst_line(stub: P10Server, chan: str) -> str:
     """The single BURST line for ``chan``."""
     lines = _burst_lines(stub, chan)
     assert lines, (
@@ -101,7 +101,7 @@ def _burst_line(stub: P11Server, chan: str) -> str:
     return lines[0]
 
 
-def _burst_ts(stub: P11Server, chan: str) -> str:
+def _burst_ts(stub: P10Server, chan: str) -> str:
     """The channel creation time the hub reported for ``chan``."""
     return _burst_line(stub, chan).split()[3]
 

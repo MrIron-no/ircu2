@@ -21,7 +21,7 @@ import itertools
 
 import pytest
 
-from p11_server import P11Server, strip_msg_tags
+from p10_server import P10Server, strip_msg_tags
 
 pytestmark = pytest.mark.single_server
 
@@ -38,9 +38,9 @@ STUB_CAPACITY = 63
 # --------------------------------------------------------------------------
 
 
-async def _link(hub, protocol: int, numeric: int = 6) -> P11Server:
+async def _link(hub, protocol: int, numeric: int = 6) -> P10Server:
     """Link a stub server of the given protocol and finish the handshake."""
-    stub = P11Server(name="notulined.test.net", numeric=numeric,
+    stub = P10Server(name="notulined.test.net", numeric=numeric,
                      password="testpass", server_flags="", protocol=protocol,
                      max_clients=STUB_CAPACITY)
     await stub.connect(hub["host"], hub["server_port"])
@@ -48,7 +48,7 @@ async def _link(hub, protocol: int, numeric: int = 6) -> P11Server:
     return stub
 
 
-def _burst_line(stub: P11Server, chan: str) -> str:
+def _burst_line(stub: P10Server, chan: str) -> str:
     """The BURST line for ``chan`` among everything the stub has read."""
     for line in stub.received:
         parts = strip_msg_tags(line).split()
@@ -59,11 +59,11 @@ def _burst_line(stub: P11Server, chan: str) -> str:
     )
 
 
-def _burst_ts(stub: P11Server, chan: str) -> int:
+def _burst_ts(stub: P10Server, chan: str) -> int:
     return int(_burst_line(stub, chan).split()[3])
 
 
-async def _recv_token(stub: P11Server, token: str, timeout: float = 5.0):
+async def _recv_token(stub: P10Server, token: str, timeout: float = 5.0):
     """Read stub lines until one whose P10 token is ``token``; else None.
 
     ``_recv`` answers PINGs and tracks NICKs on the way, so the stub link
@@ -299,19 +299,19 @@ async def test_reveal_token_stale_ts_ignored(ircd_hub, make_client):
 # --------------------------------------------------------------------------
 
 
-async def _two_p11_stubs(hub) -> tuple[P11Server, P11Server]:
+async def _two_p11_stubs(hub) -> tuple[P10Server, P10Server]:
     """Link two P11 stubs (A=notulined #5, B=uworldonly #6) to the hub.
 
     Both names have Connect blocks in ircd-hub.conf.  A relayed token from A
     must reach B, so both links are up before we act.
     """
-    stub_a = P11Server(name="notulined.test.net", numeric=5,
+    stub_a = P10Server(name="notulined.test.net", numeric=5,
                        password="testpass", server_flags="", protocol=11,
                        max_clients=STUB_CAPACITY)
     await stub_a.connect(hub["host"], hub["server_port"])
     await stub_a.handshake()
 
-    stub_b = P11Server(name="uworldonly.test.net", numeric=6,
+    stub_b = P10Server(name="uworldonly.test.net", numeric=6,
                        password="testpass", server_flags="", protocol=11,
                        max_clients=STUB_CAPACITY)
     await stub_b.connect(hub["host"], hub["server_port"])

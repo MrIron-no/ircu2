@@ -31,7 +31,7 @@ import re
 import pytest
 
 from cap_helpers import collect_wallops, oper_up
-from p11_server import P11Server, strip_msg_tags
+from p10_server import P10Server, strip_msg_tags
 
 pytestmark = pytest.mark.single_server
 
@@ -60,9 +60,9 @@ _sync_seq = itertools.count(1)
 # --------------------------------------------------------------------------
 
 
-async def _link(hub, name: str, numeric: int, protocol: int) -> P11Server:
+async def _link(hub, name: str, numeric: int, protocol: int) -> P10Server:
     """Link one stub server of the given protocol and finish its handshake."""
-    stub = P11Server(name=name, numeric=numeric, password="testpass",
+    stub = P10Server(name=name, numeric=numeric, password="testpass",
                      max_clients=STUB_CAPACITY, protocol=protocol)
     await stub.connect(hub["host"], hub["server_port"])
     await stub.handshake()
@@ -95,7 +95,7 @@ async def _close(*stubs):
 # --------------------------------------------------------------------------
 
 
-def _burst_lines(stub: P11Server, chan: str) -> list[str]:
+def _burst_lines(stub: P10Server, chan: str) -> list[str]:
     """Every BURST line for ``chan`` the stub has read, tags stripped."""
     lines = []
     for line in stub.received:
@@ -137,7 +137,7 @@ def _members(lines: list[str]) -> list[tuple[str, str]]:
     return out
 
 
-def _creation_ts(stub: P11Server, chan: str) -> str | None:
+def _creation_ts(stub: P10Server, chan: str) -> str | None:
     """The creation TS the hub stamped on ``chan``, read off the stub's feed.
 
     When a hub client joins a fresh channel the hub relays a CREATE (``C``,

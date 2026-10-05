@@ -15,12 +15,12 @@ import time
 
 import pytest
 
-from p11_server import P11Server, strip_msg_tags
+from p10_server import P10Server, strip_msg_tags
 
 pytestmark = pytest.mark.single_server
 
 
-async def _two_stubs(hub, proto_a, proto_b) -> tuple[P11Server, P11Server]:
+async def _two_stubs(hub, proto_a, proto_b) -> tuple[P10Server, P10Server]:
     """Link two stub servers to the hub and complete both handshakes.
 
     The capacity has to be 2**n - 1: the ircd uses the announced value
@@ -28,13 +28,13 @@ async def _two_stubs(hub, proto_a, proto_b) -> tuple[P11Server, P11Server]:
     canonical numeric of each member it resolved, so a mask that collapses
     several numerics onto one slot would relay one member three times.
     """
-    stub_a = P11Server(name="notulined.test.net", numeric=5,
+    stub_a = P10Server(name="notulined.test.net", numeric=5,
                        password="testpass", server_flags="", protocol=proto_a,
                        max_clients=63)
     await stub_a.connect(hub["host"], hub["server_port"])
     await stub_a.handshake()
 
-    stub_b = P11Server(name="uworldonly.test.net", numeric=6,
+    stub_b = P10Server(name="uworldonly.test.net", numeric=6,
                        password="testpass", server_flags="", protocol=proto_b,
                        max_clients=63)
     await stub_b.connect(hub["host"], hub["server_port"])
@@ -121,13 +121,13 @@ async def _two_stubs_with_users(hub, proto_a, proto_b):
     The ircd uses the announced client capacity verbatim as the numnick slot
     mask, so only a 2**n - 1 value gives each introduced user its own slot.
     """
-    stub_a = P11Server(name="notulined.test.net", numeric=5,
+    stub_a = P10Server(name="notulined.test.net", numeric=5,
                        password="testpass", server_flags="", protocol=proto_a,
                        max_clients=63)
     await stub_a.connect(hub["host"], hub["server_port"])
     await stub_a.handshake()
 
-    stub_b = P11Server(name="uworldonly.test.net", numeric=6,
+    stub_b = P10Server(name="uworldonly.test.net", numeric=6,
                        password="testpass", server_flags="", protocol=proto_b,
                        max_clients=63)
     await stub_b.connect(hub["host"], hub["server_port"])
@@ -292,17 +292,17 @@ async def _three_stubs(hub):
     Connect blocks of tests/docker/ircd-hub.conf.  All three announce the
     same 2**n - 1 capacity so every introduced user gets its own slot.
     """
-    src = P11Server(name="services.test.net", numeric=4, password="testpass",
+    src = P10Server(name="services.test.net", numeric=4, password="testpass",
                     protocol=11, max_clients=63)
     await src.connect(hub["host"], hub["server_port"])
     await src.handshake()
 
-    p10 = P11Server(name="notulined.test.net", numeric=5, password="testpass",
+    p10 = P10Server(name="notulined.test.net", numeric=5, password="testpass",
                     server_flags="", protocol=10, max_clients=63)
     await p10.connect(hub["host"], hub["server_port"])
     await p10.handshake()
 
-    p11 = P11Server(name="uworldonly.test.net", numeric=6, password="testpass",
+    p11 = P10Server(name="uworldonly.test.net", numeric=6, password="testpass",
                     server_flags="", protocol=11, max_clients=63)
     await p11.connect(hub["host"], hub["server_port"])
     await p11.handshake()
@@ -310,7 +310,7 @@ async def _three_stubs(hub):
     return src, p10, p11
 
 
-def _burst_lines_for(stub: P11Server, chan: str) -> list[str]:
+def _burst_lines_for(stub: P10Server, chan: str) -> list[str]:
     """Every BURST line for ``chan`` the stub has read, tags stripped."""
     lines = []
     for line in stub.received:

@@ -18,7 +18,7 @@ import itertools
 
 import pytest
 
-from p11_server import P11Server, strip_msg_tags
+from p10_server import P10Server, strip_msg_tags
 
 pytestmark = pytest.mark.single_server
 
@@ -37,9 +37,9 @@ _sync_seq = itertools.count(1)
 # --------------------------------------------------------------------------
 
 
-async def _link(hub, protocol: int, numeric: int = 5) -> P11Server:
+async def _link(hub, protocol: int, numeric: int = 5) -> P10Server:
     """Link a stub server of the given protocol and finish the handshake."""
-    stub = P11Server(name="notulined.test.net", numeric=numeric,
+    stub = P10Server(name="notulined.test.net", numeric=numeric,
                      password="testpass", server_flags="", protocol=protocol,
                      max_clients=STUB_CAPACITY)
     await stub.connect(hub["host"], hub["server_port"])
@@ -47,7 +47,7 @@ async def _link(hub, protocol: int, numeric: int = 5) -> P11Server:
     return stub
 
 
-def _burst_line(stub: P11Server, chan: str) -> str:
+def _burst_line(stub: P10Server, chan: str) -> str:
     """The BURST line for ``chan`` among everything the stub has read."""
     for line in stub.received:
         parts = strip_msg_tags(line).split()
