@@ -316,7 +316,7 @@ static int burst_parse_bans(struct Client *cptr, struct Client *sptr,
     ban = collapse(pretty_mask(tok[i]));
 
     if (p11) {
-      when = atotime(tok[i + 1]);
+      when = atoi(tok[i + 1]);
       /* Repair rather than reject: a ban is never dropped over its
        * metadata (doc/P11.md 8.1). */
       if (when < OLDEST_TS || when > TStime() + 60)

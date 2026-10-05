@@ -495,7 +495,7 @@ int ms_reveal(struct Client *cptr, struct Client *sptr, int parc, char *parv[])
 
   /* A reveal for a newer incarnation than ours lost the timestamp race and
    * is ignored, exactly as INVITE does. */
-  rev_ts = atotime(parv[2]);
+  rev_ts = atoi(parv[2]);
   if (rev_ts > chptr->creationtime)
     return 0;
 
