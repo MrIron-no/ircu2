@@ -175,7 +175,7 @@ struct Message msgtab[] = {
   {
     MSG_REVEAL,
     TOK_REVEAL,
-    0, MAXPARA, MFLG_SLOW | MFLG_NO_S2S_TIME, 0, NULL,
+    0, MAXPARA, MFLG_SLOW, 0, NULL,
     /* UNREG, CLIENT, SERVER, OPER, SERVICE */
     { m_ignore, m_ignore, ms_reveal, m_ignore, m_ignore }
   },

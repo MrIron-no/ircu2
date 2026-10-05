@@ -373,7 +373,8 @@ msg_tag_s2s_needs_time(const char *tok)
        * shifts every field and breaks SASL/spamfilter routing. */
       || !ircd_strcmp(tok, TOK_XQUERY)
       || !ircd_strcmp(tok, TOK_XREPLY)
-      || !ircd_strcmp(tok, TOK_DESTRUCT))
+      || !ircd_strcmp(tok, TOK_DESTRUCT)
+      || !ircd_strcmp(tok, TOK_REVEAL))
     return 0;
   return 1;
 }
