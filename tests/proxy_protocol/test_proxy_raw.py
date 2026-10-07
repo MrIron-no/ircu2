@@ -159,9 +159,11 @@ async def _set_feature(oper: IRCClient, name: str, value) -> None:
     await oper.wait_for("284", timeout=5.0)
 
 
-async def _reset_feature(oper: IRCClient, name: str) -> None:
-    await oper.send(f"RESET {name}")
-    await oper.wait_for("284", timeout=5.0)
+async def _get_feature(oper: IRCClient, name: str) -> str:
+    """Return the current value of an integer feature via GET (RPL 284)."""
+    await oper.send(f"GET {name}")
+    msg = await oper.wait_for("284", timeout=5.0)
+    return msg.params[-1].rsplit(":", 1)[-1].strip()
 
 
 async def test_proxy_port_throttles_on_claimed_ip(ircd_hub):
@@ -170,7 +172,11 @@ async def test_proxy_port_throttles_on_claimed_ip(ircd_hub):
     The hub config sets IPCHECK_CLONE_LIMIT=1000 / PERIOD=1 (permissive, for
     other suites that open many connections from one docker IP), which is
     too permissive to exercise per-IP throttling here. It is lowered with
-    the oper SET command for the duration of this test only, then RESET.
+    the oper SET command for the duration of this test only, then SET back
+    to the values read beforehand: RESET would install the compiled-in
+    defaults (4 per 40 s), not the configured ones, and once the server has
+    been up longer than IPCHECK_CLONE_DELAY that throttles every later test
+    connecting from the single docker host address.
 
     IPCHECK_CLONE_DELAY (default 600s) also suppresses all throttling until
     the server has been up that long, specifically so a restart's reconnect
@@ -179,6 +185,8 @@ async def test_proxy_port_throttles_on_claimed_ip(ircd_hub):
     throttle no matter how low the limit is set.
     """
     oper = await _oper_client(HOST, ircd_hub["port"], "ipcsetop")
+    names = ("IPCHECK_CLONE_LIMIT", "IPCHECK_CLONE_PERIOD", "IPCHECK_CLONE_DELAY")
+    saved = {name: await _get_feature(oper, name) for name in names}
     try:
         await _set_feature(oper, "IPCHECK_CLONE_LIMIT", 3)
         await _set_feature(oper, "IPCHECK_CLONE_PERIOD", 30)
@@ -196,9 +204,8 @@ async def test_proxy_port_throttles_on_claimed_ip(ircd_hub):
         ok = await _attempt_claim(PROXY_PORT, "203.0.113.78", "throk", 0)
         assert ok, "a fresh claimed IP must not be caught by the other IP's throttle"
     finally:
-        await _reset_feature(oper, "IPCHECK_CLONE_LIMIT")
-        await _reset_feature(oper, "IPCHECK_CLONE_PERIOD")
-        await _reset_feature(oper, "IPCHECK_CLONE_DELAY")
+        for name in names:
+            await _set_feature(oper, name, saved[name])
         await oper.disconnect()
 
 
