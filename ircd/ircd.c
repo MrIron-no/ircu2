@@ -714,11 +714,6 @@ int main(int argc, char **argv) {
     return 7;
   }
 
-  if (ircd_tls_init()) {
-    log_write(LS_SYSTEM, L_CRIT, 0, "TLS initialization failed");
-    return 10;
-  }
-
   if (thisServer.bootopt & BOOT_CHKCONF) {
     if (dbg_client)
       conf_debug_iline(dbg_client);

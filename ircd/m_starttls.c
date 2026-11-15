@@ -36,8 +36,7 @@ int m_starttls(struct Client *cptr, struct Client *sptr, int parc, char*parv[])
 
   send_queued(sptr);
 
-  s_tls(&cli_socket(cptr)) = ircd_tls_accept(NULL, cli_fd(cptr));
-  if (!s_tls(&cli_socket(cptr)))
+  if (tlsd_start_handshake(sptr) < 0)
     return send_reply(sptr, ERR_STARTTLS, "internal TLS error");
 
   DBufClear(&cli_recvQ(sptr));
@@ -45,7 +44,6 @@ int m_starttls(struct Client *cptr, struct Client *sptr, int parc, char*parv[])
 
   SetNegotiatingTLS(sptr);
   SetTLS(sptr);
-  ircd_tls_negotiate(sptr);
 
   return 0;
 }

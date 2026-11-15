@@ -369,6 +369,8 @@ int exit_client(struct Client *cptr,
   struct DLink *dlp;
   time_t on_for;
 
+  Debug((DEBUG_DEBUG, "exit_client called for id=%d comment='%s'", cli_id(cptr), comment));
+
   char comment1[HOSTLEN + HOSTLEN + 2];
   assert(killer);
   if (MyConnect(victim))

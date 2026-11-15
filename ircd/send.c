@@ -106,7 +106,7 @@ static void dead_link(struct Client *to, char *notice)
 static int can_send(struct Client* to)
 {
   assert(0 != to);
-  return (IsDead(to) || IsMe(to) || -1 == cli_fd(to)) ? 0 : 1;
+  return (IsTLS(to) || (!IsDead(to) && !IsMe(to) && cli_fd(to) != -1)) ? 1 : 0;
 }
 
 /** Close the connection with the highest sendq.
@@ -179,12 +179,21 @@ void send_queued(struct Client *to)
   assert(0 != to);
   assert(0 != cli_local(to));
 
+
+  Debug((DEBUG_DEBUG, "send_queue called for id=%d", cli_id(to)));
+
   if (IsBlocked(to) || !can_send(to))
     return;                     /* Don't bother */
+
+  Debug((DEBUG_DEBUG, "send_queue pass1 called for id=%d", cli_id(to)));
+
 
   /* If we're still negotiating TLS, don't try to send data yet */
   if (IsTLS(to) && IsNegotiatingTLS(to))
     return;
+
+  Debug((DEBUG_DEBUG, "send_queue pass2 called for id=%d", cli_id(to)));
+
 
   while (MsgQLength(&(cli_sendQ(to))) > 0) {
     unsigned int len;
@@ -245,6 +254,9 @@ void send_buffer(struct Client* to, struct MsgBuf* buf, int prio)
   msgq_add(&(cli_sendQ(to)), buf, prio);
   client_add_sendq(cli_connect(to), &send_queues);
   update_write(to);
+
+if (IsTLS(to) && !IsNegotiatingTLS(to))
+    send_queued(to);
 
   /*
    * Update statistics. The following is slightly incorrect

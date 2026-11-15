@@ -191,6 +191,7 @@ DECLARE_FLAGSET(Flags, FLAG_LAST_FLAG);
 struct Connection
 {
   unsigned long       con_magic;     /**< magic number */
+  int                 con_id;        /**< unique ID for connection */
   struct Connection*  con_next;      /**< Next connection with queued data */
   struct Connection** con_prev_p;    /**< What points to us */
   struct Client*      con_client;    /**< Client associated with connection */
@@ -241,7 +242,8 @@ struct Connection
   struct AuthRequest* con_auth;      /**< Auth request for client */
   const struct wline* con_wline;     /**< WebIRC authorization for client */
   char*               con_rexmit;    /**< TLS retransmission data */
-  size_t              con_rexmit_len; /**, TLS retransmission length */
+  size_t              con_rexmit_len; /**< TLS retransmission length */
+  uint32_t            con_tls_session_id; /**< TLS session ID */
 };
 
 /** Magic constant to identify valid Connection structures. */
@@ -278,6 +280,8 @@ struct Client {
 #define cli_verify(cli)		((cli)->cli_magic == CLIENT_MAGIC)
 /** Get client's magic number. */
 #define cli_magic(cli)		((cli)->cli_magic)
+/** Get local client's unique id. */
+#define cli_id(cli)     con_id(cli_connect(cli))
 /** Get global next client. */
 #define cli_next(cli)		((cli)->cli_next)
 /** Get global previous client. */
@@ -400,6 +404,8 @@ struct Client {
 #define con_verify(con)		((con)->con_magic == CONNECTION_MAGIC)
 /** Get connection's magic number. */
 #define con_magic(con)		((con)->con_magic)
+/** Unique connection ID. */
+#define con_id(con)		((con)->con_id)
 /** Get global next connection. */
 #define con_next(con)		((con)->con_next)
 /** Get global previous connection. */
@@ -733,12 +739,13 @@ struct Client {
 #define SNO_AUTO        0x8000  /**< AUTO G-Lines */
 #define SNO_DEBUG       0x10000 /**< debugging messages (DEBUGMODE only) */
 #define SNO_AUTH        0x20000 /**< IAuth notices */
+#define SNO_TLSD        0x40000 /**< TLS debug messages */
 
 /** Bitmask of all valid server notice bits. */
 #ifdef DEBUGMODE
-# define SNO_ALL        0x3ffff
+# define SNO_ALL        0x7ffff
 #else
-# define SNO_ALL        0x2ffff
+# define SNO_ALL        0x6ffff
 #endif
 
 /** Server notice bits allowed to normal users. */
@@ -749,7 +756,7 @@ struct Client {
 /** Server notice bits enabled by default for IRC operators. */
 #define SNO_OPERDEFAULT (SNO_DEFAULT|SNO_HACK2|SNO_HACK4|SNO_THROTTLE|SNO_OLDSNO)
 /** Server notice bits reserved to IRC operators. */
-#define SNO_OPER (SNO_CONNEXIT|SNO_OLDREALOP|SNO_AUTH)
+#define SNO_OPER (SNO_CONNEXIT|SNO_OLDREALOP|SNO_AUTH|SNO_TLSD)
 /** Noisy server notice bits that cause other bits to be cleared during connect. */
 #define SNO_NOISY (SNO_SERVKILL|SNO_UNAUTH)
 

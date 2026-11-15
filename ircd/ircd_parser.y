@@ -78,7 +78,7 @@
   /* Now all the globals we need :/... */
   int tping, tconn, maxflood, maxlinks, sendq, port, invert, stringno, flags;
   char *name, *pass, *host, *ip, *username, *origin, *hub_limit;
-  char *tls_certfile, *tls_ciphers, *tls_fingerprint, *tls_keyfile;
+  char *tls_ciphers, *tls_fingerprint;
   struct SLink *hosts;
   char *stringlist[MAX_STRINGS];
   struct ListenerFlags listen_flags;
@@ -107,6 +107,7 @@ enum ConfigBlock
   BLOCK_PORT,
   BLOCK_PSEUDO,
   BLOCK_QUARANTINE,
+  BLOCK_TLSD,
   BLOCK_UWORLD,
   BLOCK_WEBIRC,
   BLOCK_IPCHECK,
@@ -128,7 +129,7 @@ permitted(enum ConfigBlock type)
   static const char *block_names[BLOCK_LAST_BLOCK+1] = {
     "Admin", "Class", "Client", "Connect", "CRule", "Features",
     "General", "IAuth", "Include", "Jupe", "Kill", "Motd", "Oper",
-    "Port", "Pseudo", "Quarantine", "UWorld", "IAuth", "IPCheck",
+    "Port", "Pseudo", "Quarantine", "UWorld", "TLSd", "IPCheck",
     NULL
   };
 
@@ -214,6 +215,7 @@ static void free_slist(struct SLink **link) {
 %token PREPEND
 %token USERMODE
 %token IAUTH
+%token TLSD
 %token FAST
 %token AUTOCONNECT
 %token PROGRAM
@@ -227,10 +229,8 @@ static void free_slist(struct SLink **link) {
 %token TEOF
 %token TOKERR
 %token TLS
-%token CERTFILE
 %token CIPHERS
 %token FINGERPRINT
-%token KEYFILE
 /* and now a lot of privileges... */
 %token TPRIV_CHAN_LIMIT TPRIV_MODE_LCHAN TPRIV_DEOP_LCHAN TPRIV_WALK_LCHAN
 %token TPRIV_LOCAL_KILL TPRIV_REHASH TPRIV_RESTART TPRIV_DIE
@@ -260,7 +260,7 @@ blocks: blocks block | block;
 block: adminblock | generalblock | classblock | connectblock |
        uworldblock | operblock | portblock | jupeblock | clientblock |
        killblock | cruleblock | motdblock | featuresblock | quarantineblock |
-       pseudoblock | iauthblock | webircblock | ipcheckblock |
+       pseudoblock | iauthblock | tlsdblock | webircblock | ipcheckblock |
        includeblock | error '}' ';' { yyerrok; };
 
 /* The timespec, sizespec and expr was ripped straight from
@@ -355,30 +355,10 @@ generalblock: GENERAL
     parse_error("Your General block must contain a name.");
   if (localConf.numeric == 0)
     parse_error("Your General block must contain a numeric (between 1 and 4095).");
-  MyFree(ircd_tls_keyfile);
-  MyFree(ircd_tls_certfile);
-  if (tls_certfile && !tls_keyfile)
-  {
-    parse_error("General block has tls certfile but no tls keyfile; disabling TLS");
-    MyFree(tls_certfile);
-  }
-  else if (tls_keyfile && !tls_certfile)
-  {
-    parse_error("General block has tls keyfile but no tls certfile; disabling TLS");
-    MyFree(tls_keyfile);
-  }
-  else if (tls_certfile && tls_keyfile)
-  {
-    ircd_tls_certfile = tls_certfile;
-    ircd_tls_keyfile = tls_keyfile;
-    tls_certfile = NULL;
-    tls_keyfile = NULL;
-  }
 };
 generalitems: generalitem generalitems | generalitem;
 generalitem: generalnumeric | generalname | generalvhost | generaldesc
-  | generaldnsvhost | generaldnsserver
-  | generaltlscertfile | generaltlskeyfile;
+  | generaldnsvhost | generaldnsserver;
 
 generalnumeric: NUMERIC '=' NUMBER ';'
 {
@@ -453,16 +433,6 @@ generaldnsserver: DNS SERVER '=' QSTRING ';'
 
   add_nameserver(server);
   MyFree(server);
-};
-
-generaltlscertfile: TLS CERTFILE '=' QSTRING ';'
-{
-  tls_certfile = $4;
-};
-
-generaltlskeyfile: TLS KEYFILE '=' QSTRING ';'
-{
-  tls_keyfile = $4;
 };
 
 adminblock: ADMIN
@@ -1332,6 +1302,28 @@ iauthprogram: PROGRAM '='
   }
 } stringlist ';';
 
+tlsdblock: TLSD {
+  if (!permitted(BLOCK_TLSD)) YYERROR;
+} '{' tlsditems '}' ';' {
+  tlsd_spawn(stringno, stringlist);
+  while (stringno > 0)
+  {
+    --stringno;
+    MyFree(stringlist[stringno]);
+  }
+};
+
+tlsditems: tlsditem tlsditems | tlsditem;
+tlsditem: tlsdprogram;
+tlsdprogram: PROGRAM '='
+{
+  while (stringno > 0)
+  {
+    --stringno;
+    MyFree(stringlist[stringno]);
+  }
+} stringlist ';';
+
 webircblock: WEBIRC
 {
   if (!permitted(BLOCK_WEBIRC)) YYERROR;
@@ -1429,6 +1421,7 @@ blocktype: ALL { $$ = ~0; }
   | FEATURES { $$ = 1 << BLOCK_FEATURES; }
   | GENERAL { $$ = 1 << BLOCK_GENERAL; }
   | IAUTH { $$ = 1 << BLOCK_IAUTH; }
+  | TLSD { $$ = 1 << BLOCK_TLSD; }
   | INCLUDE { $$ = 1 << BLOCK_INCLUDE; }
   | JUPE { $$ = 1 << BLOCK_JUPE; }
   | KILL { $$ = 1 << BLOCK_KILL; }

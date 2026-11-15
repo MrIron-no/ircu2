@@ -118,10 +118,10 @@ int mo_rehash(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       send_reply(sptr, SND_EXPLICIT | RPL_REHASHING, ":Reopening log files");
       log_reopen(); /* reopen log files */
       return 0;
-    } else if (*parv[1] == 's') {
+/*    } else if (*parv[1] == 's') {
       send_reply(sptr, SND_EXPLICIT | RPL_REHASHING, ":Reloading TLS files");
       ircd_tls_init();
-      return 0;
+      return 0; TLS TODO */
     } else if (*parv[1] == 'q')
       flag = 2;
   }

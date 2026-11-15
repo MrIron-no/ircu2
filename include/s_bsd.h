@@ -51,6 +51,7 @@ extern const char* const REGISTER_ERROR_MSG;
 
 extern int            HighestFd;
 extern struct Client* LocalClientArray[MAXCONNECTIONS];
+extern struct Connection* LocalConnectionArray[MAXCONNECTIONS];
 extern struct irc_sockaddr VirtualHost_v4;
 extern struct irc_sockaddr VirtualHost_v6;
 extern struct irc_sockaddr VirtualHost_dns_v4;
@@ -69,5 +70,6 @@ extern void init_server_identity(void);
 extern void close_connections(int close_stderr);
 extern int  init_connection_limits(void);
 extern void update_write(struct Client* cptr);
+extern int read_packet(struct Client *cptr, int socket_ready);
 
 #endif /* INCLUDED_s_bsd_h */

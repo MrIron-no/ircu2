@@ -308,9 +308,10 @@ void add_listener(int port, const char* vhost_ip, const char* mask,
   if (0 == port)
     return;
   /* if TLS requested but no implementation, skip this port */
-  if (FlagHas(flags, LISTEN_TLS) && !ircd_tls_version)
+#if 0 // TODO TLS
+  if (FlagHas(flags, LISTEN_TLS) && !tlsd_is_spawned())
     return;
-
+#endif
   memset(&vaddr, 0, sizeof(vaddr));
 
   if (!EmptyString(vhost_ip)
@@ -370,10 +371,13 @@ void add_listener(int port, const char* vhost_ip, const char* mask,
     listener->fd_v4 = -1;
   }
 
+#if 0
+// TLS TODO
   if (okay
       && FlagHas(flags, LISTEN_TLS)
       && ircd_tls_listen(listener))
     okay = 0;
+#endif
 
   if (!okay)
     free_listener(listener);

@@ -121,8 +121,8 @@ int m_info(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       creation, generation);
   send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":On-line since %s",
       myctime(cli_firsttime(&me)));
-  if (ircd_tls_version)
-    send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":TLS library: %s", ircd_tls_version);
+  /*if (ircd_tls_version)
+    send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":TLS library: %s", ircd_tls_version);TLS TODO*/
   send_reply(sptr, RPL_ENDOFINFO);
 
   return 0;
@@ -160,8 +160,8 @@ int ms_info(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
       creation, generation);
   send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":On-line since %s",
       myctime(cli_firsttime(&me)));
-  if (ircd_tls_version)
-    send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":TLS library: %s", ircd_tls_version);
+  /*if (ircd_tls_version)
+    send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":TLS library: %s", ircd_tls_version); TLS TODO */
   send_reply(sptr, RPL_ENDOFINFO);
   return 0;
 }
@@ -195,8 +195,8 @@ int mo_info(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
 	       creation, generation);
     send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":On-line since %s",
 	       myctime(cli_firsttime(&me)));
-    if (ircd_tls_version)
-      send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":TLS library: %s", ircd_tls_version);
+    /*if (ircd_tls_version)
+      send_reply(sptr, SND_EXPLICIT | RPL_INFO, ":TLS library: %s", ircd_tls_version); TLS TODO*/
     send_reply(sptr, RPL_ENDOFINFO);
   }
   return 0;

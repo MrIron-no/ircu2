@@ -504,7 +504,7 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
     if (FlagHas(&auth->flags, flag))
     {
       Debug((DEBUG_INFO, "Auth %p [%d] still has flag %d", auth,
-             cli_fd(auth->client), flag));
+             cli_id(auth->client), flag));
       if (!from_iauth)
         iauth_notify(auth, (enum AuthRequestFlag)bitclr);
       return 0;
@@ -536,7 +536,7 @@ static int check_auth_finished(struct AuthRequest *auth, int bitclr)
       sendto_iauth(auth->client, "H");
 
     Debug((DEBUG_INFO, "Auth %p [%d] still has flag %d", auth,
-           cli_fd(auth->client), AR_IAUTH_PENDING));
+           cli_id(auth->client), AR_IAUTH_PENDING));
     return 0;
   }
   else
@@ -812,12 +812,12 @@ static void read_auth_reply(struct AuthRequest* auth)
 
   if (IO_SUCCESS == os_recv_nonb(s_fd(&auth->socket), buf, BUFSIZE, &len)) {
     buf[len] = '\0';
-    Debug((DEBUG_INFO, "Auth %p [%d] reply: %s", auth, cli_fd(auth->client), buf));
+    Debug((DEBUG_INFO, "Auth %p [%d] reply: %s", auth, cli_id(auth->client), buf));
     username = check_ident_reply(buf);
     Debug((DEBUG_INFO, "Username: %s", username));
   }
 
-  Debug((DEBUG_INFO, "Deleting auth [%d] socket %p", auth, cli_fd(auth->client)));
+  Debug((DEBUG_INFO, "Deleting auth [%d] socket %p", auth, cli_id(auth->client)));
   close(s_fd(&auth->socket));
   socket_del(&auth->socket);
   s_fd(&auth->socket) = -1;
@@ -858,7 +858,7 @@ static void auth_sock_callback(struct Event* ev)
 
   case ET_CONNECT: /* socket connection completed */
     Debug((DEBUG_INFO, "Connection completed for auth %p [%d]; sending query",
-           auth, cli_fd(auth->client)));
+           auth, cli_id(auth->client)));
     socket_state(&auth->socket, SS_CONNECTED);
     send_auth_query(auth);
     break;
@@ -886,6 +886,8 @@ void destroy_auth_request(struct AuthRequest* auth)
   if (FlagHas(&auth->flags, AR_DNS_PENDING)) {
     delete_resolver_queries(auth);
   }
+
+// TLS TODO
 
   if (-1 < s_fd(&auth->socket)) {
     close(s_fd(&auth->socket));
@@ -1147,7 +1149,8 @@ void start_auth(struct Client* client)
   if (cli_fd(client) > HighestFd)
     HighestFd = cli_fd(client);
   LocalClientArray[cli_fd(client)] = client;
-  socket_events(&(cli_socket(client)), SOCK_ACTION_SET | SOCK_EVENT_READABLE);
+  if (!IsTLS(client))
+    socket_events(&(cli_socket(client)), SOCK_ACTION_SET | SOCK_EVENT_READABLE);
 
   /* Allocate the AuthRequest. */
   auth = auth_freelist;
@@ -1633,7 +1636,7 @@ static int sendto_iauth(struct Client *cptr, const char *format, ...)
   /* Build the message buffer. */
   vd.vd_format = format;
   va_start(vd.vd_args, format);
-  mb = msgq_make(NULL, "%d %v", cptr ? cli_fd(cptr) : -1, &vd);
+  mb = msgq_make(NULL, "%d %v", cptr ? cli_id(cptr) : -1, &vd);
   va_end(vd.vd_args);
 
   /* Tack it onto the iauth sendq and try to write it. */
@@ -2287,7 +2290,7 @@ static void iauth_parse(struct IAuth *iauth, char *message)
   int parc = 0;
   iauth_cmd_handler handler;
   struct AuthRequest *auth;
-  struct Client *cli;
+  struct Connection* con;
   int has_cli;
   int id;
 
@@ -2353,15 +2356,15 @@ static void iauth_parse(struct IAuth *iauth, char *message)
     id = strtol(params[0], NULL, 10);
     if (parc < 3)
       sendto_iauth(NULL, "E Missing :Need <id> <ip> <port>");
-    else if (id < 0 || id > HighestFd || !(cli = LocalClientArray[id]))
+    else if (id < 0 || id > MAXCONNECTIONS || !(con = LocalConnectionArray[id]))
       /* Client no longer exists (or never existed). */
       sendto_iauth(NULL, "E Gone :[%s %s %s]", params[0], params[1],
 		   params[2]);
-    else if ((!(auth = cli_auth(cli)) ||
+    else if ((!(auth = cli_auth(con_client(con))) ||
 	      !FlagHas(&auth->flags, AR_IAUTH_PENDING)) &&
 	     has_cli == 1)
       /* Client is done with IAuth checks. */
-      sendto_iauth(cli, "E Done :[%s %s %s]", params[0], params[1], params[2]);
+      sendto_iauth(con_client(con), "E Done :[%s %s %s]", params[0], params[1], params[2]);
     else {
       struct irc_sockaddr addr;
       int res;
@@ -2372,15 +2375,15 @@ static void iauth_parse(struct IAuth *iauth, char *message)
 
       /* Check IP address and port number against expected. */
       if (0 == res ||
-	  irc_in_addr_cmp(&addr.addr, &cli_ip(cli)) ||
+	  irc_in_addr_cmp(&addr.addr, &cli_ip(con_client(con))) ||
 	  (auth && addr.port != auth->port))
 	/* Report mismatch to iauth. */
-	sendto_iauth(cli, "E Mismatch :[%s] != [%s]", params[1],
-		     ircd_ntoa(&cli_ip(cli)));
+	sendto_iauth(con_client(con), "E Mismatch :[%s] != [%s]", params[1],
+		     ircd_ntoa(&cli_ip(con_client(con))));
       else
       {
         /* Does handler indicate a possible state change? */
-        int bitclr = handler(iauth, cli, parc - 3, params + 3);
+        int bitclr = handler(iauth, con_client(con), parc - 3, params + 3);
         if (bitclr > 0)
           check_auth_finished(auth, -bitclr);
       }

@@ -73,12 +73,6 @@ ENGINE_SRC = \
 	engine_kqueue.c \
 	engine_select.c
 
-TLS_SRC = \
-	tls_none.c \
-	tls_gnutls.c \
-	tls_libtls.c \
-	tls_openssl.c
-
 CRYPTO_SRC = \
 	ircd_md5.c \
 	ircd_crypt_plain.c \
@@ -116,6 +110,7 @@ IRCD_SRC = \
 	ircd_signal.c \
 	ircd_snprintf.c \
 	ircd_string.c \
+	ircd_tls.c \
 	jupe.c \
 	list.c \
 	listener.c \
@@ -224,7 +219,7 @@ IRCD_SRC = \
 	whowas.c \
 	y.tab.c
 
-SRC = ${IRCD_SRC} ${ENGINE_C} ${TLS_C} ${CRYPTO_SRC}
+SRC = ${IRCD_SRC} ${ENGINE_C} ${CRYPTO_SRC}
 
 OBJS = ${SRC:%.c=%.o}
 
@@ -232,7 +227,7 @@ UMKPASSWD_OBJS = ${UMKPASSWD_SRC:%.c=%.o}
 
 CONVERT_CONF_OBJS = ${CONVERT_CONF_SRC:%.c=%.o}
 
-DEP_SRC = ${IRCD_SRC} ${ENGINE_SRC} ${TLS_SRC} ${CRYPTO_SRC}
+DEP_SRC = ${IRCD_SRC} ${ENGINE_SRC} ${CRYPTO_SRC}
 
 all:
 	( cd ..; make -f Makefile )

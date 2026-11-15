@@ -181,6 +181,15 @@ static void dealloc_connection(struct Connection* con)
   con_magic(con) = 0;
 }
 
+int make_connection_id(void) {
+    for (int i = 0; i < MAXCONNECTIONS; i++) {
+        if (LocalConnectionArray[i] == NULL) {
+            return i;
+        }
+    }
+    return -1; // No free slot found
+}
+
 /** Allocate a new client and initialize it.
  * If \a from == NULL, initialize the fields for a local client,
  * including allocating a Connection for him; otherwise initialize the
@@ -209,6 +218,8 @@ struct Client* make_client(struct Client *from, int status)
     assert(!con_magic(con));
 
     con_magic(con) = CONNECTION_MAGIC;
+    con_id(con) = make_connection_id();
+    LocalConnectionArray[con_id(con)] = con;
     con_fd(con) = -1; /* initialize struct Connection */
     con_freeflag(con) = 0;
     con_nextnick(con) = CurrentTime - NICK_DELAY;
